@@ -34,6 +34,7 @@
   </div>
 </div>
 
+<script src="vendor/xlsx.full.min.js"></script>
 <script src="app.js"></script>
 <script>
 const MTYPES=["drum","jigger","jet","stentor","hydro","rope"];
@@ -349,7 +350,9 @@ function render(){
   c.innerHTML='<div class="page-head"><h1>'+sc.label+'</h1><p>'+(DB[CUR]||[]).length+' record(s). Click Edit to change, or Add to create a new one.</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="SEARCH[CUR]=this.value;render();setTimeout(()=>{var i=document.querySelector(\'.search input\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},0)"></div>'
-    +'<div class="spacer"></div><button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
+    +'<div class="spacer"></div>'
+    +(CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
+    +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
     +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th>'+x[1]+'</th>').join("")+'<th></th></tr></thead><tbody>'
     +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
       +'<td><div class="rowbtns"><button class="btn ghost sm" onclick=\'openModal("'+CUR+'",'+JSON.stringify(r.id)+')\'>Edit</button>'
@@ -589,6 +592,113 @@ async function saveModal(){
   await API.save(editTable,row); await API.db(); closeModal(); renderNav(); render(); toast("Saved");
 }
 function closeModal(){document.getElementById("modalBg").classList.remove("on");}
+function openLotImport(){
+  const ex=document.getElementById("importOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="importOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:720px;max-width:94vw">'
+    +'<div class="m-h"><h3>Import lots from Excel</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b" id="importBody">'
+    +'<p class="small muted">Pick the mill\'s lot stock sheet (.xlsx). Columns are matched by header name — '
+    +'LOT NO. / INW DATE / PTY CH / QUALITY / PARTY GROUP / INW PC / INW MTS. / BAL PC / BAL MTS. / DSP PCS / DSP. MTS. / WEAVER / MASTER / OLD STK MT / OLD STK PC / PROD MTS / PEND PROD.</p>'
+    +'<input type="file" id="importFile" accept=".xlsx,.xls">'
+    +'<div id="importReport" style="margin-top:14px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" id="importCommitBtn" style="display:none" onclick="commitLotImport()">Import</button></div></div>';
+  document.body.appendChild(o);
+  document.getElementById("importFile").addEventListener("change", handleLotImportFile);
+}
+function handleLotImportFile(e){
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const wb=XLSX.read(reader.result, {type:"array", cellDates:false});
+      const sheet=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(sheet, {header:1, raw:true, defval:""});
+      window._importPlan=parseLotWorkbook(rows);
+      renderImportReport(window._importPlan);
+    }catch(err){
+      document.getElementById("importReport").innerHTML='<div class="flag">Could not read this file: '+esc(err.message)+'</div>';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+/* ---------- lot workbook parser: header-name matched, tolerant of column order ---------- */
+function excelSerialToISO(n){
+  if(typeof n!=="number") return "";
+  const d=new Date(Math.round((n-25569)*86400*1000));
+  return d.toISOString().slice(0,10);
+}
+function parseLotWorkbook(rows){
+  if(!rows.length) return {rows:[],newQualities:[],newCustomers:[],newWeavers:[],skipped:0};
+  const header=rows[0].map(h=>String(h||"").trim().toUpperCase());
+  const col=name=>header.indexOf(name);
+  const idx={
+    lot:0, inDate:col("INW DATE"), ptyCh:col("PTY CH"), qual:col("QUALITY"), party:col("PARTY GROUP"),
+    inwPc:col("INW PC"), inwMt:col("INW MTS."), balPc:col("BAL PC"), balMt:col("BAL MTS."),
+    dspPc:col("DSP PCS"), dspMt:col("DSP. MTS."), weaver:col("WEAVER"), master:col("MASTER"),
+    oldMt:col("OLD STK MT"), oldPc:col("OLD STK PC"), prodMt:col("PROD MTS"), pend:col("PEND PROD")
+  };
+  const existQ=new Set((DB.qualities||[]).map(q=>q.name));
+  const existC=new Set((DB.customers||[]).map(c=>c.name));
+  const existW=new Set((DB.weavers||[]).map(w=>w.name));
+  const newQ=new Set(), newC=new Set(), newW=new Set();
+  const out=[]; let skipped=0;
+
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r]; if(!row||!row.length) continue;
+    const lotNo=String(row[idx.lot]||"").trim();
+    const qual=String(row[idx.qual]||"").trim();
+    const balPc=+row[idx.balPc]||0, balMt=+row[idx.balMt]||0;
+    if(!qual || !lotNo || lotNo.toUpperCase()==="GRAND TOTAL" || balPc<=0 || balMt<=0){ skipped++; continue; }
+
+    const party=String(row[idx.party]||"").replace(/,\s*$/,"").trim();
+    const weaver=String(row[idx.weaver]||"").trim();
+    const master=String(row[idx.master]||"").trim();
+
+    if(!existQ.has(qual)) newQ.add(qual);
+    if(party && !existC.has(party)) newC.add(party);
+    if(weaver && !existW.has(weaver)) newW.add(weaver);
+
+    out.push({
+      srcLotNo:lotNo, quality:qual, customer:party, weaver:weaver, master:master,
+      challanNo:String(row[idx.ptyCh]||"").trim(),
+      inDate:excelSerialToISO(row[idx.inDate]),
+      inwardPcs:+row[idx.inwPc]||0, inwardMeters:+row[idx.inwMt]||0,
+      dispatchedPcs:+row[idx.dspPc]||0, dispatchedMeters:+row[idx.dspMt]||0,
+      oldStockPcs:+row[idx.oldPc]||0, oldStockMeters:+row[idx.oldMt]||0,
+      prodMeters:(row[idx.prodMt]===""?0:+row[idx.prodMt]||0),
+      pendingProd:(row[idx.pend]===""?0:+row[idx.pend]||0),
+      takas:synthTakas(balMt, balPc),
+      status:"in-stock"
+    });
+  }
+  return {rows:out, newQualities:[...newQ], newCustomers:[...newC], newWeavers:[...newW], skipped};
+}
+function renderImportReport(plan){
+  const el=document.getElementById("importReport");
+  const chip=(label,list)=> list.length ? ('<div class="small" style="margin-top:8px"><b>'+list.length+'</b> new '+label+' will be created: '
+    +list.slice(0,12).map(x=>'<span class="chip">'+esc(x)+'</span>').join("")+(list.length>12?' <span class="muted">+'+(list.length-12)+' more</span>':'')+'</div>') : '';
+  el.innerHTML = '<div class="lot-totals"><span class="material-symbols-rounded">functions</span><b>'+plan.rows.length+'</b> lots ready to import'
+    +(plan.skipped?' &middot; <span class="muted">'+plan.skipped+' row(s) skipped (blank quality, zero balance, or a total row)</span>':'')+'</div>'
+    + chip("qualities", plan.newQualities) + chip("customers", plan.newCustomers) + chip("weavers", plan.newWeavers)
+    + (plan.newQualities.length ? '<div class="small muted" style="margin-top:8px">New qualities are created with placeholder GSM/route — use Qualities → Quick add to fill them in before scheduling.</div>' : '');
+  document.getElementById("importCommitBtn").style.display = plan.rows.length ? "" : "none";
+}
+async function commitLotImport(){
+  const plan=window._importPlan; if(!plan||!plan.rows.length) return;
+  const btn=document.getElementById("importCommitBtn"); btn.disabled=true; btn.textContent="Importing…";
+  for(const name of plan.newCustomers) await API.save("customers",{name});
+  for(const name of plan.newWeavers) await API.save("weavers",{name});
+  for(const name of plan.newQualities) await API.save("qualities",{name, gsm:100, width:(cfg().widthDefault||56), maxBatch:300});
+  await API.db();
+  let ok=0;
+  for(const r of plan.rows){ const res=await API.save("lots",r); if(!(res&&res.error)) ok++; }
+  await API.db();
+  document.getElementById("importOverlay").remove();
+  renderNav(); render();
+  toast("Imported "+ok+" of "+plan.rows.length+" lots");
+}
 async function delRow(table,id){ if(!confirm("Delete this record?"))return; await API.del(table,id); await API.db(); renderNav(); render(); toast("Deleted"); }
 async function resetData(){ if(!confirm("Reset ALL data to the sample seed? This cannot be undone."))return; await API.reset(); await API.db(); renderNav(); render(); toast("Data reset"); }
 
