@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REL Dyeing ERP — Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..0" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span>REL·DYE <small>ERP</small></div>
+  <nav><a href="index.html" class="on">Operations</a><a href="admin.html">Admin</a></nav>
+  <div class="right"><span id="userbox" style="display:flex;align-items:center;gap:8px"></span><span class="envtag">LAN · MVP</span></div>
+</header>
+
+<main>
+  <div class="page-head">
+    <h1>Operations &amp; scheduling</h1>
+    <p>Enter orders, watch them split into batches and slot into machine campaigns. Pre-treatment → RFD → dyeing, planned automatically.</p>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="section-tabs" id="secTabs">
+    <button data-s="floor" class="on"><span class="material-symbols-rounded">grid_view</span>Shop floor</button>
+    <button data-s="sched"><span class="material-symbols-rounded">calendar_view_week</span>Schedule</button>
+    <button data-s="order"><span class="material-symbols-rounded">add_circle</span>New order</button>
+    <button data-s="batch"><span class="material-symbols-rounded">widgets</span>Batch maker</button>
+  </div>
+
+  <!-- Shop floor -->
+  <section class="view" id="v-floor">
+    <div class="bar">
+      <button class="btn ghost sm" onclick="setClock(0)">t</button>
+      <button class="btn ghost sm" onclick="setClock(4)">t+4</button>
+      <button class="btn ghost sm" onclick="setClock(8)">t+8</button>
+      <button class="btn ghost sm" onclick="setClock(12)">t+12</button>
+      <span class="small muted" id="clocklbl"></span>
+    </div>
+    <div class="floor" id="floor"></div>
+  </section>
+
+  <!-- Schedule -->
+  <section class="view" id="v-sched" style="display:none">
+    <div class="bar">
+      <span class="small muted" id="schednote"></span>
+    </div>
+    <div class="gantt" id="gantt"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <!-- New order -->
+  <section class="view" id="v-order" style="display:none">
+    <div class="card"><div class="card-b">
+      <div class="grid2">
+        <label class="fld">Customer<select id="f_cust"></select></label>
+        <label class="fld">Quality<select id="f_qual"></select></label>
+        <label class="fld">Due in (days)<input id="f_due" type="number" value="6" min="1"></label>
+        <label class="fld">Priority<select id="f_pri"><option value="1">1 — Urgent</option><option value="2" selected>2 — Normal</option><option value="3">3 — Low</option></select></label>
+      </div>
+      <div class="fldlabel">Shades &amp; quantities <span class="small muted">— same quality, one or more shades (each ≥ 300 m)</span></div>
+      <div id="shadeLines"></div>
+      <button class="addshade" onclick="addShadeLine()">+ Add another shade</button>
+      <div style="margin-top:16px"><button class="btn" onclick="submitOrder()">Log order &amp; schedule</button></div>
+      <div class="result" id="orderResult"></div>
+    </div></div>
+  </section>
+
+  <!-- Batch maker -->
+  <section class="view" id="v-batch" style="display:none">
+    <div class="card" style="margin-bottom:16px"><div class="card-h">
+      <h2>Create a batch</h2><span class="sub">group lots into a dyeing batch</span></div>
+      <div class="card-b">
+        <div class="grid2">
+          <label class="fld">Batch ID<div class="ro-field"><span class="muted">generated on save</span></div></label>
+          <label class="fld">Order (optional)<select id="b_order"></select><span class="help" id="b_orderHint">Pick lots first — orders are filtered to that customer</span></label>
+          <label class="fld">Quality<span class="req">*</span><select id="b_qual"></select><span class="hint" id="b_qualHint"></span></label>
+          <label class="fld">Shade no.<select id="b_shade"></select><span class="help" id="b_shadeHint"></span></label>
+          <label class="fld">Shade date<input id="b_shadeDate" type="date"></label>
+        </div>
+        <div class="fldlabel">Lots &amp; quantity taken from each <span class="small muted">— up to 8 lots; a batch may take only part of a lot</span></div>
+        <div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span></div>
+        <div id="b_lotBox"></div>
+        <div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="bAddLot()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="b_lotCount"></span></div>
+        <div class="lot-totals" id="b_totals"></div>
+        <label class="fld">Notes<textarea id="b_notes" rows="2" placeholder="Batch-specific instructions — important for jet dyeing"></textarea></label>
+        <button class="btn" onclick="submitBatch()"><span class="material-symbols-rounded">add</span>Create batch</button>
+        <div class="result" id="batchResult"></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-h"><h2>Recent batches</h2><span class="sub" id="batchCount"></span></div>
+      <div class="tbl-wrap" id="batchList"></div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+let S=null, CLOCK=0;
+
+function renderKPIs(){
+  const cursors=DB.machines.map(m=>S.tl[m.id].cursor);
+  const spanH=(cursors.length?Math.max(...cursors):0)/60;
+  const fin=Object.values(S.orderFinish);
+  const avg=fin.length?(fin.reduce((a,b)=>a+b,0)/fin.length)/1440:0;
+  const k=(ic,val,lbl,d)=>`<div class="kpi rise" style="animation-delay:${d}ms"><div class="ic-wrap"><span class="material-symbols-rounded">${ic}</span></div><b>${val}</b><small>${lbl}</small></div>`;
+  document.getElementById("kpis").innerHTML=
+     k('receipt_long',DB.orders.length,'Open orders',0)
+    +k('layers',S.batchCount,'Batches',40)
+    +k('wash',S.washCount,'Washes',80)
+    +k('schedule',spanH.toFixed(1)+'h','Plan span',120)
+    +k('event_available',avg.toFixed(1)+'d','Avg promise',160);
+}
+function draw(newKeys=[]){
+  S=computeSchedule();
+  renderKPIs();
+  renderFloor(document.getElementById("floor"),S,CLOCK);
+  renderGantt(document.getElementById("gantt"),S,newKeys);
+  renderLegend(document.getElementById("legend"));
+  document.getElementById("clocklbl").textContent=`Viewing at t+${CLOCK} h`;
+  document.getElementById("schednote").textContent=`${S.batchCount} batches · ${S.washCount} washes · pre-treatment planned on drums/jiggers`;
+}
+function setClock(h){CLOCK=h;renderFloor(document.getElementById("floor"),S,CLOCK);document.getElementById("clocklbl").textContent=`Viewing at t+${CLOCK} h`;}
+async function reload(){ await API.db(); draw(); }
+
+/* section tabs */
+document.getElementById("secTabs").addEventListener("click",e=>{
+  const s=e.target.dataset.s; if(!s)return;
+  document.querySelectorAll("#secTabs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));
+  document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
+});
+function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
+
+/* order form — shades are quality-specific */
+const shadeOptions=(quality)=>{const list=shadesForQuality(quality); return (list.length?list:[]).map(s=>`<option>${esc(s.shade)}</option>`).join("");};
+function addShadeLine(shade,m){
+  const q=document.getElementById("f_qual").value;
+  const opts=shadeOptions(q);
+  const row=document.createElement("div");row.className="slrow";
+  row.innerHTML=`<select class="sl-shade">${opts||'<option value="">— no shades for this quality —</option>'}</select>
+    <input class="sl-m" type="number" value="${m||3000}" min="300" step="100">
+    <button class="rm" onclick="this.closest('.slrow').parentNode.children.length>1 && this.closest('.slrow').remove()">×</button>`;
+  if(shade && opts.indexOf(shade)>=0)row.querySelector(".sl-shade").value=shade;
+  document.getElementById("shadeLines").appendChild(row);
+}
+function refreshShadeSelects(){
+  const q=document.getElementById("f_qual").value, opts=shadeOptions(q);
+  document.querySelectorAll('#shadeLines .sl-shade').forEach(sel=>{ sel.innerHTML=opts||'<option value="">— no shades for this quality —</option>'; });
+}
+async function submitOrder(){
+  const lines=[...document.querySelectorAll('#shadeLines .slrow')].map(r=>({shade:r.querySelector('.sl-shade').value,m:+r.querySelector('.sl-m').value}));
+  const minM=cfg().minMeters||300;
+  for(const ln of lines){ if(!ln.m||ln.m<minM){alert(ln.shade+`: below ${minM} m minimum load.`);return;} }
+  const o={id:"SO-N"+(1000+DB.orders.length),cust:f_cust.value,qual:f_qual.value,lines,due:+f_due.value,pri:+f_pri.value};
+  await API.save("orders",o); await API.db();
+  const batches=splitOrder(o); draw(batches.map(b=>b.key));
+  const q=Q(o.qual), totalM=lines.reduce((a,l)=>a+l.m,0), totalKg=kgOf(totalM,q.gsm,q.width);
+  const promiseD=(S.orderFinish[o.id]||0)/1440;
+  const r=document.getElementById("orderResult");r.classList.add("on");
+  r.innerHTML=`<h3>✓ ${o.id} logged &amp; scheduled</h3>
+    <div class="small muted">${totalM} m of ${esc(o.qual)} @ ${q.gsm} gsm across ${lines.length} shade(s) → <b>${totalKg.toFixed(0)} kg</b></div>
+    <div style="margin:8px 0">Split into <b>${batches.length}</b> batch(es):
+      ${batches.map(b=>`<span class="chip"><span class="swatch" style="background:${shadeColor(b.shade,b.qual)}"></span>${b.key} · ${esc(b.shade)} · ${b.meters} m · ${b.kg} kg</span>`).join("")}</div>
+    <div class="small muted">Route: pre-treat (${q.pt_mc1||'—'}${q.pt_mc2?(' → '+q.pt_mc2):''}) → RFD → dye (${q.dyeType}). Each op reserves ${(cfg().loadMin+cfg().unloadMin)} min handling.</div>
+    <div style="margin-top:8px"><b>Next step:</b> create the batches for this order in <b>Batch maker</b> — the schedule is driven by batches, not orders.
+      <div class="small muted" style="margin-top:4px">The split above is an estimate to guide batching. Link each batch to <b>${esc(o.id)}</b> so it groups under this order in the plan.</div></div>`;
+  toast("Order saved");
+}
+
+/* init */
+/* ---------- batch maker ---------- */
+function bLotOptions(sel){
+  const q=document.getElementById("b_qual").value;
+  const ordEl=document.getElementById("b_order");
+  const ord=(DB.orders||[]).find(o=>o.id===(ordEl?ordEl.value:""));
+  const locked=document.getElementById("b_qual").disabled;
+  const list=(DB.lots||[]).filter(l=>(!q || l.quality===q || (!locked && l.id===sel))
+                                  && (!ord || l.customer===ord.cust || l.id===sel));
+  if(!list.length) return '<option value="">— no lots for this quality —</option>';
+  return list.map(l=>{
+    const a=lotAllocation(l.id), blocked=a.blocked && l.id!==sel;
+    return `<option value="${esc(l.id)}"${l.id===sel?" selected":""}${blocked?" disabled":""}>`
+      + esc(lotLabel(l.id)) + (a.blocked?("   [fully used \u2192 "+esc(a.batches.join(", "))+"]")
+                              : a.used?("   [part used]"):"") + `</option>`;
+  }).join("");
+}
+function bLotCount(){ const c=document.getElementById("b_lotCount"),b=document.getElementById("b_lotBox"); if(c&&b) c.textContent=b.children.length+" / 8"; }
+function bLotRow(){
+  return `<div class="lotqrow">
+    <select class="b-lot">${bLotOptions()}</select>
+    <input class="b-pcs" type="number" min="0" placeholder="pcs">
+    <input class="b-mtr" type="number" min="0" placeholder="m">
+    <input class="b-wt"  type="number" min="0" step="0.1" placeholder="kg">
+    <button type="button" class="rm" title="remove" onclick="this.closest('.lotqrow').remove();bLotCount();bSyncTotals();bRefreshOrders();bLockQuality()">&times;</button>
+    <div class="taka-pick"></div></div>`;
+}
+function bAddLot(){
+  const box=document.getElementById("b_lotBox");
+  if(!(DB.lots||[]).length){ toast("No lots yet — add them in Admin → Lot master"); return; }
+  if(box.children.length>=8){ toast("A batch can hold at most 8 lots"); return; }
+  box.insertAdjacentHTML("beforeend", bLotRow());
+  const row=box.lastElementChild;
+  row.querySelector(".b-lot").onchange=()=>{ bLockQuality(); bPrefillRow(row); bSyncTotals(); bRefreshOrders(); };
+  row.querySelectorAll(".b-pcs,.b-mtr,.b-wt").forEach(i=>i.oninput=bSyncTotals);
+  row.querySelector(".b-mtr").addEventListener("input",()=>bSuggestWeight(row));
+  row.querySelector(".b-mtr").addEventListener("change",()=>{ bSnapRow(row); bSyncTotals(); });
+  bLockQuality(); bPrefillRow(row); bLotCount(); bSyncTotals(); bRefreshOrders();
+}
+function bPrefillRow(row){                       // start from what is still LEFT in the lot
+  const id=row.querySelector(".b-lot").value, a=lotAllocation(id);
+  row.querySelector(".b-mtr").value=a.remaining||"";
+  row.querySelector(".b-mtr").max=a.remaining||undefined;
+  row.querySelector(".b-pcs").max=a.remainingPcs||undefined;
+  bSnapRow(row);
+}
+
+/* ---- a taka cannot be cut: round the ask up to whole takas ---- */
+function bSnapRow(row){
+  const id=row.querySelector(".b-lot").value;
+  const out=row.querySelector(".taka-pick");
+  const want=+row.querySelector(".b-mtr").value||0;
+  if(!id || !want){ row.dataset.takas="[]"; if(out) out.innerHTML=""; return; }
+  const pool=lotRemainingTakas(id);
+  const pick=pickTakas(pool, want);
+  row.dataset.takas=JSON.stringify(pick.takas);
+  row.querySelector(".b-pcs").value=pick.pcs;
+  row.querySelector(".b-mtr").value=pick.total;
+  bSuggestWeight(row);
+  if(!out) return;
+  if(!pick.takas.length){ out.innerHTML='<span class="flag">nothing left in this lot</span>'; return; }
+  const over=pick.total-want;
+  out.innerHTML='<span class="material-symbols-rounded">straighten</span>'
+    + '<b>'+pick.pcs+'</b> whole takas &middot; '+pick.takas.join(' + ')+' = <b class="tnum">'+pick.total+' m</b>'
+    + (pick.short ? ' <span class="flag">only '+pick.total+' m left — short by '+(want-pick.total)+' m</span>'
+      : over>0 ? ' <span class="muted">(asked '+want+' m; +'+over+' m — takas cannot be cut)</span>' : '');
+}
+
+/* ---- one batch = one quality: the first lot decides it ---- */
+function bLockQuality(){
+  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>s2.value).filter(Boolean);
+  const qs=[...new Set(ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.quality;}).filter(Boolean))];
+  const sel=document.getElementById("b_qual"), hint=document.getElementById("b_qualHint");
+  if(qs.length===1 && sel.value!==qs[0]){ sel.value=qs[0]; bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); }
+  sel.disabled = qs.length>0;
+  sel.classList.toggle("locked", qs.length>0);
+  if(hint) hint.innerHTML = qs.length
+    ? '<span class="material-symbols-rounded">lock</span>Locked by '+esc(ids[0])+' — a batch cannot mix qualities'
+    : 'Pick a quality, or just add a lot and it will set itself';
+}
+function bSuggestWeight(row){                    // weight suggested from meters x gsm, still editable
+  const q=Q(document.getElementById("b_qual").value);
+  const m=+row.querySelector(".b-mtr").value||0;
+  if(q && m) row.querySelector(".b-wt").value=Math.round(kgOf(m,q.gsm,q.width)*10)/10;
+}
+function bRows(){
+  return [...document.querySelectorAll('#b_lotBox .lotqrow')].map(r=>({
+    lotId:r.querySelector(".b-lot").value,
+    pcs:+r.querySelector(".b-pcs").value||0,
+    mtr:+r.querySelector(".b-mtr").value||0,
+    weight:+r.querySelector(".b-wt").value||0,
+    takas:JSON.parse(r.dataset.takas||"[]") })).filter(x=>x.lotId);
+}
+function bSyncTotals(){
+  const rows=bRows(), el=document.getElementById("b_totals"); if(!el) return;
+  const pcs=rows.reduce((a,r)=>a+r.pcs,0), mtr=rows.reduce((a,r)=>a+r.mtr,0),
+        wt=Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10;
+  const q=Q(document.getElementById("b_qual").value), cap=q&&q.maxBatch;
+  const willSplit = cap && wt>cap;
+  el.innerHTML = rows.length
+    ? `<span class="material-symbols-rounded">functions</span><b>Batch total</b>
+       <span><b class="tnum">${pcs}</b> pcs</span><span><b class="tnum">${mtr}</b> m</span><span><b class="tnum">${wt}</b> kg</span>`
+       + (willSplit ? ` <span class="flag">exceeds ${cap} kg max for ${esc(q.name)} — will save as ${Math.ceil(wt/cap)} separate batches</span>` : '')
+    : '<span class="muted">add a lot to build the batch</span>';
+}
+function bLotCustomers(){
+  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>s2.value).filter(Boolean);
+  const names=ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.customer;}).filter(Boolean);
+  return [...new Set(names)];
+}
+function bRefreshOrders(){
+  const q=document.getElementById("b_qual").value, sel=document.getElementById("b_order"), cur=sel.value;
+  const cs=bLotCustomers();
+  let list=(DB.orders||[]).filter(o=>!q || o.qual===q);
+  if(cs.length===1) list=list.filter(o=>o.cust===cs[0]);   // a customer's fabric fulfils that customer's order
+  else if(cs.length>1) list=[];
+  sel.innerHTML='<option value="">— none —</option>'
+    + list.map(o=>`<option value="${esc(o.id)}"${o.id===cur?" selected":""}>${esc(orderLabel(o.id))}</option>`).join("");
+  const hint=document.getElementById("b_orderHint");
+  if(hint) hint.innerHTML = cs.length>1
+      ? '<span class="flag">Lots belong to different customers — use one customer\'s fabric per batch</span>'
+      : cs.length===1 ? ('Showing <b>'+esc(cs[0])+'</b> orders only — their fabric fulfils their order')
+                      : 'Pick lots first — orders are filtered to that customer';
+}
+function bRefreshLotSelects(){
+  document.querySelectorAll('#b_lotBox .b-lot').forEach(sel=>{ const cur=sel.value; sel.innerHTML=bLotOptions(cur); });
+}
+function bRefreshShades(){
+  const q=document.getElementById("b_qual").value;
+  const ordEl=document.getElementById("b_order");
+  const ord=(DB.orders||[]).find(o=>o.id===(ordEl?ordEl.value:""));
+  let list=shadesForQuality(q);
+  if(ord){                                        // only the shades this order actually asked for
+    const want=(ord.lines||[]).map(l=>l.shade);
+    list=list.filter(s=>want.indexOf(s.shade)>=0);
+  }
+  const sh=document.getElementById("b_shade");
+  sh.innerHTML = list.length
+    ? list.map(s=>`<option>${esc(s.shade)}</option>`).join("")
+    : `<option value="">— ${ord?"this order has no matching shade":"no shades for this quality"} —</option>`;
+  const hint=document.getElementById("b_shadeHint");
+  if(hint) hint.innerHTML = ord ? ('Limited to the shades on <b>'+esc(ord.id)+'</b>') : 'All shades for this quality';
+}
+async function submitBatch(){
+  const q=document.getElementById("b_qual").value;
+  if(!q){ toast("Pick a quality first"); return; }
+  const g=id=>document.getElementById(id).value;
+  const rows=bRows();
+  for(const r of rows){ const a=lotAllocation(r.lotId);
+    if(a.blocked){ toast(r.lotId+" is fully used by "+a.batches.join(", ")); return; } }
+  if(!rows.length){ toast("Add at least one lot"); return; }
+  for(const r of rows){ const a=lotAllocation(r.lotId);
+    if(r.mtr > a.remaining){ toast(r.lotId+" has only "+a.remaining+" m left"); return; } }
+  const quals=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId); return l&&l.quality;}).filter(Boolean))];
+  if(quals.length>1){ toast("This batch mixes "+quals.join(" and ")+" — one quality per batch"); return; }
+  if(quals.length===1 && quals[0]!==q){ toast("The lots are "+quals[0]+", not "+q); return; }
+  for(const r of rows){ if(!(r.takas||[]).length){ toast(r.lotId+": pick whole takas (enter the meters you need)"); return; } }
+  const custs=bLotCustomers();
+  if(custs.length>1){ toast("This batch mixes fabric from "+custs.join(" and ")+" — use one customer per batch"); return; }
+
+  // heavier than one machine load for this quality? split into whole-taka batches so the
+  // floor gets clean, separately-runnable loads instead of one un-schedulable oversized batch
+  const qObj=Q(q), cap=qObj&&qObj.maxBatch;
+  const groups=splitBatchRows(rows, cap, cfg().minMeters||300);
+
+  const created=[];
+  for(const grp of groups){
+    const tot={pcs:grp.reduce((a,r)=>a+r.pcs,0), mtr:grp.reduce((a,r)=>a+r.mtr,0),
+               weight:Math.round(grp.reduce((a,r)=>a+r.weight,0)*10)/10};
+    const row={ lots:grp, lotIds:grp.map(r=>r.lotId),
+      orderId:g("b_order"), quality:q, shadeNo:g("b_shade"), shadeDate:g("b_shadeDate"),
+      pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight,
+      status:"planned", notes:g("b_notes") };   // in/out time, pH, operator & shift are filled by the operator at the machine
+    const res=await API.save("batches",row);
+    if(res && res.error){ toast(res.error); return; }
+    created.push({id:(res.row&&res.row.id)||"Batch", pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight});
+  }
+  await API.db();
+  const r=document.getElementById("batchResult"); r.classList.add("on");
+  r.innerHTML = created.length>1
+    ? `<h3>✓ Split into ${created.length} batches</h3>
+       <div class="small muted">${esc(q)}'s max batch is ${cap} kg — this load was too heavy for one machine, so it was saved as ${created.length} separate batches.</div>
+       <div style="margin:8px 0">${created.map(c=>`<span class="chip">${esc(c.id)} · ${c.pcs} pcs · ${c.mtr} m · ${c.weight} kg</span>`).join("")}</div>`
+    : `<h3>✓ ${esc(created[0].id)} created</h3>
+       <div class="small muted">${created[0].pcs} pcs · ${created[0].mtr} m · ${created[0].weight} kg · ${esc(q)}${g("b_shade")?" · "+esc(g("b_shade")):""}</div>`;
+  document.getElementById("b_lotBox").innerHTML=""; bLotCount(); bSyncTotals();
+  ["b_notes","b_shadeDate"].forEach(id=>document.getElementById(id).value="");
+  renderBatchList(); draw(created.map(c=>c.id));
+  toast(created.length>1 ? "Split into "+created.length+" batches \u2014 added to the schedule" : "Batch created \u2014 added to the schedule");
+}
+function renderBatchList(){
+  const el=document.getElementById("batchList"), list=(DB.batches||[]).slice().reverse();
+  document.getElementById("batchCount").textContent=list.length+" batch(es)";
+  if(!list.length){ el.innerHTML='<div class="empty"><span class="material-symbols-rounded">widgets</span><h3>No batches yet</h3><p>Create your first batch above — pick a quality, add its lots, and save.</p></div>'; return; }
+  el.innerHTML='<table><thead><tr><th>Batch</th><th>Lots</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>In</th><th>Out</th><th>pH</th><th>Operator</th><th>Shift</th></tr></thead><tbody>'
+    +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td><td class="tnum">${esc(b.inTime||"")}</td><td class="tnum">${esc(b.outTime||"")}</td><td class="tnum">${esc(b.ph)}</td><td>${esc(b.operator||"")}</td><td>${b.shift?`<span class="pill ${b.shift==="Night"?"wash":"pre"}">${esc(b.shift)}</span>`:""}</td></tr>`).join("")
+    +'</tbody></table>';
+}
+
+const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch"};
+boot(()=>{
+  f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
+  f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
+  f_qual.addEventListener("change",refreshShadeSelects);
+  addShadeLine();
+  // batch maker
+  b_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
+  bRefreshOrders();
+  b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); });
+  b_order.addEventListener("change",()=>{ bRefreshLotSelects(); bRefreshShades(); });
+  bRefreshShades(); bRefreshOrders(); bLotCount(); bSyncTotals(); bLockQuality(); renderBatchList();
+  // show only the section tabs this role may see
+  const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));
+  document.querySelectorAll('#secTabs button').forEach(b=>{ b.style.display=allowed.includes(b.dataset.s)?"":"none"; });
+  if(!allowed.length){
+    document.querySelector('main').innerHTML='<div class="page-head"><h1>No operations access</h1><p>Your role has no operations pages assigned. Open the <a href="admin.html">Admin</a> console, or ask an administrator to grant access.</p></div>';
+    return;
+  }
+  draw();
+  if(!allowed.includes('floor')) show(allowed[0]);
+});
+</script>
+</body>
+</html>

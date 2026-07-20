@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REL Dyeing ERP - Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..0" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span>REL-DYE <small>ERP ADMIN</small></div>
+  <nav><a href="index.html">Operations</a><a href="admin.html" class="on">Admin</a></nav>
+  <div class="right">
+    <span id="userbox" style="display:flex;align-items:center;gap:8px"></span>
+    <button id="resetBtn" class="btn ghost sm" onclick="resetData()">Reset sample data</button>
+    <span class="envtag">Admin console</span>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="nav"></aside>
+  <main class="content" id="content"></main>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <div class="m-h"><h3 id="mTitle">Edit</h3><button class="x" onclick="closeModal()">&times;</button></div>
+    <div class="m-b" id="mBody"></div>
+    <div class="m-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveModal()">Save</button></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+const MTYPES=["drum","jigger","jet","stentor","hydro","rope"];
+const PTYPES=["","drum","jigger","jet"];
+const AUTHS=["","drum","jigger","jet","stentor"];
+const MCTYPES=["","drum","jigger","jet","stentor","hydro","rope"];
+const UNITS=["g/l","%"];
+const FAMILIES=["Neutral","Blue","Red","Yellow","Green","Purple"];
+
+/* --- icons (Google Material Symbols) --- */
+function ic(name){
+  const M={
+    dashboard:"grid_view", machines:"precision_manufacturing", qualities:"layers",
+    shadeRecipes:"palette", qualityRecipes:"science", customers:"groups",
+    orders:"receipt_long", storageAreas:"inventory_2", suppliers:"local_shipping",
+    operators:"badge", qcMetrics:"verified", users:"person",
+    roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
+    batches:"widgets", lots:"qr_code_2"
+  };
+  return '<span class="material-symbols-rounded">'+(M[name]||"circle")+'</span>';
+}
+
+/* --- schemas: fields carry section (sec), type (t), help, req, min, max --- */
+const SCHEMAS={
+  machines:{label:"Machines",single:"machine",
+    cols:[["id","ID"],["name","Name"],["type","Type"],["capMax","Cap kg"],["wash","Wash m"],["plc","PLC"],["lastMaint","Last maint."],["maintIntervalDays","Every (d)"],["maintDue","Next maint."]],
+    search:["id","name","type","company"],
+    fields:[
+      {k:"id",l:"MC ID",sec:"Identity",req:true,help:"Short code, e.g. JET-1"},
+      {k:"name",l:"MC Name",sec:"Identity",req:true},
+      {k:"type",l:"Type",sec:"Identity",t:"select",o:MTYPES,req:true},
+      {k:"company",l:"Maker / company",sec:"Identity"},
+      {k:"capMin",l:"Capacity min (kg)",sec:"Capacity & process",t:"number",min:0},
+      {k:"capMax",l:"Capacity max (kg)",sec:"Capacity & process",t:"number",req:true,min:1,help:"Max fabric load the machine holds"},
+      {k:"wash",l:"Wash cycle (min)",sec:"Capacity & process",t:"number",min:0,help:"Time to boil-out between incompatible shades"},
+      {k:"plc",l:"PLC connected",sec:"Capacity & process",t:"bool"},
+      {k:"lastMaint",l:"Last maintenance done",sec:"Maintenance",t:"date"},
+      {k:"maintIntervalDays",l:"Service every (days)",sec:"Maintenance",t:"number",min:0,help:"e.g. a drum every 60 days - the next date fills in automatically"},
+      {k:"schedMaint",l:"Next maintenance (auto)",sec:"Maintenance",t:"readonly",help:"Calculated from last maintenance + interval"}]},
+  qualities:{label:"Qualities",single:"quality",
+    cols:[["name","Quality"],["gsm","GSM"],["route","Route (4 steps)"],["dyeStep","Dye @"],["maxBatch","Max kg"]],
+    search:["name"],
+    fields:[
+      {k:"name",l:"Quality name",sec:"Fabric",req:true},
+      {k:"gsm",l:"Greige GSM",sec:"Fabric",t:"number",req:true,min:1,help:"Converts order meters to kg"},
+      {k:"width",l:"Width (inch)",sec:"Fabric",t:"number",min:1},
+      {k:"maxBatch",l:"Max batch (kg)",sec:"Fabric",t:"number",req:true,min:1},
+      {k:"step1_mc",l:"Step 1 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
+      {k:"step1_time",l:"Step 1 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0},
+      {k:"step1_speed",l:"Step 1 stentor speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Stentor only - time = meters / speed + setup. Leave blank for every other machine"},
+      {k:"step2_mc",l:"Step 2 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
+      {k:"step2_time",l:"Step 2 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0},
+      {k:"step2_speed",l:"Step 2 stentor speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Stentor only - time = meters / speed + setup. Leave blank for every other machine"},
+      {k:"step3_mc",l:"Step 3 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
+      {k:"step3_time",l:"Step 3 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0},
+      {k:"step3_speed",l:"Step 3 stentor speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Stentor only - time = meters / speed + setup. Leave blank for every other machine"},
+      {k:"step4_mc",l:"Step 4 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES,help:"Stentor normally sits here, after dyeing"},
+      {k:"step4_time",l:"Step 4 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0},
+      {k:"step4_speed",l:"Step 4 stentor speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Stentor only - time = meters / speed + setup. Leave blank for every other machine"},
+      {k:"dyeStep",l:"Which step is the dyeing step?",sec:"Route - 4 machine steps in order",t:"number",req:true,min:1,max:4,help:"Light-to-dark campaign and wash rules apply to this step only"}]},
+  shadeRecipes:{label:"Shade recipes",single:"shade recipe",preview:"shade",
+    cols:[["sw","."],["quality","Quality"],["shade","Shade"],["family","Family"],["tone","Tone"],["program","Program"],["specL","L*"],["speca","a*"],["specb","b*"]],
+    search:["quality","shade","family","program"],
+    fields:[
+      {k:"quality",l:"Quality",sec:"Shade (quality-specific)",t:"qsel",req:true,help:"Same shade in a different quality is a different recipe"},
+      {k:"shade",l:"Shade name",sec:"Shade (quality-specific)",req:true},
+      {k:"family",l:"Shade family",sec:"Shade (quality-specific)",t:"select",o:FAMILIES,req:true,help:"Groups shades for campaign sequencing"},
+      {k:"tone",l:"Tone",sec:"Shade (quality-specific)",t:"number",req:true,min:0,max:10,help:"0 = lightest, 10 = darkest (drives light-to-dark order)"},
+      {k:"program",l:"Program name",sec:"Shade (quality-specific)"},
+      {k:"dye1",l:"Dye 1",sec:"Colour recipe (dyes)"},{k:"pct1",l:"Dye 1 %",sec:"Colour recipe (dyes)",t:"number",min:0,step:0.01},
+      {k:"dye2",l:"Dye 2",sec:"Colour recipe (dyes)"},{k:"pct2",l:"Dye 2 %",sec:"Colour recipe (dyes)",t:"number",min:0,step:0.01},
+      {k:"dye3",l:"Dye 3",sec:"Colour recipe (dyes)"},{k:"pct3",l:"Dye 3 %",sec:"Colour recipe (dyes)",t:"number",min:0,step:0.01},
+      {k:"specL",l:"Standard L*",sec:"Spectrophotometer standard (checked at QC)",t:"number",step:0.1},
+      {k:"speca",l:"Standard a*",sec:"Spectrophotometer standard (checked at QC)",t:"number",step:0.1},
+      {k:"specb",l:"Standard b*",sec:"Spectrophotometer standard (checked at QC)",t:"number",step:0.1},
+      {k:"dETol",l:"Allowed dE",sec:"Spectrophotometer standard (checked at QC)",t:"number",min:0,step:0.1,help:"Max colour difference vs standard for a pass"}]},
+  qualityRecipes:{label:"Quality recipes",single:"quality recipe",
+    cols:[["quality","Quality"],["auxSummary","Auxiliary chemicals"],["notes","Notes"]],
+    search:["quality","notes"],
+    fields:[
+      {k:"quality",l:"Quality",sec:"Quality",t:"qsel",req:true},
+      {k:"aux",l:"Auxiliary chemicals",sec:"Auxiliary chemicals (up to 20)",t:"aux"},
+      {k:"notes",l:"Process notes",sec:"Notes",t:"textarea"}]},
+  customers:{label:"Customers",single:"customer",
+    cols:[["name","Name"],["gstNo","GST No."],["contactNo","Contact no."],["contactName","Contact"],["email","Email"],["officeAddress","Office address"]],
+    search:["name","contactName","gstNo","email","officeAddress"],
+    fields:[
+      {k:"name",l:"Customer name",sec:"Customer",req:true},
+      {k:"contactNo",l:"Contact number",sec:"Customer"},
+      {k:"contactName",l:"Contact person",sec:"Customer"},
+      {k:"gstNo",l:"GST No.",sec:"Customer"},
+      {k:"email",l:"Email address",sec:"Customer"},
+      {k:"officeAddress",l:"Office address",sec:"Addresses",t:"textarea"},
+      {k:"deliveryAddress",l:"Delivery address",sec:"Addresses",t:"textarea"}]},
+  orders:{label:"Orders",single:"order",
+    cols:[["id","Order ID"],["cust","Customer"],["qual","Quality"],["shades","Shades"],["due","Due d"],["pri","Pri"]],
+    search:["id","cust","qual"],
+    readonlyLines:true,
+    fields:[
+      {k:"id",l:"Order ID",sec:"Order",t:"readonly",help:"Generated by the system - cannot be edited"},
+      {k:"cust",l:"Customer",sec:"Order",t:"csel",req:true},
+      {k:"qual",l:"Quality",sec:"Order",t:"qsel",req:true},
+      {k:"due",l:"Due in (days)",sec:"Order",t:"number",min:1},
+      {k:"pri",l:"Priority (1 urgent - 3 low)",sec:"Order",t:"number",min:1,max:3}]},
+  storageAreas:{label:"Storage areas",single:"storage area",
+    cols:[["name","Area"],["shelves","Shelves"],["rowsPerShelf","Rows/shelf"],["colsPerShelf","Cols/shelf"],["slots","Total slots"],["floor","Floor"]],
+    search:["name"],
+    fields:[
+      {k:"name",l:"Area name",sec:"Area",req:true},
+      {k:"floor",l:"Floor no.",sec:"Area",t:"number",min:0},
+      {k:"locX",l:"Location X",sec:"Area",t:"number"},
+      {k:"locY",l:"Location Y",sec:"Area",t:"number"},
+      {k:"shelves",l:"Number of shelves",sec:"Indexing (locate each taka)",t:"number",req:true,min:1,help:"Each shelf has rows x columns of slots"},
+      {k:"rowsPerShelf",l:"Rows per shelf",sec:"Indexing (locate each taka)",t:"number",req:true,min:1},
+      {k:"colsPerShelf",l:"Columns per shelf",sec:"Indexing (locate each taka)",t:"number",req:true,min:1,help:"A taka location = area / shelf / row / column"}]},
+  suppliers:{label:"Suppliers",single:"supplier",
+    cols:[["item","Item"],["supplier","Supplier"],["contactName","Contact"],["phone","Phone"],["lastRate","Last rate"],["stock","Stock"],["next24","Next 24h"]],
+    search:["item","supplier","contactName"],
+    fields:[
+      {k:"item",l:"Item",sec:"Item",req:true},
+      {k:"supplier",l:"Supplier",sec:"Item"},
+      {k:"contactName",l:"Contact name",sec:"Contact"},
+      {k:"phone",l:"Phone no.",sec:"Contact"},
+      {k:"lastRate",l:"Last rate",sec:"Stock"},
+      {k:"stock",l:"Current stock",sec:"Stock",t:"number",min:0},
+      {k:"next24",l:"Next 24h requirement",sec:"Stock",t:"number",min:0},
+      {k:"procureSize",l:"Procurement size",sec:"Stock",t:"number",min:0}]},
+  batches:{label:"Batch maker",single:"batch",
+    cols:[["id","Batch ID"],["lotIds","Lot No."],["pcs","Pcs"],["mtr","Mtr"],["weight","Wt (kg)"],["quality","Quality"],["shadeNo","Shade no."],["shadeDate","Shade date"],["inTime","In"],["outTime","Out"],["ph","pH"],["operator","Operator"],["shift","Shift"],["urgent","Urgent"],["status","Status"]],
+    search:["id","quality","shadeNo","operator","status"],
+    fields:[
+      {k:"id",l:"Batch ID",sec:"Batch",t:"readonly",help:"Generated by the system — cannot be edited"},
+      {k:"orderId",l:"Order (optional)",sec:"Batch",t:"ordsel",help:"Link this batch to a sales order so it groups under it in the plan"},
+      {k:"lots",l:"Lots &amp; quantity taken from each",sec:"Batch",t:"lotqty",help:"Up to 8 lots - a batch may take only part of a lot"},
+      {k:"quality",l:"Quality",sec:"Batch",t:"qsel",req:true},
+      {k:"shadeNo",l:"Shade no.",sec:"Batch"},
+      {k:"shadeDate",l:"Shade date",sec:"Batch",t:"date"},
+      {k:"totals",l:"Batch total",sec:"Quantity",t:"batchTotal",help:"Summed from the per-lot rows - cannot be typed"},
+      {k:"inTime",l:"In time",sec:"Process",t:"time"},
+      {k:"outTime",l:"Out time",sec:"Process",t:"time"},
+      {k:"ph",l:"pH",sec:"Process",t:"number",min:0,max:14,step:0.1},
+      {k:"operator",l:"Operator",sec:"Process",t:"opsel",help:"Batch is allocated to this operator"},
+      {k:"shift",l:"Shift",sec:"Process",t:"select",o:["","Day","Night"]},
+      {k:"notes",l:"Notes",sec:"Notes",t:"textarea",help:"Batch-specific instructions — important for jet dyeing"}]},
+  lots:{label:"Lot master",single:"lot",
+    cols:[["id","Lot No."],["customer","Customer"],["quality","Quality"],["takaCount","Pcs"],["lotMeters","Meters"],["inDate","In date"],["inTime","In time"],["location","Location"],["allocation","Allocated to"]],
+    search:["id","customer","quality","location","status","challanNo"],
+    rowClass:r=>lotAllocation(r.id).blocked?"blocked":"",
+    fields:[
+      {k:"id",l:"Lot No.",sec:"Lot",t:"readonly",help:"Generated by the system — cannot be edited"},
+      {k:"customer",l:"Customer name",sec:"Lot",t:"csel",help:"Whose fabric this lot belongs to"},
+      {k:"quality",l:"Quality",sec:"Lot",t:"qsel"},
+      {k:"challanNo",l:"Inward challan no.",sec:"Lot"},
+      {k:"empireRef",l:"EMPIRE reference",sec:"Lot",help:"Reference from EMPIRE (excise software) when this lot is imported"},
+      {k:"inDate",l:"In date",sec:"Lot",t:"date"},
+      {k:"inTime",l:"In time",sec:"Lot",t:"time",help:"When the lot physically came in"},
+      {k:"location",l:"Storage location",sec:"Lot",help:"Where this fabric physically sits (area / shelf / row / column)"},
+      {k:"status",l:"Status",sec:"Lot",t:"select",o:["in-stock","allocated","consumed"]},
+      {k:"totalMeters",l:"Lot total",sec:"Takas (up to 30) - usually 80-120 m each",t:"lotTotal",help:"Worked out from the taka lengths - cannot be typed"},
+      {k:"takas",l:"Taka lengths in meters",sec:"Takas (up to 30) - usually 80-120 m each",t:"takas",help:"Pieces and total meters are worked out from these lengths"},
+      {k:"notes",l:"Notes",sec:"Notes",t:"textarea"}]},
+  operators:{label:"Operators",single:"operator",
+    cols:[["name","Name"],["contactNo","Contact"],["shift","Shift"],["auth1","Auth 1"],["auth2","Auth 2"],["auth3","Auth 3"],["batchesLogged","Batches"]],
+    search:["name","shift"],
+    fields:[
+      {k:"name",l:"Operator name",sec:"Operator",req:true},
+      {k:"contactNo",l:"Contact number",sec:"Operator"},
+      {k:"shift",l:"Shift",sec:"Operator",t:"select",o:["Day","Night"],help:"Day shift or night shift"},
+      {k:"auth1",l:"Machine auth 1",sec:"Machine authorisations",t:"select",o:AUTHS},
+      {k:"auth2",l:"Machine auth 2",sec:"Machine authorisations",t:"select",o:AUTHS},
+      {k:"auth3",l:"Machine auth 3",sec:"Machine authorisations",t:"select",o:AUTHS},
+      {k:"batchesLogged",l:"Batches logged",sec:"Machine authorisations",t:"number",min:0}]},
+  qcMetrics:{label:"QC metrics",single:"QC metric",
+    cols:[["metric","Metric"],["target","Target"],["weight","Weight %"]],
+    search:["metric"],
+    fields:[
+      {k:"metric",l:"Metric",sec:"Metric",req:true},
+      {k:"target",l:"Target / spec",sec:"Metric"},
+      {k:"weight",l:"Weight (%)",sec:"Metric",t:"number",min:0,max:100}]},
+  users:{label:"Users",single:"user",
+    cols:[["username","Username"],["role","Role"],["active","Active"]],
+    search:["username","role"],
+    fields:[
+      {k:"username",l:"Username",sec:"Account",req:true},
+      {k:"role",l:"Role",sec:"Account",t:"rolesel",req:true,help:"Determines which pages this user can see"},
+      {k:"active",l:"Active (can log in)",sec:"Account",t:"bool"},
+      {k:"password",l:"Password",sec:"Password",t:"password",help:"On edit, leave blank to keep the current password"}]},
+  roles:{label:"Roles",single:"role",
+    cols:[["name","Role"],["description","Description"],["permsCount","Pages"]],
+    search:["name","description"],
+    fields:[
+      {k:"name",l:"Role name",sec:"Role",req:true},
+      {k:"description",l:"Description",sec:"Role"},
+      {k:"perms",l:"Accessible pages",sec:"Page access (grant like Discord threads)",t:"perms"}]}
+};
+/* every page a role can be granted (keys must match server ALL_PAGES) */
+const PAGES=[
+  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_order","New order","Operations"],["op_batch","Batch maker","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],
+  ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
+  ["shadeRecipes","Shade recipes","Admin"],["qualityRecipes","Quality recipes","Admin"],
+  ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],
+  ["customers","Customers","Admin"],["orders","Orders","Admin"],["storageAreas","Storage areas","Admin"],
+  ["suppliers","Suppliers","Admin"],["operators","Operators","Admin"],["qcMetrics","QC metrics","Admin"],
+  ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"]];
+
+const NAV=[
+  {grp:null, items:[["dashboard","Dashboard"]]},
+  {grp:"Production setup", items:[["machines","Machines"],["qualities","Qualities"]]},
+  {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"]]},
+  {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"]]},
+  {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"]]},
+  {grp:"Store & stock", items:[["storageAreas","Storage areas"],["suppliers","Suppliers"]]},
+  {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
+  {grp:"Access", items:[["users","Users"],["roles","Roles"]]},
+  {grp:"System", items:[["plan","Live plan"],["settings","Settings"]]}
+];
+
+let CUR="dashboard", editTable=null, editRow=null;
+const SEARCH={};
+
+function colorFT(family,tone){
+  const map={Blue:212,Red:2,Yellow:44,Neutral:222,Green:140,Purple:280};
+  const hue=map[family]!==undefined?map[family]:222;
+  const sat=family==="Neutral"?6:62; const light=86-(+tone||0)*5.4;
+  return "hsl("+hue+","+sat+"%,"+light+"%)";
+}
+
+function renderNav(){
+  let h="";
+  NAV.forEach(g=>{
+    const items=g.items.filter(it=>can(it[0]));
+    if(!items.length) return;
+    if(g.grp) h+='<div class="grp">'+g.grp+'</div>';
+    items.forEach(it=>{
+      const key=it[0], count = SCHEMAS[key] ? (DB[key]||[]).length : "";
+      h+='<div class="navitem'+(key===CUR?' on':'')+'" data-t="'+key+'">'+ic(key)+'<span class="lbl">'+it[1]+'</span>'+(count!==""?'<span class="ct">'+count+'</span>':'')+'</div>';
+    });
+  });
+  document.getElementById("nav").innerHTML=h;
+}
+document.getElementById("nav").addEventListener("click",e=>{
+  const el=e.target.closest(".navitem"); if(!el)return; CUR=el.dataset.t; renderNav(); render();
+});
+
+function cellVal(table,r,k){
+  if(k==="sw") return '<span class="swatch" style="background:'+colorFT(r.family,r.tone)+'"></span>';
+  if(k==="shades") return (r.lines||[]).map(l=>esc(l.shade)+" ("+l.m+"m)").join(", ");
+  if(k==="plc") return r.plc?"Yes":"";
+  if(k==="slots") return (+r.shelves||0)*(+r.rowsPerShelf||0)*(+r.colsPerShelf||0);
+  if(k==="active") return r.active?'<span class="pill run">Active</span>':'<span class="pill free">Disabled</span>';
+  if(k==="route"){
+    const p=[]; for(let i=1;i<=4;i++){ const mc=r["step"+i+"_mc"]; if(!mc) continue;
+      const sp=+r["step"+i+"_speed"]||0, lbl=esc(mc)+(mc==="stentor"&&sp?(' <span class="muted">'+sp+'m/min</span>'):'');
+      p.push((i===(+r.dyeStep||3))?'<b>'+lbl+'</b>':lbl); }
+    return p.join(' <span class="muted">&rarr;</span> ')||'<span class="muted">no route</span>';
+  }
+  if(k==="maintDue"){
+    const d=r.schedMaint; if(!d) return '<span class="muted">&mdash;</span>';
+    const days=Math.round((new Date(d)-new Date())/86400000);
+    if(days<0) return '<span class="pill maint">overdue</span> <span class="tnum">'+esc(d)+'</span>';
+    if(days<=7) return '<span class="pill pre">'+days+'d</span> <span class="tnum">'+esc(d)+'</span>';
+    return '<span class="tnum">'+esc(d)+'</span>';
+  }
+  if(k==="auxSummary"){
+    const a=r.aux||[]; if(!a.length) return '<span class="muted">&mdash;</span>';
+    return a.slice(0,3).map(x=>'<span class="chip">'+esc(x.name)+' '+esc(x.qty)+esc(x.unit)+'</span>').join("")+(a.length>3?' <span class="muted">+'+(a.length-3)+'</span>':'');
+  }
+  if(k==="allocation"){
+    const a=lotAllocation(r.id);
+    if(!a.used) return '<span class="pill run">available</span> <span class="tnum">'+a.total+'</span> <span class="muted">m</span>';
+    if(a.blocked) return '<span class="pill free">fully used</span> <span class="tnum">'+esc(a.batches.join(", "))+'</span>';
+    return '<span class="pill pre">part used</span> <span class="tnum">'+a.remaining+'</span> <span class="muted">m left of '+a.total+'</span>';
+  }
+  if(k==="urgent") return r.urgent?'<span class="pill maint">urgent</span>':'';
+  if(k==="permsCount") return (r.perms||[]).length+" pages";
+  if(k==="takaCount") return '<span class="tnum">'+((r.takas||[]).length)+'</span>';
+  if(k==="lotMeters"){ const t=(r.takas||[]).map(Number).filter(n=>!isNaN(n)); return t.length?('<span class="tnum">'+Math.round(t.reduce((a,b)=>a+b,0))+'</span> <span class="muted">m</span>'):'<span class="muted">&mdash;</span>'; }
+  if(k==="lotIds"){ const l=r.lotIds||[]; return l.length? l.map(x=>'<span class="chip">'+esc(x)+'</span>').join("") : '<span class="muted">—</span>'; }
+  if(k==="shift" && r.shift) return '<span class="pill '+(r.shift==="Night"?"wash":"pre")+'">'+esc(r.shift)+'</span>';
+  return esc(r[k]);
+}
+
+function render(){
+  const c=document.getElementById("content");
+  if(!can(CUR)){ c.innerHTML='<div class="page-head"><h1>No access</h1><p>You do not have permission to view this page. Ask an administrator to grant it to your role.</p></div>'; return; }
+  if(CUR==="dashboard") return renderDashboard(c);
+  if(CUR==="settings") return renderSettings(c);
+  if(CUR==="plan") return renderPlan(c);
+  const sc=SCHEMAS[CUR];
+  const term=(SEARCH[CUR]||"").toLowerCase();
+  let rows=DB[CUR]||[];
+  if(term) rows=rows.filter(r=>sc.search.some(k=>String(r[k]||"").toLowerCase().indexOf(term)>=0));
+  c.innerHTML='<div class="page-head"><h1>'+sc.label+'</h1><p>'+(DB[CUR]||[]).length+' record(s). Click Edit to change, or Add to create a new one.</p></div>'
+    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
+    +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="SEARCH[CUR]=this.value;render();setTimeout(()=>{var i=document.querySelector(\'.search input\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},0)"></div>'
+    +'<div class="spacer"></div><button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
+    +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th>'+x[1]+'</th>').join("")+'<th></th></tr></thead><tbody>'
+    +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
+      +'<td><div class="rowbtns"><button class="btn ghost sm" onclick=\'openModal("'+CUR+'",'+JSON.stringify(r.id)+')\'>Edit</button>'
+      +'<button class="btn danger sm" onclick=\'delRow("'+CUR+'",'+JSON.stringify(r.id)+')\'>Delete</button></div></td></tr>').join("")
+      :'<tr><td colspan="'+(sc.cols.length+1)+'" style="text-align:center;color:var(--muted);padding:26px">No records'+(term?' match your search':'')+'.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+
+/* ---- dashboard ---- */
+function renderDashboard(c){
+  const cards=[["machines","Machines"],["qualities","Qualities"],["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"],
+    ["customers","Customers"],["orders","Open orders"],["storageAreas","Storage areas"],["suppliers","Suppliers"],["operators","Operators"]];
+  let S=null; try{ S=computeSchedule(); }catch(e){}
+  const kpi=(icn,val,lbl,d)=>'<div class="kpi rise" style="animation-delay:'+d+'ms"><div class="ic-wrap"><span class="material-symbols-rounded">'+icn+'</span></div><b>'+val+'</b><small>'+lbl+'</small></div>';
+  c.innerHTML='<div class="page-head"><h1>Dashboard</h1><p>Overview of your master data. Click any card to manage it.</p></div>'
+    +'<div class="kpis">'
+    +kpi('receipt_long',DB.orders.length,'Open orders',0)
+    +kpi('layers',(S?S.batchCount:"-"),'Batches planned',40)
+    +kpi('wash',(S?S.washCount:"-"),'Washes',80)
+    +kpi('precision_manufacturing',DB.machines.length,'Machines',120)
+    +kpi('palette',DB.shadeRecipes.length,'Shade recipes',160)+'</div>'
+    +'<div class="dash">'+cards.filter(x=>can(x[0])).map((x,i)=>'<button class="dcard rise" style="animation-delay:'+(i*30)+'ms" onclick="CUR=\''+x[0]+'\';renderNav();render()"><div class="ic-wrap">'+ic(x[0])+'</div><b>'+(DB[x[0]]||[]).length+'</b><small>'+x[1]+'</small></button>').join("")+'</div>';
+}
+
+/* ---- auxiliary chemical rows (qty with % or g/l) ---- */
+function auxRow(a){
+  a=a||{name:"",qty:"",unit:"g/l"};
+  return '<div class="auxrow"><input class="a-name" placeholder="Chemical name" value="'+esc(a.name||"")+'">'
+    +'<input class="a-qty" type="number" step="0.01" min="0" placeholder="Qty" value="'+(a.qty===0||a.qty?a.qty:"")+'">'
+    +'<select class="a-unit">'+UNITS.map(u=>'<option'+(u===(a.unit||"g/l")?" selected":"")+'>'+u+'</option>').join("")+'</select>'
+    +'<button type="button" class="rm" title="remove" onclick="this.closest(\'.auxrow\').remove();updateAuxCount()">&times;</button></div>';
+}
+function updateAuxCount(){ const c=document.getElementById("auxCount"), b=document.getElementById("auxBox"); if(c&&b) c.textContent=b.children.length+" / 20"; }
+function addAuxRow(){
+  const box=document.getElementById("auxBox"); if(!box) return;
+  if(box.children.length>=20){ toast("Up to 20 auxiliary chemicals"); return; }
+  box.insertAdjacentHTML("beforeend",auxRow()); updateAuxCount();
+}
+
+/* ---- taka + lot editors ---- */
+function takaChip(t){ return '<span class="taka-chip" data-t="'+esc(t)+'">'+esc(t)+'<small>m</small><button type="button" title="remove" onclick="this.parentNode.remove();updateTakaCount()">&times;</button></span>'; }
+function takaVals(){ const b=document.getElementById("takaChips"); return b?[...b.children].map(c=>+c.dataset.t).filter(n=>!isNaN(n)):[]; }
+function updateTakaCount(){
+  const c=document.getElementById("takaCount"); if(!c) return;
+  const v=takaVals(), tot=v.reduce((a,b)=>a+b,0);
+  c.innerHTML = v.length ? ('<b>'+v.length+'</b> takas &middot; <b>'+tot+' m</b> &middot; avg '+Math.round(tot/v.length)+' m')
+                         : '<span class="muted">no takas yet</span>';
+  const box=document.getElementById("lotTotalBox");
+  if(box) box.innerHTML = v.length ? ('<b>'+v.length+'</b> pcs &nbsp;&middot;&nbsp; <b>'+tot+' m</b> total')
+                                   : '<span class="muted">add taka lengths below</span>';
+}
+function addTaka(){
+  const inp=document.getElementById("takaNew"), box=document.getElementById("takaChips"); if(!inp||!box) return;
+  const v=parseFloat(inp.value); if(isNaN(v)||v<=0){ toast("Enter the taka length in meters"); return; }
+  if(box.children.length>=30){ toast("Maximum 30 takas per lot"); return; }
+  if(v<50||v>200) toast("Note: "+v+" m is outside the usual 80-120 m range");
+  box.insertAdjacentHTML("beforeend",takaChip(v)); inp.value=""; inp.focus(); updateTakaCount();
+}
+function toggleTakaBulk(){ const w=document.getElementById("takaBulkWrap"); if(w) w.style.display = (w.style.display==="none" ? "" : "none"); }
+function applyTakaBulk(){
+  const ta=document.getElementById("takaBulk"), box=document.getElementById("takaChips"); if(!ta||!box) return;
+  let out=[];
+  ta.value.split(/[\s,;]+/).filter(Boolean).forEach(tok=>{
+    const m=tok.match(/^(\d+)[xX*](\d+(?:\.\d+)?)$/);        // "12x100" = 12 takas of 100 m
+    if(m){ const n=Math.min(+m[1],30); for(let i=0;i<n;i++) out.push(+m[2]); }
+    else { const v=parseFloat(tok); if(!isNaN(v)&&v>0) out.push(v); }
+  });
+  if(out.length>30){ out=out.slice(0,30); toast("Trimmed to the first 30 takas"); }
+  box.innerHTML=out.map(takaChip).join(""); updateTakaCount();
+}
+function lotRow(v,ids){ return lotQRow({lotId:v},ids); }
+function lotQRow(r,ids){
+  r=r||{}; ids=ids||(DB.lots||[]).map(l=>l.id);
+  return '<div class="lotqrow"><select class="lot-sel">'+ids.map(o=>{
+      const a=lotAllocation(o), blocked=a.blocked && o!==r.lotId;
+      return '<option value="'+esc(o)+'"'+(o===r.lotId?" selected":"")+(blocked?" disabled":"")+'>'+esc(lotLabel(o))+(a.blocked?"   [fully used]":(a.used?"   [part used]":""))+'</option>';
+    }).join("")+'</select>'
+    +'<input class="lot-pcs" type="number" min="0" placeholder="pcs" value="'+(r.pcs||"")+'">'
+    +'<input class="lot-mtr" type="number" min="0" placeholder="m" value="'+(r.mtr||"")+'">'
+    +'<input class="lot-wt"  type="number" min="0" step="0.1" placeholder="kg" value="'+(r.weight||"")+'">'
+    +'<button type="button" class="rm" title="remove" onclick="this.closest(\'.lotqrow\').remove();updateLotCount();syncLotTotals()">&times;</button></div>';
+}
+function lotQRows(){
+  return [...document.querySelectorAll('#lotBox .lotqrow')].map(r=>({
+    lotId:r.querySelector('.lot-sel').value,
+    pcs:+r.querySelector('.lot-pcs').value||0,
+    mtr:+r.querySelector('.lot-mtr').value||0,
+    weight:+r.querySelector('.lot-wt').value||0 })).filter(x=>x.lotId);
+}
+function updateLotCount(){ const c=document.getElementById("lotCount"), b=document.getElementById("lotBox"); if(c&&b) c.textContent=b.children.length+" / 8"; }
+function syncLotTotals(){
+  const rows=lotQRows(), box=document.getElementById("batchTotalBox"); if(!box) return;
+  const pcs=rows.reduce((a,r)=>a+r.pcs,0), mtr=rows.reduce((a,r)=>a+r.mtr,0),
+        wt=Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10;
+  box.innerHTML = rows.length ? ('<b>'+pcs+'</b> pcs &nbsp;&middot;&nbsp; <b>'+mtr+'</b> m &nbsp;&middot;&nbsp; <b>'+wt+'</b> kg') : '<span class="muted">add a lot row</span>';
+}
+function wireLotRows(){
+  document.querySelectorAll('#lotBox .lotqrow').forEach(r=>{
+    r.querySelector('.lot-sel').onchange=()=>{ const t=lotTotals([r.querySelector('.lot-sel').value]);
+      r.querySelector('.lot-pcs').value=t.pcs||''; r.querySelector('.lot-mtr').value=t.mtr||''; syncLotTotals(); };
+    r.querySelectorAll('.lot-pcs,.lot-mtr,.lot-wt').forEach(i=>i.oninput=syncLotTotals);
+  });
+}
+function addLotRow(){
+  const box=document.getElementById("lotBox"); if(!box) return;
+  if(box.children.length>=8){ toast("A batch can hold at most 8 lots"); return; }
+  box.insertAdjacentHTML("beforeend", lotQRow({},(DB.lots||[]).map(l=>l.id)));
+  const row=box.lastElementChild, t=lotTotals([row.querySelector('.lot-sel').value]);
+  row.querySelector('.lot-pcs').value=t.pcs||''; row.querySelector('.lot-mtr').value=t.mtr||'';
+  wireLotRows(); updateLotCount(); syncLotTotals();
+}
+
+/* ---- form ---- */
+function fieldInput(f,val){
+  if(f.t==="bool") return '<input type="checkbox" '+(val?"checked":"")+' data-k="'+f.k+'" style="width:auto;margin-top:8px">';
+  if(f.t==="textarea") return '<textarea data-k="'+f.k+'" rows="2">'+esc(val==null?"":val)+'</textarea>';
+  if(f.t==="number") return '<input type="number" value="'+(val==null?"":val)+'" data-k="'+f.k+'"'+(f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+(f.step?' step="'+f.step+'"':'')+'>';
+  if(f.t==="date") return '<input type="date" value="'+(val||"")+'" data-k="'+f.k+'">';
+  if(f.t==="password") return '<input type="password" autocomplete="new-password" placeholder="'+(editRow.id?"(leave blank to keep current)":"")+'" data-k="'+f.k+'">';
+  if(f.t==="perms"){
+    const sel=Array.isArray(val)?val:[]; const groups={};
+    PAGES.forEach(p=>{(groups[p[2]]=groups[p[2]]||[]).push(p);});
+    return Object.keys(groups).map(g=>'<div style="margin-bottom:10px"><div class="small faint" style="margin-bottom:5px">'+g+'</div><div style="display:flex;flex-wrap:wrap;gap:6px 16px">'
+      +groups[g].map(p=>'<label style="display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink);margin:0"><input type="checkbox" data-perm="'+p[0]+'" '+(sel.indexOf(p[0])>=0?"checked":"")+' style="width:auto;margin:0">'+esc(p[1])+'</label>').join("")
+      +'</div></div>').join("");
+  }
+  if(f.t==="aux"){
+    const list=Array.isArray(val)?val:[];
+    return '<div class="auxbox" id="auxBox">'+list.map(auxRow).join("")+'</div>'
+      +'<div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="addAuxRow()"><span class="material-symbols-rounded">add</span>Add chemical</button>'
+      +'<span class="taka-count" id="auxCount"></span></div>';
+  }
+  if(f.t==="lotTotal") return '<div class="ro-field" id="lotTotalBox"></div>';
+  if(f.t==="readonly") return '<div class="ro-field">'+(val?esc(val):'<span class="muted">generated on save</span>')+'</div>';
+  if(f.t==="time") return '<input type="time" value="'+(val||"")+'" data-k="'+f.k+'">';
+  if(f.t==="takas"){
+    const list=Array.isArray(val)?val:[];
+    return '<div class="takabox">'
+      +'<div class="taka-chips" id="takaChips">'+list.map(takaChip).join("")+'</div>'
+      +'<div class="taka-ctl">'
+        +'<input id="takaNew" class="taka-in" placeholder="Length (m)" type="number" step="0.5" min="1" onkeydown="if(event.key===\'Enter\'){event.preventDefault();addTaka();}">'
+        +'<button type="button" class="btn ghost sm" onclick="addTaka()"><span class="material-symbols-rounded">add</span>Add</button>'
+        +'<button type="button" class="btn ghost sm" onclick="toggleTakaBulk()"><span class="material-symbols-rounded">edit</span>Bulk edit</button>'
+        +'<span class="taka-count" id="takaCount"></span></div>'
+      +'<div id="takaBulkWrap" style="display:none;margin-top:10px">'
+        +'<textarea id="takaBulk" rows="3" placeholder="Paste taka numbers separated by comma, space or new line — or a range like 101-130"></textarea>'
+        +'<button type="button" class="btn sm" style="margin-top:8px" onclick="applyTakaBulk()">Apply to list</button></div>'
+      +'</div>';
+  }
+  if(f.t==="lotqty"){
+    const rows=Array.isArray(val)?val:[], ids=(DB.lots||[]).map(l=>l.id);
+    if(!ids.length) return '<div class="ro-field"><span class="muted">No lots yet - create them in Lot master first</span></div>';
+    return '<div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span></div>'
+      +'<div id="lotBox">'+rows.map(r=>lotQRow(r,ids)).join("")+'</div>'
+      +'<div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="addLotRow()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="lotCount"></span></div>';
+  }
+  if(f.t==="batchTotal") return '<div class="ro-field" id="batchTotalBox"></div>';
+  if(f.t==="lotsel"){
+    const sel=Array.isArray(val)?val:[], ids=(DB.lots||[]).map(l=>l.id);
+    if(!ids.length) return '<div class="ro-field"><span class="muted">No lots yet — create them in Lot master first</span></div>';
+    return '<div class="lotbox" id="lotBox">'+sel.map(v=>lotRow(v,ids)).join("")+'</div>'
+      +'<div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="addLotRow()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="lotCount"></span></div>';
+  }
+  let opts=null;
+  if(f.t==="select") opts=f.o;
+  if(f.t==="qsel") opts=DB.qualities.map(q=>q.name);
+  if(f.t==="csel") opts=DB.customers.map(x=>x.name);
+  if(f.t==="rolesel") opts=(DB.roles||[]).map(r=>r.name);
+  if(f.t==="opsel") opts=[""].concat((DB.operators||[]).map(o=>o.name));
+  if(f.t==="ordsel") opts=[""].concat((DB.orders||[]).map(o=>o.id));
+  if(opts) return '<select data-k="'+f.k+'">'+opts.map(o=>'<option'+(o===val?" selected":"")+'>'+esc(o)+'</option>').join("")+'</select>';
+  return '<input type="text" value="'+esc(val==null?"":val)+'" data-k="'+f.k+'">';
+}
+function openModal(table,id){
+  editTable=table; const sc=SCHEMAS[table];
+  editRow = id!=null ? JSON.parse(JSON.stringify(DB[table].find(r=>r.id===id)||{})) : {};
+  if(table==="users" && id==null && editRow.active===undefined) editRow.active=true;
+  document.getElementById("mTitle").textContent=(id!=null?"Edit ":"Add ")+sc.single;
+  let secs=[], cur=null;
+  sc.fields.forEach(f=>{ if(f.sec!==cur){cur=f.sec;secs.push({t:cur,fields:[]});} secs[secs.length-1].fields.push(f); });
+  let html = (table==="shadeRecipes")?'<div class="previewbox"><div class="bigsw" id="pvSw"></div><div class="pv-meta" id="pvMeta"></div></div>':"";
+  html += secs.map(s=>'<div class="form-sec"><h4>'+s.t+'</h4><div class="grid2">'
+    +s.fields.map(f=>'<label class="fld"'+((f.t==="perms"||f.t==="textarea")?' style="grid-column:1/-1"':'')+'>'+f.l+(f.req?'<span class="req">*</span>':'')+fieldInput(f,editRow[f.k])
+      +(f.help?'<span class="help">'+f.help+'</span>':'')+'<span class="err">Required</span></label>').join("")+'</div></div>').join("");
+  if(sc.readonlyLines && editRow.lines) html+='<div class="small muted" style="margin-top:6px">Shade lines: '+editRow.lines.map(l=>esc(l.shade)+" "+l.m+"m").join(", ")+' - edit these on the Operations page.</div>';
+  document.getElementById("mBody").innerHTML=html;
+  if(table==="shadeRecipes"){ ["family","tone","shade","quality"].forEach(k=>{const el=document.querySelector('#mBody [data-k="'+k+'"]'); if(el){el.addEventListener("input",updateShadePreview);el.addEventListener("change",updateShadePreview);}}); updateShadePreview(); }
+  updateTakaCount(); updateLotCount(); updateAuxCount(); wireLotRows(); syncLotTotals();
+  document.getElementById("modalBg").classList.add("on");
+}
+function updateShadePreview(){
+  const g=k=>{const el=document.querySelector('#mBody [data-k="'+k+'"]');return el?el.value:"";};
+  const sw=document.getElementById("pvSw"), meta=document.getElementById("pvMeta");
+  if(!sw)return;
+  sw.style.background=colorFT(g("family"),g("tone"));
+  meta.innerHTML='<b>'+(esc(g("shade"))||"(shade)")+'</b> in '+(esc(g("quality"))||"(quality)")+'<br>family '+esc(g("family"))+', tone '+esc(g("tone"))+' &nbsp; L* '+esc(g("specL"))+' a* '+esc(g("speca"))+' b* '+esc(g("specb"));
+}
+async function saveModal(){
+  const sc=SCHEMAS[editTable]; const row=Object.assign({},editRow); let ok=true;
+  document.querySelectorAll("#mBody .fld").forEach(l=>l.classList.remove("invalid"));
+  sc.fields.forEach(f=>{
+    if(f.t==="perms"){ row.perms=[...document.querySelectorAll('#mBody [data-perm]')].filter(x=>x.checked).map(x=>x.dataset.perm); return; }
+    if(f.t==="readonly") return;                       // system id — never submitted
+    if(f.t==="aux"){ const b=document.getElementById("auxBox");
+      row.aux = b?[...b.querySelectorAll(".auxrow")].map(r=>({name:r.querySelector(".a-name").value,
+        qty:r.querySelector(".a-qty").value===""?"":+r.querySelector(".a-qty").value,
+        unit:r.querySelector(".a-unit").value})).filter(x=>x.name):[]; return; }
+    if(f.t==="takas"){ const b=document.getElementById("takaChips");
+      row.takas = b?[...b.children].map(c=>+c.dataset.t).filter(n=>!isNaN(n)):[];
+      row.pcs = row.takas.length;                       // derived, never typed
+      row.meters = Math.round(row.takas.reduce((a,b2)=>a+b2,0));
+      return; }
+    if(f.t==="lotqty"){
+    const rows=Array.isArray(val)?val:[], ids=(DB.lots||[]).map(l=>l.id);
+    if(!ids.length) return '<div class="ro-field"><span class="muted">No lots yet - create them in Lot master first</span></div>';
+    return '<div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span></div>'
+      +'<div id="lotBox">'+rows.map(r=>lotQRow(r,ids)).join("")+'</div>'
+      +'<div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="addLotRow()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="lotCount"></span></div>';
+  }
+  if(f.t==="batchTotal") return '<div class="ro-field" id="batchTotalBox"></div>';
+  if(f.t==="lotsel"){ const b=document.getElementById("lotBox"); row.lotIds = b?[...b.querySelectorAll(".lot-sel")].map(s=>s.value):[]; return; }
+    const el=document.querySelector('#mBody [data-k="'+f.k+'"]'); if(!el)return;
+    let v = f.t==="bool"?el.checked : (f.t==="number"? (el.value===""?"":+el.value) : el.value);
+    const lab=el.closest(".fld"); const err=lab.querySelector(".err");
+    if(f.t==="password"){
+      if(v==="" && !editRow.id){ lab.classList.add("invalid"); if(err)err.textContent="Required for a new user"; ok=false; }
+      else if(v!=="" && v.length<6){ lab.classList.add("invalid"); if(err)err.textContent="Min 6 characters"; ok=false; }
+      if(v==="") delete row.password; else row.password=v;
+      return;
+    }
+    if(f.req && (v===""||v==null)){ lab.classList.add("invalid"); if(err)err.textContent="Required"; ok=false; }
+    else if(f.t==="number" && v!==""){ if(f.min!=null&&v<f.min){lab.classList.add("invalid");if(err)err.textContent="Min "+f.min;ok=false;} if(f.max!=null&&v>f.max){lab.classList.add("invalid");if(err)err.textContent="Max "+f.max;ok=false;} }
+    row[f.k]=v;
+  });
+  if(!ok){ toast("Please fix the highlighted fields"); return; }
+  await API.save(editTable,row); await API.db(); closeModal(); renderNav(); render(); toast("Saved");
+}
+function closeModal(){document.getElementById("modalBg").classList.remove("on");}
+async function delRow(table,id){ if(!confirm("Delete this record?"))return; await API.del(table,id); await API.db(); renderNav(); render(); toast("Deleted"); }
+async function resetData(){ if(!confirm("Reset ALL data to the sample seed? This cannot be undone."))return; await API.reset(); await API.db(); renderNav(); render(); toast("Data reset"); }
+
+/* ---- settings ---- */
+function renderSettings(c){
+  const s=cfg();
+  c.innerHTML='<div class="page-head"><h1>Scheduler settings</h1><p>Global parameters used by the planner.</p></div>'
+   +'<div class="card"><div class="card-b"><div class="grid3">'
+   +'<label class="fld">Default width (inch)<input id="s_w" type="number" value="'+s.widthDefault+'"><span class="help">Used when a quality has no width</span></label>'
+   +'<label class="fld">Minimum load (meters)<input id="s_min" type="number" value="'+s.minMeters+'"><span class="help">No batch below this</span></label>'
+   +'<label class="fld">Stentor setup (min)<input id="s_sten" type="number" value="'+(s.stentorSetupMins||90)+'"><span class="help">Fixed time added to meters &divide; speed</span></label>'
+   +'<label class="fld">Promise buffer (x)<input id="s_buf" type="number" step="0.05" value="'+s.buffer+'"><span class="help">Route time multiplier</span></label>'
+   +'<label class="fld">Loading time (min)<input id="s_load" type="number" value="'+s.loadMin+'"></label>'
+   +'<label class="fld">Unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"></label>'
+   +'</div><button class="btn" onclick="saveSettings()">Save settings</button></div></div>';
+}
+async function saveSettings(){
+  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value};
+  await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"upsert",table:"__settings__",row:st})});
+  await API.db(); toast("Settings saved");
+}
+
+/* ---- live plan ---- */
+function renderPlan(c){
+  const S=computeSchedule();
+  const maxMin=Math.max(60,...DB.machines.map(m=>S.tl[m.id].cursor))+30;
+
+  // ---- ORDER-WISE plan (which machine each order runs on, over the next hours) ----
+  const byOrder={}; S.batches.forEach(b=>{ (byOrder[b.order]=byOrder[b.order]||[]).push(b); });
+  let axis='<div class="axis"><div class="glabel"><small>t = now</small></div><div class="ticks" style="width:'+px(maxMin)+'px">';
+  for(let h=0;h<=Math.ceil(maxMin/60);h+=2) axis+='<span class="tk" style="left:'+px(h*60)+'px">t+'+h+'h</span>';
+  axis+='</div></div>';
+  let ordRows='';
+  DB.orders.forEach(o=>{
+    const bs=(byOrder[o.id]||[]).filter(b=>b.dyeStart!=null).sort((a,b)=>a.dyeStart-b.dyeStart);
+    ordRows+='<div class="grow"><div class="glabel"><b>'+esc(o.id)+'</b><small>'+esc(o.cust||"")+'</small></div><div class="gtrack" style="width:'+px(maxMin)+'px">';
+    if(bs.length){
+      bs.forEach(b=>{ const left=px(b.dyeStart), w=Math.max(38,px(b.dyeEnd-b.dyeStart));
+        ordRows+='<div class="blk" style="left:'+left+'px;width:'+w+'px;background:'+shadeColor(b.shade,b.qual)+';color:'+(b.tone>5?'#fff':'#20242c')+'" title="'+esc(o.id)+' · '+esc(b.shade)+' on '+b.mcAssigned+' · t+'+(b.dyeStart/60).toFixed(1)+'h → t+'+(b.dyeEnd/60).toFixed(1)+'h"><b style="font-weight:700">'+b.mcAssigned+'</b><small>'+esc(b.shade)+'</small></div>';
+      });
+    } else {
+      ordRows+='<div style="padding:9px 10px;font-size:11px;color:var(--muted)">not yet scheduled</div>';
+    }
+    ordRows+='</div></div>';
+  });
+  const orderCard = DB.orders.length
+    ? '<div class="card" style="margin-bottom:16px"><div class="card-h"><h2>Order-wise plan</h2><span class="sub">which machine each order runs on over the next hours · t = now</span></div><div style="overflow-x:auto;padding-bottom:6px">'+axis+ordRows+'</div><div class="legend" style="padding:2px 16px 14px">each block = the dye machine an order runs on · coloured by shade · hover for exact t+ window</div></div>'
+    : '<div class="card" style="margin-bottom:16px"><div class="card-b"><div class="empty"><span class="material-symbols-rounded">calendar_view_week</span><h3>No orders to plan</h3><p>Add orders on the Operations page and the order-wise plan will appear here.</p></div></div></div>';
+
+  // ---- machine schedule + batch master (unchanged, t+ labels) ----
+  const sched=[]; DB.machines.forEach(m=>S.tl[m.id].blocks.forEach(b=>{
+    sched.push({mc:m.id,kind:b.kind,ref:b.batch?b.batch.order:"-",shade:b.batch?(b.batch.shade||"-"):"-",qual:b.batch?b.batch.qual:"",start:(b.start/60).toFixed(1),end:((b.start+b.mins)/60).toFixed(1),mins:b.mins});}));
+  const machineCard='<div class="card" style="margin-bottom:16px"><div class="card-h"><h2>Machine schedule</h2><span class="sub">planned start/end, t+ hours from now</span></div><div class="tbl-wrap"><table><thead><tr><th>M/C</th><th>Step</th><th>Order</th><th>Shade</th><th>Start</th><th>End</th><th>Min</th></tr></thead><tbody>'
+    +sched.sort((a,b)=>a.mc.localeCompare(b.mc)||a.start-b.start).map(r=>'<tr><td><b>'+r.mc+'</b></td><td><span class="pill '+(r.kind==="dye"?"run":r.kind)+'">'+r.kind+'</span></td><td>'+esc(r.ref)+'</td><td>'+(r.shade!=="-"?'<span class="swatch" style="background:'+colorFT((SH(r.shade,r.qual)||{}).family,(SH(r.shade,r.qual)||{}).tone)+'"></span>':"")+esc(r.shade)+'</td><td>t+'+r.start+'h</td><td>t+'+r.end+'h</td><td>'+r.mins+'</td></tr>').join("")
+    +'</tbody></table></div></div>';
+  const batchCard='<div class="card"><div class="card-h"><h2>Batch master (generated)</h2><span class="sub">'+S.batches.length+' batches from '+DB.orders.length+' orders</span></div><div class="tbl-wrap"><table><thead><tr><th>Batch</th><th>Order</th><th>Quality</th><th>Shade</th><th>Family</th><th>Tone</th><th>Meters</th><th>Kg</th><th>M/C</th><th>RFD ready</th></tr></thead><tbody>'
+    +S.batches.map(b=>'<tr><td><b>'+b.key+'</b></td><td>'+esc(b.order)+'</td><td>'+esc(b.qual)+'</td><td><span class="swatch" style="background:'+shadeColor(b.shade,b.qual)+'"></span>'+esc(b.shade)+'</td><td>'+b.family+'</td><td>'+b.tone+'</td><td>'+b.meters+'</td><td>'+b.kg+'</td><td>'+(b.mcAssigned||'<span class="flag">unplanned</span>')+'</td><td>t+'+((b.rfdReady||0)/60).toFixed(1)+'h</td></tr>').join("")
+    +'</tbody></table></div></div>';
+
+  c.innerHTML='<div class="page-head"><h1>Live plan</h1><p>Auto-generated from current orders and masters. Times are relative to now (t).</p></div>'
+    + orderCard + machineCard + batchCard;
+}
+
+function firstAllowedPage(){ for(const g of NAV) for(const it of g.items) if(can(it[0])) return it[0]; return "dashboard"; }
+boot(()=>{
+  CUR = can("dashboard") ? "dashboard" : firstAllowedPage();
+  const rb=document.getElementById("resetBtn"); if(rb) rb.style.display = can("settings") ? "" : "none";
+  renderNav(); render();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,855 @@
+{
+  "machines": [
+    {
+      "maintIntervalDays": 60,
+      "id": "DRUM-1",
+      "name": "Drum 1",
+      "type": "drum",
+      "capMin": 0,
+      "capMax": 300,
+      "wash": 0,
+      "plc": false,
+      "lastMaint": "2026-06-20",
+      "schedMaint": "2026-08-20",
+      "company": "Sclavos"
+    },
+    {
+      "maintIntervalDays": 90,
+      "id": "JIG-1",
+      "name": "Jigger 1",
+      "type": "jigger",
+      "capMin": 0,
+      "capMax": 200,
+      "wash": 45,
+      "plc": false,
+      "lastMaint": "2026-06-10",
+      "schedMaint": "2026-08-10",
+      "company": "Dhall"
+    },
+    {
+      "maintIntervalDays": 90,
+      "id": "JIG-2",
+      "name": "Jigger 2",
+      "type": "jigger",
+      "capMin": 0,
+      "capMax": 300,
+      "wash": 45,
+      "plc": false,
+      "lastMaint": "2026-06-15",
+      "schedMaint": "2026-08-15",
+      "company": "Dhall"
+    },
+    {
+      "maintIntervalDays": 60,
+      "id": "JET-1",
+      "name": "Soft-flow Jet 1",
+      "type": "jet",
+      "capMin": 0,
+      "capMax": 250,
+      "wash": 60,
+      "plc": true,
+      "lastMaint": "2026-07-01",
+      "schedMaint": "2026-09-01",
+      "company": "Fongs"
+    },
+    {
+      "maintIntervalDays": 60,
+      "id": "JET-2",
+      "name": "Soft-flow Jet 2",
+      "type": "jet",
+      "capMin": 0,
+      "capMax": 400,
+      "wash": 60,
+      "plc": true,
+      "lastMaint": "2026-07-02",
+      "schedMaint": "2026-09-02",
+      "company": "Fongs"
+    },
+    {
+      "maintIntervalDays": 120,
+      "id": "STEN-1",
+      "name": "Stenter 1",
+      "type": "stentor",
+      "capMin": 0,
+      "capMax": 999,
+      "wash": 0,
+      "plc": false,
+      "lastMaint": "2026-06-25",
+      "schedMaint": "2026-08-25",
+      "company": "Harish"
+    },
+    {
+      "maintIntervalDays": 180,
+      "id": "HYDRO-1",
+      "name": "Hydro-extractor 1",
+      "type": "hydro",
+      "capMin": 0,
+      "capMax": 999,
+      "wash": 0,
+      "plc": false,
+      "lastMaint": "2026-06-05",
+      "schedMaint": "2026-08-05",
+      "company": "Local"
+    },
+    {
+      "maintIntervalDays": 180,
+      "id": "ROPE-1",
+      "name": "Rope Opener 1",
+      "type": "rope",
+      "capMin": 0,
+      "capMax": 999,
+      "wash": 0,
+      "plc": false,
+      "lastMaint": "2026-06-05",
+      "schedMaint": "2026-08-05",
+      "company": "Local"
+    }
+  ],
+  "qualities": [
+    {
+      "id": "Q-POP",
+      "name": "Cotton Poplin",
+      "gsm": 115,
+      "width": 56,
+      "maxBatch": 400,
+      "dyeStep": 3,
+      "step1_mc": "drum",
+      "step1_time": 120,
+      "step2_mc": "jigger",
+      "step2_time": 90,
+      "step3_mc": "jet",
+      "step3_time": 240,
+      "step4_mc": "stentor",
+      "step4_time": 75,
+      "step4_speed": 30
+    },
+    {
+      "id": "Q-RAY",
+      "name": "Rayon Challis",
+      "gsm": 100,
+      "width": 56,
+      "maxBatch": 400,
+      "dyeStep": 3,
+      "step1_mc": "drum",
+      "step1_time": 100,
+      "step2_mc": "jigger",
+      "step2_time": 80,
+      "step3_mc": "jet",
+      "step3_time": 210,
+      "step4_mc": "stentor",
+      "step4_time": 60,
+      "step4_speed": 35
+    },
+    {
+      "id": "Q-VIS",
+      "name": "Viscose",
+      "gsm": 90,
+      "width": 56,
+      "maxBatch": 400,
+      "dyeStep": 2,
+      "step1_mc": "drum",
+      "step1_time": 90,
+      "step2_mc": "jet",
+      "step2_time": 200,
+      "step3_mc": "stentor",
+      "step3_time": 60,
+      "step4_mc": "",
+      "step4_time": 0,
+      "step3_speed": 35
+    },
+    {
+      "id": "Q-TWL",
+      "name": "Cotton Twill",
+      "gsm": 180,
+      "width": 56,
+      "maxBatch": 300,
+      "dyeStep": 3,
+      "step1_mc": "drum",
+      "step1_time": 130,
+      "step2_mc": "jigger",
+      "step2_time": 100,
+      "step3_mc": "jigger",
+      "step3_time": 300,
+      "step4_mc": "stentor",
+      "step4_time": 80,
+      "step4_speed": 22
+    }
+  ],
+  "shadeRecipes": [
+    {
+      "id": "SR-01",
+      "quality": "Cotton Poplin",
+      "shade": "White",
+      "family": "Neutral",
+      "tone": 0,
+      "program": "OPT-WHITE",
+      "dye1": "Opt. Brightener",
+      "pct1": 0.4,
+      "dye2": "",
+      "pct2": 0,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 94.5,
+      "speca": -0.5,
+      "specb": 2.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-02",
+      "quality": "Cotton Poplin",
+      "shade": "Sky Blue",
+      "family": "Blue",
+      "tone": 2,
+      "program": "SKY-STD",
+      "dye1": "Turq G",
+      "pct1": 0.8,
+      "dye2": "",
+      "pct2": 0,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 70.2,
+      "speca": -8.0,
+      "specb": -20.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-03",
+      "quality": "Cotton Poplin",
+      "shade": "Grey",
+      "family": "Neutral",
+      "tone": 4,
+      "program": "GREY-STD",
+      "dye1": "Black B",
+      "pct1": 0.6,
+      "dye2": "Yellow 3RS",
+      "pct2": 0.1,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 55.0,
+      "speca": 0.2,
+      "specb": 0.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-04",
+      "quality": "Cotton Poplin",
+      "shade": "Gold",
+      "family": "Yellow",
+      "tone": 5,
+      "program": "GOLD-STD",
+      "dye1": "Yellow 3RS",
+      "pct1": 2.2,
+      "dye2": "Orange 2R",
+      "pct2": 0.5,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 72.0,
+      "speca": 8.0,
+      "specb": 55.0,
+      "dETol": 1.2
+    },
+    {
+      "id": "SR-05",
+      "quality": "Cotton Poplin",
+      "shade": "Navy",
+      "family": "Blue",
+      "tone": 8,
+      "program": "NAVY-STD",
+      "dye1": "Navy Blue RX",
+      "pct1": 4.5,
+      "dye2": "Black B",
+      "pct2": 0.3,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 18.5,
+      "speca": 2.1,
+      "specb": -14.2,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-06",
+      "quality": "Cotton Poplin",
+      "shade": "Black",
+      "family": "Neutral",
+      "tone": 10,
+      "program": "BLACK-STD",
+      "dye1": "Black B",
+      "pct1": 6.0,
+      "dye2": "Navy RX",
+      "pct2": 0.5,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 16.0,
+      "speca": 0.3,
+      "specb": 0.2,
+      "dETol": 0.8
+    },
+    {
+      "id": "SR-07",
+      "quality": "Rayon Challis",
+      "shade": "Lemon",
+      "family": "Yellow",
+      "tone": 2,
+      "program": "LEMON-STD",
+      "dye1": "Yellow 4GL",
+      "pct1": 1.4,
+      "dye2": "",
+      "pct2": 0,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 82.0,
+      "speca": -5.0,
+      "specb": 70.0,
+      "dETol": 1.2
+    },
+    {
+      "id": "SR-08",
+      "quality": "Rayon Challis",
+      "shade": "Royal Blue",
+      "family": "Blue",
+      "tone": 5,
+      "program": "ROYAL-STD",
+      "dye1": "Blue BRF",
+      "pct1": 3.0,
+      "dye2": "Turq G",
+      "pct2": 0.4,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 38.0,
+      "speca": 5.0,
+      "specb": -35.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-09",
+      "quality": "Rayon Challis",
+      "shade": "Navy",
+      "family": "Blue",
+      "tone": 8,
+      "program": "NAVY-RAY",
+      "dye1": "Navy Blue RX",
+      "pct1": 4.2,
+      "dye2": "Black B",
+      "pct2": 0.3,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 19.0,
+      "speca": 2.0,
+      "specb": -14.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-10",
+      "quality": "Viscose",
+      "shade": "Sky Blue",
+      "family": "Blue",
+      "tone": 2,
+      "program": "SKY-VIS",
+      "dye1": "Turq G",
+      "pct1": 0.7,
+      "dye2": "",
+      "pct2": 0,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 71.0,
+      "speca": -8.0,
+      "specb": -19.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-11",
+      "quality": "Viscose",
+      "shade": "Crimson",
+      "family": "Red",
+      "tone": 6,
+      "program": "CRIM-STD",
+      "dye1": "Red 3BS",
+      "pct1": 3.2,
+      "dye2": "Orange 2R",
+      "pct2": 0.4,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 40.0,
+      "speca": 55.0,
+      "specb": 25.0,
+      "dETol": 1.1
+    },
+    {
+      "id": "SR-12",
+      "quality": "Cotton Twill",
+      "shade": "Maroon",
+      "family": "Red",
+      "tone": 9,
+      "program": "MAROON-STD",
+      "dye1": "Red 3BS",
+      "pct1": 3.8,
+      "dye2": "Black B",
+      "pct2": 0.6,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 28.0,
+      "speca": 30.0,
+      "specb": 12.0,
+      "dETol": 1.0
+    },
+    {
+      "id": "SR-13",
+      "quality": "Cotton Twill",
+      "shade": "Navy",
+      "family": "Blue",
+      "tone": 8,
+      "program": "NAVY-TWL",
+      "dye1": "Navy Blue RX",
+      "pct1": 4.6,
+      "dye2": "Black B",
+      "pct2": 0.4,
+      "dye3": "",
+      "pct3": 0,
+      "specL": 18.0,
+      "speca": 2.0,
+      "specb": -14.5,
+      "dETol": 1.0
+    }
+  ],
+  "customers": [
+    {
+      "id": "C-01",
+      "name": "Suri Textiles",
+      "contactNo": "98200 11111",
+      "contactName": "Ramesh Suri",
+      "gstNo": "27AABCS1429B1Z1",
+      "email": "orders@suritex.in",
+      "officeAddress": "Bhiwandi, MH",
+      "deliveryAddress": "Bhiwandi, MH"
+    },
+    {
+      "id": "C-02",
+      "name": "Aarav Fabrics",
+      "contactNo": "98200 22222",
+      "contactName": "Nita Shah",
+      "gstNo": "24AACCA9988K1ZP",
+      "email": "nita@aaravfabrics.com",
+      "officeAddress": "Surat, GJ",
+      "deliveryAddress": "Surat, GJ"
+    },
+    {
+      "id": "C-03",
+      "name": "Meera Mills",
+      "contactNo": "98200 33333",
+      "contactName": "Imran Q.",
+      "gstNo": "27AADCM5566L1Z4",
+      "email": "imran@meeramills.in",
+      "officeAddress": "Ichalkaranji, MH",
+      "deliveryAddress": "Ichalkaranji, MH"
+    },
+    {
+      "id": "C-04",
+      "name": "Kiran Exports",
+      "contactNo": "98200 44444",
+      "contactName": "Kiran Patel",
+      "gstNo": "33AAECK7788M1ZQ",
+      "email": "kiran@kiranexports.com",
+      "officeAddress": "Tirupur, TN",
+      "deliveryAddress": "Tirupur, TN"
+    }
+  ],
+  "storageAreas": [
+    {
+      "id": "A-01",
+      "name": "Inward Shed A",
+      "shelves": 10,
+      "rowsPerShelf": 4,
+      "colsPerShelf": 6,
+      "locX": 10,
+      "locY": 5,
+      "floor": 0
+    },
+    {
+      "id": "A-02",
+      "name": "RFD Store B",
+      "shelves": 8,
+      "rowsPerShelf": 4,
+      "colsPerShelf": 6,
+      "locX": 20,
+      "locY": 5,
+      "floor": 0
+    },
+    {
+      "id": "A-03",
+      "name": "Finished Store C",
+      "shelves": 12,
+      "rowsPerShelf": 5,
+      "colsPerShelf": 6,
+      "locX": 30,
+      "locY": 8,
+      "floor": 1
+    }
+  ],
+  "qualityRecipes": [
+    {
+      "id": "QR-01",
+      "quality": "Cotton Poplin",
+      "aux": [
+        {
+          "name": "Wetting agent",
+          "qty": 1.0,
+          "unit": "g/l"
+        },
+        {
+          "name": "Sequestering agent",
+          "qty": 0.5,
+          "unit": "g/l"
+        },
+        {
+          "name": "Anti-creasing",
+          "qty": 1.0,
+          "unit": "g/l"
+        },
+        {
+          "name": "Levelling agent",
+          "qty": 0.8,
+          "unit": "%"
+        }
+      ],
+      "notes": "Standard reactive exhaust process"
+    },
+    {
+      "id": "QR-02",
+      "quality": "Rayon Challis",
+      "aux": [
+        {
+          "name": "Wetting agent",
+          "qty": 0.8,
+          "unit": "g/l"
+        },
+        {
+          "name": "Sequestering agent",
+          "qty": 0.5,
+          "unit": "g/l"
+        },
+        {
+          "name": "Anti-creasing",
+          "qty": 1.5,
+          "unit": "g/l"
+        }
+      ],
+      "notes": "Gentle handling, low tension"
+    },
+    {
+      "id": "QR-03",
+      "quality": "Viscose",
+      "aux": [
+        {
+          "name": "Wetting agent",
+          "qty": 0.8,
+          "unit": "g/l"
+        },
+        {
+          "name": "Sequestering agent",
+          "qty": 0.4,
+          "unit": "g/l"
+        }
+      ],
+      "notes": "Soft-flow, avoid abrasion"
+    },
+    {
+      "id": "QR-04",
+      "quality": "Cotton Twill",
+      "aux": [
+        {
+          "name": "Wetting agent",
+          "qty": 1.2,
+          "unit": "g/l"
+        },
+        {
+          "name": "Sequestering agent",
+          "qty": 0.6,
+          "unit": "g/l"
+        },
+        {
+          "name": "Lubricant",
+          "qty": 0.5,
+          "unit": "%"
+        }
+      ],
+      "notes": "Heavy fabric, jigger process"
+    }
+  ],
+  "operators": [
+    {
+      "id": "OP-01",
+      "name": "Sunil",
+      "contactNo": "90000 10001",
+      "auth1": "jigger",
+      "auth2": "jet",
+      "auth3": "",
+      "batchesLogged": 124
+    },
+    {
+      "id": "OP-02",
+      "name": "Farid",
+      "contactNo": "90000 10002",
+      "auth1": "jet",
+      "auth2": "",
+      "auth3": "",
+      "batchesLogged": 88
+    },
+    {
+      "id": "OP-03",
+      "name": "Ganesh",
+      "contactNo": "90000 10003",
+      "auth1": "stentor",
+      "auth2": "jigger",
+      "auth3": "",
+      "batchesLogged": 143
+    }
+  ],
+  "qcMetrics": [
+    {
+      "id": "QC-01",
+      "metric": "Shade match (vs standard)",
+      "target": "ΔE < 1.0",
+      "weight": 40
+    },
+    {
+      "id": "QC-02",
+      "metric": "Rubbing fastness",
+      "target": "Grade 4+",
+      "weight": 25
+    },
+    {
+      "id": "QC-03",
+      "metric": "Cracking / crease",
+      "target": "None",
+      "weight": 20
+    },
+    {
+      "id": "QC-04",
+      "metric": "Wash fastness",
+      "target": "Grade 4+",
+      "weight": 15
+    }
+  ],
+  "suppliers": [
+    {
+      "id": "SUP-01",
+      "item": "Salt (Glauber)",
+      "supplier": "Ambica Chem",
+      "contactName": "Vinod",
+      "phone": "91000 20001",
+      "lastRate": "14/kg",
+      "stock": 8000,
+      "next24": 1200,
+      "procureSize": 10000
+    },
+    {
+      "id": "SUP-02",
+      "item": "Soda Ash",
+      "supplier": "GHCL",
+      "contactName": "Prakash",
+      "phone": "91000 20002",
+      "lastRate": "32/kg",
+      "stock": 3000,
+      "next24": 600,
+      "procureSize": 5000
+    },
+    {
+      "id": "SUP-03",
+      "item": "Reactive Navy RX",
+      "supplier": "Colourtex",
+      "contactName": "Sagar",
+      "phone": "91000 20003",
+      "lastRate": "420/kg",
+      "stock": 300,
+      "next24": 90,
+      "procureSize": 500
+    }
+  ],
+  "roles": [
+    {
+      "id": "ROLE-ADMIN",
+      "name": "Administrator",
+      "description": "Full access to everything",
+      "perms": [
+        "op_floor",
+        "op_schedule",
+        "op_order",
+        "op_batch",
+        "dashboard",
+        "machines",
+        "qualities",
+        "shadeRecipes",
+        "qualityRecipes",
+        "batches",
+        "lots",
+        "customers",
+        "orders",
+        "storageAreas",
+        "suppliers",
+        "operators",
+        "qcMetrics",
+        "users",
+        "roles",
+        "plan",
+        "settings",
+        "urgent_flag"
+      ]
+    },
+    {
+      "id": "ROLE-MASTER",
+      "name": "Master",
+      "description": "Department head - can flag batches urgent",
+      "perms": [
+        "op_floor",
+        "op_schedule",
+        "op_order",
+        "op_batch",
+        "batches",
+        "lots",
+        "plan",
+        "urgent_flag"
+      ]
+    },
+    {
+      "id": "ROLE-SUP",
+      "name": "Supervisor",
+      "description": "View shop floor and schedule",
+      "perms": [
+        "op_floor",
+        "op_schedule"
+      ]
+    },
+    {
+      "id": "ROLE-SALES",
+      "name": "Sales",
+      "description": "Enter orders, manage customers",
+      "perms": [
+        "op_floor",
+        "op_schedule",
+        "op_order",
+        "orders",
+        "customers"
+      ]
+    }
+  ],
+  "orders": [
+    {
+      "id": "SO-1012",
+      "cust": "Suri Textiles",
+      "qual": "Cotton Poplin",
+      "lines": [
+        {
+          "shade": "Navy",
+          "m": 4000
+        }
+      ],
+      "due": 5,
+      "pri": 2
+    },
+    {
+      "id": "SO-1013",
+      "cust": "Aarav Fabrics",
+      "qual": "Cotton Poplin",
+      "lines": [
+        {
+          "shade": "Sky Blue",
+          "m": 3000
+        },
+        {
+          "shade": "Navy",
+          "m": 1600
+        }
+      ],
+      "due": 4,
+      "pri": 1
+    },
+    {
+      "id": "SO-1014",
+      "cust": "Meera Mills",
+      "qual": "Rayon Challis",
+      "lines": [
+        {
+          "shade": "Royal Blue",
+          "m": 2500
+        }
+      ],
+      "due": 6,
+      "pri": 3
+    },
+    {
+      "id": "SO-1015",
+      "cust": "Suri Textiles",
+      "qual": "Cotton Poplin",
+      "lines": [
+        {
+          "shade": "White",
+          "m": 1800
+        }
+      ],
+      "due": 3,
+      "pri": 1
+    },
+    {
+      "id": "SO-1016",
+      "cust": "Kiran Exports",
+      "qual": "Viscose",
+      "lines": [
+        {
+          "shade": "Crimson",
+          "m": 3500
+        }
+      ],
+      "due": 7,
+      "pri": 2
+    },
+    {
+      "id": "SO-1017",
+      "cust": "Meera Mills",
+      "qual": "Cotton Twill",
+      "lines": [
+        {
+          "shade": "Maroon",
+          "m": 2200
+        }
+      ],
+      "due": 8,
+      "pri": 2
+    },
+    {
+      "id": "SO-1018",
+      "cust": "Aarav Fabrics",
+      "qual": "Rayon Challis",
+      "lines": [
+        {
+          "shade": "Lemon",
+          "m": 1500
+        }
+      ],
+      "due": 5,
+      "pri": 2
+    },
+    {
+      "id": "SO-1019",
+      "cust": "Kiran Exports",
+      "qual": "Cotton Poplin",
+      "lines": [
+        {
+          "shade": "Black",
+          "m": 2600
+        }
+      ],
+      "due": 6,
+      "pri": 1
+    }
+  ],
+  "lots": [],
+  "batches": [],
+  "settings": {
+    "widthDefault": 56,
+    "minMeters": 300,
+    "buffer": 1.2,
+    "loadMin": 35,
+    "unloadMin": 25,
+    "stentorSetupMins": 90
+  }
+}

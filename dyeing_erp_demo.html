@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REL Dyeing ERP — v1 Demo</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --panel:#ffffff; --ink:#1a2230; --muted:#6b7688;
+    --line:#e3e7ee; --line2:#d3d9e3; --accent:#2f6df6; --accent2:#0e9f6e;
+    --warn:#e0891b; --bad:#d64545; --head:#101728;
+    --radius:12px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.45}
+  header.app{background:var(--head);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header.app .logo{font-weight:800;letter-spacing:.5px;font-size:16px}
+  header.app .logo span{color:#7fb0ff}
+  header.app .tag{color:#9fb0cc;font-size:12px}
+  .kpis{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+  .kpi{background:#1b2438;border:1px solid #2a3550;border-radius:10px;padding:6px 12px;min-width:82px}
+  .kpi b{display:block;font-size:18px;line-height:1.1}
+  .kpi small{color:#9fb0cc;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
+  nav.tabs{display:flex;gap:4px;background:var(--panel);border-bottom:1px solid var(--line);padding:0 14px;position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  nav.tabs button{border:0;background:none;padding:13px 16px;font:inherit;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2.5px solid transparent}
+  nav.tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+  main{padding:20px;max-width:1180px;margin:0 auto}
+  .view{display:none} .view.on{display:block}
+  h2.sec{font-size:15px;margin:0 0 4px} .subtle{color:var(--muted);font-size:12.5px;margin:0 0 16px}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+  button.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:9px 15px;font:inherit;font-weight:600;cursor:pointer}
+  button.btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line2)}
+  button.btn.amber{background:var(--warn)}
+  /* shop floor */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+  .mc{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;position:relative;overflow:hidden}
+  .mc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--dot,#ccc)}
+  .mc h3{margin:0 0 2px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .mc .type{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .pill{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px}
+  .st-run{background:#e6f4ee;color:#0e7a52} .st-free{background:#eef1f6;color:#6b7688}
+  .st-wash{background:#fdf1de;color:#a5661a} .st-maint{background:#fbe6e6;color:#b23}
+  .mc .now{margin:10px 0 6px;padding:9px;border-radius:8px;background:#f7f9fc;border:1px solid var(--line);font-size:12.5px}
+  .mc .now b{display:block;font-size:13px}
+  .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:5px;border:1px solid rgba(0,0,0,.15)}
+  .mc .meta{display:flex;justify-content:space-between;color:var(--muted);font-size:11.5px;margin-top:6px}
+  .qbadge{font-size:11px;color:var(--muted)}
+  /* gantt */
+  .gantt{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px 0 14px;overflow-x:auto}
+  .grow{display:grid;grid-template-columns:96px 1fr;align-items:center;border-top:1px solid var(--line)}
+  .grow:first-child{border-top:0}
+  .glabel{padding:8px 10px;font-size:12px}
+  .glabel b{display:block} .glabel small{color:var(--muted)}
+  .gtrack{position:relative;height:46px;background:repeating-linear-gradient(90deg,#fafbfd 0 59px,#eef1f6 59px 60px)}
+  .blk{position:absolute;top:6px;height:34px;border-radius:5px;color:#fff;font-size:10.5px;padding:3px 6px;overflow:hidden;cursor:default;border:1px solid rgba(0,0,0,.12);white-space:nowrap}
+  .blk small{opacity:.85;display:block;font-size:9.5px}
+  .blk.wash{background:repeating-linear-gradient(45deg,#c9ccd4,#c9ccd4 6px,#dfe2e8 6px,#dfe2e8 12px);color:#48505f;border-style:dashed}
+  .blk.pre{background:repeating-linear-gradient(45deg,#b9c6d8,#b9c6d8 6px,#d3ddea 6px,#d3ddea 12px);color:#33405a}
+  .blk.newb{box-shadow:0 0 0 2px #2f6df6, 0 0 0 4px rgba(47,109,246,.3)}
+  .blk .cap{position:absolute;top:0;bottom:0;background:rgba(255,255,255,.34);pointer-events:none}
+  .blk .cap.l{left:0;border-right:1px solid rgba(255,255,255,.5)}
+  .blk .cap.r{right:0;border-left:1px solid rgba(255,255,255,.5)}
+  .axis{display:grid;grid-template-columns:96px 1fr}
+  .axis .ticks{position:relative;height:20px}
+  .axis .tk{position:absolute;font-size:10px;color:var(--muted);transform:translateX(-50%)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:12px 2px 0}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  /* forms + tables */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  label.fld{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:14px}
+  label.fld input,label.fld select{width:100%;margin-top:5px;padding:9px;border:1px solid var(--line2);border-radius:8px;font:inherit;background:#fff}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .result{margin-top:16px;border:1px solid var(--accent);background:#f2f6ff;border-radius:var(--radius);padding:16px;display:none}
+  .result.on{display:block}
+  .result h3{margin:0 0 8px;font-size:14px}
+  .chip{display:inline-block;background:#fff;border:1px solid var(--line2);border-radius:6px;padding:3px 8px;margin:3px 4px 0 0;font-size:11.5px}
+  .note{font-size:12px;color:var(--muted)}
+  .flag{color:var(--warn);font-weight:600}
+  .slrow{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+  .slrow select{flex:2;padding:9px;border:1px solid var(--line2);border-radius:8px;font:inherit;background:#fff}
+  .slrow input{flex:1;padding:9px;border:1px solid var(--line2);border-radius:8px;font:inherit;min-width:90px}
+  .slrow .rm{border:1px solid var(--line2);background:#fff;color:var(--bad);width:34px;height:34px;border-radius:8px;cursor:pointer;font-size:16px;line-height:1;flex:none}
+  .addshade{border:1px dashed var(--accent);background:#f2f6ff;color:var(--accent);border-radius:8px;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer;margin-top:2px}
+  .fldlabel{font-size:12px;font-weight:600;color:var(--muted);margin:4px 0 7px}
+  @media(max-width:640px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="app">
+  <div>
+    <div class="logo">REL<span>·</span>DYE ERP</div>
+    <div class="tag">v1 · Planning &amp; Scheduling demo</div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-v="floor" class="on">Shop Floor</button>
+  <button data-v="sched">Schedule</button>
+  <button data-v="order">New Order</button>
+  <button data-v="masters">Masters</button>
+</nav>
+
+<main>
+  <!-- SHOP FLOOR -->
+  <section class="view on" id="floor">
+    <h2 class="sec">Shop floor — live machine status</h2>
+    <p class="subtle">What the supervisor sees. Colour = current shade (light→dark). This is the "layout with M/C status indicators" from the plan.</p>
+    <div class="bar">
+      <button class="btn ghost" onclick="setClock(0)">Now (t=0)</button>
+      <button class="btn ghost" onclick="setClock(6)">Jump +6 h</button>
+      <button class="btn ghost" onclick="setClock(12)">Jump +12 h</button>
+      <span class="note" id="clocklbl"></span>
+    </div>
+    <div class="grid" id="floorGrid"></div>
+  </section>
+
+  <!-- SCHEDULE -->
+  <section class="view" id="sched">
+    <h2 class="sec">Machine schedule — auto-planned campaigns</h2>
+    <p class="subtle">The scheduler packs each machine into a light→dark campaign and drops a wash cycle whenever it must reset. Jiggers also carry pre-treatment (shared pool).</p>
+    <div class="bar">
+      <button class="btn" onclick="runAndRender()">Re-run scheduler</button>
+      <button class="btn amber" onclick="rushDemo()">Inject rush order (Black, due 1d)</button>
+      <span class="note" id="schednote"></span>
+    </div>
+    <div class="axis"><div></div><div class="ticks" id="ticks"></div></div>
+    <div class="gantt" id="gantt"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <!-- NEW ORDER -->
+  <section class="view" id="order">
+    <h2 class="sec">New order</h2>
+    <p class="subtle">Sales enters meters; the system converts to kg (GSM × width), splits into machine-sized batches, slots them, and promises a date (route time + 20%).</p>
+    <div class="card">
+      <div class="cols">
+        <label class="fld">Customer
+          <select id="f_cust"></select></label>
+        <label class="fld">Quality
+          <select id="f_qual"></select></label>
+        <label class="fld">Due in (days)
+          <input id="f_due" type="number" value="6" min="1" step="1"></label>
+        <label class="fld">Priority
+          <select id="f_pri"><option value="1">1 — Urgent</option><option value="2" selected>2 — Normal</option><option value="3">3 — Low</option></select></label>
+      </div>
+      <div class="fldlabel">Shades &amp; quantities <span class="note">— same quality, one or more shades (each ≥ 300 m)</span></div>
+      <div id="shadeLines"></div>
+      <button class="addshade" onclick="addShadeLine()">+ Add another shade</button>
+      <div style="margin-top:16px"><button class="btn" onclick="submitOrder()">Log order &amp; schedule</button></div>
+      <div class="result" id="orderResult"></div>
+    </div>
+  </section>
+
+  <!-- MASTERS -->
+  <section class="view" id="masters">
+    <h2 class="sec">Master data (the model behind it)</h2>
+    <p class="subtle">A slice of the relational core: machines, qualities (with greige GSM for kg conversion), and shades (with tone ordinal that drives sequencing).</p>
+    <div class="card" style="margin-bottom:14px"><h3 style="margin:0 0 8px;font-size:13px">Machines</h3><table id="tMachines"></table></div>
+    <div class="cols">
+      <div class="card"><h3 style="margin:0 0 8px;font-size:13px">Qualities</h3><table id="tQual"></table></div>
+      <div class="card"><h3 style="margin:0 0 8px;font-size:13px">Shades &amp; tone</h3><table id="tShade"></table></div>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ---------- MASTER DATA ---------- */
+const WIDTH_M = 56*0.0254;            // 56 inch default
+const MIN_METERS = 300;               // practical minimum load
+const BUFFER = 1.20;                  // +20% promise buffer
+const LOAD_MIN = 35;                  // loading time per batch
+const UNLOAD_MIN = 25;                // unloading time per batch
+const HANDLE_MIN = LOAD_MIN+UNLOAD_MIN; // 60 min handling, all fabrics
+
+const machines = [
+  {id:"DRUM-1", type:"drum",    cap:300, wash:0,  role:"pretreat"},
+  {id:"JIG-1",  type:"jigger",  cap:200, wash:45, role:"shared"},
+  {id:"JIG-2",  type:"jigger",  cap:300, wash:45, role:"shared"},
+  {id:"JET-1",  type:"jet",     cap:250, wash:60, role:"dye", plc:true},
+  {id:"JET-2",  type:"jet",     cap:400, wash:60, role:"dye", plc:true},
+  {id:"STEN-1", type:"stentor", cap:999, wash:0,  role:"finish"},
+];
+
+// dyeType = which machine type dyes this quality
+const qualities = [
+  {name:"Cotton Poplin",  gsm:115, dyeType:"jet",    dyeMins:240, finishMins:75},
+  {name:"Rayon Challis",  gsm:100, dyeType:"jet",    dyeMins:210, finishMins:60},
+  {name:"Viscose",        gsm:90,  dyeType:"jet",    dyeMins:200, finishMins:60},
+  {name:"Cotton Twill",   gsm:180, dyeType:"jigger", dyeMins:300, finishMins:80},
+];
+
+const shades = [
+  {name:"White",   family:"Neutral", tone:0},
+  {name:"Lemon",   family:"Yellow",  tone:2},
+  {name:"Sky Blue",family:"Blue",    tone:2},
+  {name:"Rose",    family:"Red",     tone:3},
+  {name:"Grey",    family:"Neutral", tone:4},
+  {name:"Gold",    family:"Yellow",  tone:5},
+  {name:"Royal Blue",family:"Blue",  tone:5},
+  {name:"Crimson", family:"Red",     tone:6},
+  {name:"Navy",    family:"Blue",    tone:8},
+  {name:"Maroon",  family:"Red",     tone:9},
+  {name:"Black",   family:"Neutral", tone:10},
+];
+
+const customers = ["Suri Textiles","Aarav Fabrics","Meera Mills","Kiran Exports"];
+
+let orders = [
+  {id:"SO-1012", cust:"Suri Textiles", qual:"Cotton Poplin", shade:"Navy",       m:4000, due:5, pri:2},
+  {id:"SO-1013", cust:"Aarav Fabrics", qual:"Cotton Poplin", lines:[{shade:"Sky Blue",m:3000},{shade:"Navy",m:1600}], due:4, pri:1},
+  {id:"SO-1014", cust:"Meera Mills",   qual:"Rayon Challis",  shade:"Royal Blue", m:2500, due:6, pri:3},
+  {id:"SO-1015", cust:"Suri Textiles", qual:"Cotton Poplin", shade:"White",      m:1800, due:3, pri:1},
+  {id:"SO-1016", cust:"Kiran Exports", qual:"Viscose",       shade:"Crimson",    m:3500, due:7, pri:2},
+  {id:"SO-1017", cust:"Meera Mills",   qual:"Cotton Twill",  shade:"Maroon",     m:2200, due:8, pri:2},
+  {id:"SO-1018", cust:"Aarav Fabrics", qual:"Rayon Challis", shade:"Lemon",      m:1500, due:5, pri:2},
+  {id:"SO-1019", cust:"Kiran Exports", qual:"Cotton Poplin", shade:"Black",      m:2600, due:6, pri:1},
+];
+
+// fixed pre-treatment jobs to illustrate the shared-jigger pool contention
+const preJobs = [
+  {mc:"DRUM-1", label:"Scour · Poplin lot", mins:120},
+  {mc:"JIG-1",  label:"Bleach · Rayon lot", mins:150},
+];
+
+/* ---------- HELPERS ---------- */
+const Q = n => qualities.find(q=>q.name===n);
+const S = n => shades.find(s=>s.name===n);
+const M = id => machines.find(m=>m.id===id);
+const kgOf = (meters,gsm)=> meters*WIDTH_M*gsm/1000;
+
+function shadeColor(shadeName, alpha=1){
+  const s=S(shadeName);
+  const hue={Blue:212,Red:2,Yellow:44,Neutral:222}[s.family];
+  const sat= s.family==="Neutral" ? 6 : 62;
+  const light= 86 - s.tone*5.4;               // tone 0 -> light, 10 -> dark
+  return `hsla(${hue},${sat}%,${light}%,${alpha})`;
+}
+
+/* ---------- BATCH SPLIT (multi-shade, kg + min-meters aware) ---------- */
+function splitOrder(o){
+  const q=Q(o.qual); const type=q.dyeType;
+  const maxCap=Math.max(...machines.filter(m=>m.type===type).map(m=>m.cap));
+  const lines = o.lines || [{shade:o.shade, m:o.m}];   // one order, many shades
+  const batches=[];
+  lines.forEach((ln,li)=>{
+    const totalKg=kgOf(ln.m,q.gsm);
+    let n=Math.max(1,Math.ceil(totalKg/maxCap));
+    while(n>1 && (ln.m/n)<MIN_METERS) n--;             // don't create sub-300m batches
+    for(let i=0;i<n;i++){
+      batches.push({
+        key:`${o.id}-${(li+1)}${String.fromCharCode(65+i)}`, order:o.id, cust:o.cust,
+        qual:o.qual, shade:ln.shade, type, meters:Math.round(ln.m/n), kg:+(totalKg/n).toFixed(0),
+        dyeMins:q.dyeMins, finishMins:q.finishMins, pri:o.pri, due:o.due,
+        family:S(ln.shade).family, tone:S(ln.shade).tone
+      });
+    }
+  });
+  return batches;
+}
+
+/* ---------- SCHEDULER: greedy, wash-aware campaigns ---------- */
+let SCHED=null;
+function schedule(){
+  // machine timelines
+  const tl={}; machines.forEach(m=> tl[m.id]={cursor:0, last:null, blocks:[]});
+  let washCount=0;
+  // seed pre-treatment jobs (shared pool -> pushes jigger cursors)
+  preJobs.forEach(p=>{
+    const t=tl[p.mc];
+    t.blocks.push({kind:"pre", label:p.label, start:t.cursor, mins:p.mins});
+    t.cursor+=p.mins;
+  });
+
+  // all dye batches
+  let batches=[];
+  orders.forEach(o=> batches.push(...splitOrder(o)));
+  // dispatch order: priority, then due, then family, then tone ascending
+  batches.sort((a,b)=> a.pri-b.pri || a.due-b.due || a.family.localeCompare(b.family) || a.tone-b.tone);
+
+  const orderFinish={};
+  batches.forEach(b=>{
+    const occ = LOAD_MIN + b.dyeMins + UNLOAD_MIN;   // load + dye + unload
+    const elig=machines.filter(m=>m.type===b.type && m.cap>=b.kg);
+    let best=null;
+    elig.forEach(m=>{
+      const t=tl[m.id];
+      const needWash = t.last && (t.last.family!==b.family || t.last.tone>b.tone);
+      const start=t.cursor + (needWash? m.wash:0);
+      const finish=start+occ;
+      if(!best || finish<best.finish) best={m,t,needWash,start,finish};
+    });
+    if(best.needWash){ best.t.blocks.push({kind:"wash",start:best.t.cursor,mins:best.m.wash}); washCount++; }
+    best.t.blocks.push({kind:"dye", batch:b, start:best.start, mins:occ});
+    best.t.cursor=best.finish; best.t.last={family:b.family,tone:b.tone};
+    // promise = last batch finish + finishing + buffer
+    const done=(best.finish + b.finishMins)*BUFFER;
+    orderFinish[b.order]=Math.max(orderFinish[b.order]||0, done);
+  });
+
+  SCHED={tl,washCount,orderFinish,batchCount:batches.length};
+  return SCHED;
+}
+
+/* ---------- RENDER ---------- */
+let CLOCK=0; // hours
+const MIN_PER_PX=4; // 4 min = 1px  -> 60px = 240min? no: 60px=240min => scale below
+const PXH=60;       // pixels per hour on gantt
+function minToPx(min){ return min/60*PXH; }
+
+function renderKPIs(){
+  const s=SCHED;
+  const spanH = Math.max(...machines.map(m=>s.tl[m.id].cursor))/60;
+  const avgDays = (Object.values(s.orderFinish).reduce((a,b)=>a+b,0)/Object.keys(s.orderFinish).length)/60/24;
+  document.getElementById("kpis").innerHTML=`
+    <div class="kpi"><b>${orders.length}</b><small>Orders</small></div>
+    <div class="kpi"><b>${s.batchCount}</b><small>Batches</small></div>
+    <div class="kpi"><b>${s.washCount}</b><small>Washes</small></div>
+    <div class="kpi"><b>${spanH.toFixed(1)}h</b><small>Plan span</small></div>
+    <div class="kpi"><b>${avgDays.toFixed(1)}d</b><small>Avg promise</small></div>`;
+}
+
+function renderFloor(){
+  const g=document.getElementById("floorGrid"); g.innerHTML="";
+  document.getElementById("clocklbl").textContent=`Viewing at t = +${CLOCK} h`;
+  machines.forEach(m=>{
+    const t=SCHED.tl[m.id]; const nowMin=CLOCK*60;
+    const cur=t.blocks.find(b=> nowMin>=b.start && nowMin<b.start+b.mins);
+    const next=t.blocks.find(b=> b.start>nowMin && b.kind!=="wash");
+    let status="free",label="Idle",color="#c7ccd6",body="";
+    if(cur){
+      if(cur.kind==="wash"){status="wash";label="Wash cycle";color="#e0aa5a";body=`<div class="now"><b>Machine wash</b><span class="note">resetting for lighter shade</span></div>`;}
+      else if(cur.kind==="pre"){status="run";label="Pre-treat";color="#8aa0c0";body=`<div class="now"><b>${cur.label}</b><span class="note">shared jigger pool</span></div>`;}
+      else{const b=cur.batch;status="run";label="Dyeing";color=shadeColor(b.shade,1);
+        body=`<div class="now"><b><span class="swatch" style="background:${shadeColor(b.shade)}"></span>${b.shade}</b>
+        <span class="note">${b.order} · ${b.qual} · ${b.meters} m</span></div>`;}
+    }
+    const queue=t.blocks.filter(b=>b.start>=nowMin && b.kind==="dye").length;
+    g.innerHTML+=`<div class="mc" style="--dot:${color}">
+      <h3>${m.id} <span class="pill st-${status==='run'?'run':status}">${label}</span></h3>
+      <div class="type">${m.type}${m.plc?" · PLC":""} · cap ${m.cap} kg</div>
+      ${body||'<div class="now"><b>Idle</b><span class="note">no batch running</span></div>'}
+      <div class="meta"><span>${next?('Next: '+(next.batch?next.batch.shade:next.label)):'—'}</span><span>${queue} in queue</span></div>
+    </div>`;
+  });
+}
+
+function renderGantt(newKeys=[]){
+  const maxMin=Math.max(60, ...machines.map(m=>SCHED.tl[m.id].cursor))+30;
+  // ticks
+  const ticks=document.getElementById("ticks"); ticks.innerHTML=""; ticks.style.width=minToPx(maxMin)+"px";
+  for(let h=0;h<=Math.ceil(maxMin/60);h+=2){
+    ticks.innerHTML+=`<span class="tk" style="left:${minToPx(h*60)}px">${h}h</span>`;
+  }
+  const G=document.getElementById("gantt"); G.innerHTML="";
+  machines.forEach(m=>{
+    const t=SCHED.tl[m.id];
+    let track=`<div class="gtrack" style="width:${minToPx(maxMin)}px">`;
+    t.blocks.forEach(b=>{
+      const left=minToPx(b.start), w=Math.max(14,minToPx(b.mins));
+      if(b.kind==="wash") track+=`<div class="blk wash" style="left:${left}px;width:${w}px" title="Machine wash ${b.mins}m">WASH</div>`;
+      else if(b.kind==="pre") track+=`<div class="blk pre" style="left:${left}px;width:${w}px" title="${b.label}">${b.label}</div>`;
+      else{const bt=b.batch;const hot=newKeys.includes(bt.key)?" newb":"";
+        const lw=minToPx(LOAD_MIN), uw=minToPx(UNLOAD_MIN);
+        const tip=`${bt.order} · ${bt.shade} · ${bt.meters}m — load ${LOAD_MIN} + dye ${bt.dyeMins} + unload ${UNLOAD_MIN} min`;
+        track+=`<div class="blk${hot}" style="left:${left}px;width:${w}px;background:${shadeColor(bt.shade,1)};color:${bt.tone>5?'#fff':'#20242c'}" title="${tip}"><div class="cap l" style="width:${lw}px"></div><div class="cap r" style="width:${uw}px"></div>${bt.shade}<small>${bt.order} · ${bt.meters}m</small></div>`;}
+    });
+    track+="</div>";
+    G.innerHTML+=`<div class="grow"><div class="glabel"><b>${m.id}</b><small>${m.type}${m.plc?" · PLC":""}</small></div>${track}</div>`;
+  });
+  // legend
+  const fam=["Blue","Red","Yellow","Neutral"];
+  document.getElementById("legend").innerHTML=
+    fam.map(f=>{const ex=shades.filter(s=>s.family===f);
+      return `<span><span class="swatch" style="background:${shadeColor(ex[0].name)}"></span><span class="swatch" style="background:${shadeColor(ex[ex.length-1].name)}"></span>${f} (light→dark)</span>`;}).join("")
+    +`<span><span class="swatch wash" style="background:repeating-linear-gradient(45deg,#c9ccd4,#c9ccd4 3px,#dfe2e8 3px,#dfe2e8 6px)"></span>Wash cycle</span>`
+    +`<span><span class="swatch" style="background:repeating-linear-gradient(45deg,#b9c6d8,#b9c6d8 3px,#d3ddea 3px,#d3ddea 6px)"></span>Pre-treatment</span>`;
+}
+
+function renderMasters(){
+  document.getElementById("tMachines").innerHTML=
+    "<tr><th>ID</th><th>Type</th><th>Capacity</th><th>Wash</th><th>Role</th></tr>"+
+    machines.map(m=>`<tr><td><b>${m.id}</b></td><td>${m.type}${m.plc?' · PLC':''}</td><td>${m.cap} kg</td><td>${m.wash?m.wash+' min':'—'}</td><td>${m.role}</td></tr>`).join("");
+  document.getElementById("tQual").innerHTML=
+    "<tr><th>Quality</th><th>GSM</th><th>Dye M/C</th><th>Dye min</th></tr>"+
+    qualities.map(q=>`<tr><td>${q.name}</td><td>${q.gsm}</td><td>${q.dyeType}</td><td>${q.dyeMins}</td></tr>`).join("");
+  document.getElementById("tShade").innerHTML=
+    "<tr><th>Shade</th><th>Family</th><th>Tone</th><th></th></tr>"+
+    shades.map(s=>`<tr><td>${s.name}</td><td>${s.family}</td><td>${s.tone}</td><td><span class="swatch" style="background:${shadeColor(s.name)}"></span></td></tr>`).join("");
+}
+
+/* ---------- ACTIONS ---------- */
+function runAndRender(newKeys=[]){
+  schedule(); renderKPIs(); renderFloor(); renderGantt(newKeys); renderMasters();
+  document.getElementById("schednote").textContent=`${SCHED.batchCount} batches planned · ${SCHED.washCount} washes inserted`;
+}
+function setClock(h){CLOCK=h;renderFloor();}
+let rushN=0;
+function rushDemo(){
+  rushN++;
+  orders.push({id:"SO-RUSH"+rushN, cust:"Kiran Exports", qual:"Cotton Poplin", shade:"Black", m:1200, due:1, pri:1});
+  const keys=splitOrder(orders[orders.length-1]).map(b=>b.key);
+  runAndRender(keys); show("sched");
+  document.getElementById("schednote").textContent="Rush Black order jumped the queue (priority 1, due 1d) — note the wash it forces.";
+}
+const shadeOptions = ()=> shades.map(s=>`<option>${s.name}</option>`).join("");
+function addShadeLine(shade, m){
+  const row=document.createElement("div"); row.className="slrow";
+  row.innerHTML=`<select class="sl-shade">${shadeOptions()}</select>
+    <input class="sl-m" type="number" value="${m||3000}" min="300" step="100" title="meters">
+    <button class="rm" title="remove" onclick="removeShadeLine(this)">×</button>`;
+  if(shade) row.querySelector(".sl-shade").value=shade;
+  document.getElementById("shadeLines").appendChild(row);
+}
+function removeShadeLine(btn){
+  const box=document.getElementById("shadeLines");
+  if(box.children.length>1) btn.closest(".slrow").remove();
+}
+function submitOrder(){
+  const lines=[...document.querySelectorAll('#shadeLines .slrow')].map(r=>({
+    shade:r.querySelector('.sl-shade').value, m:+r.querySelector('.sl-m').value }));
+  for(const ln of lines){ if(!ln.m||ln.m<MIN_METERS){alert(ln.shade+": below 300 m minimum load.");return;} }
+  const o={id:"SO-N"+(1000+orders.length), cust:f_cust.value, qual:f_qual.value, lines, due:+f_due.value, pri:+f_pri.value};
+  orders.push(o);
+  const batches=splitOrder(o);
+  runAndRender(batches.map(b=>b.key));
+  const q=Q(o.qual);
+  const totalM=lines.reduce((a,l)=>a+l.m,0), totalKg=kgOf(totalM,q.gsm);
+  const promiseD=(SCHED.orderFinish[o.id]/60/24);
+  const r=document.getElementById("orderResult"); r.classList.add("on");
+  r.innerHTML=`<h3>✔ ${o.id} logged &amp; scheduled</h3>
+    <div class="note">${totalM} m of ${o.qual} @ ${q.gsm} gsm across ${lines.length} shade(s)  →  <b>${totalKg.toFixed(0)} kg</b> (width ${(WIDTH_M).toFixed(3)} m)</div>
+    <div style="margin:8px 0">Split into <b>${batches.length}</b> batch(es):
+      ${batches.map(b=>`<span class="chip"><span class="swatch" style="background:${shadeColor(b.shade)}"></span>${b.key} · ${b.shade} · ${b.meters} m · ${b.kg} kg</span>`).join("")}</div>
+    <div class="note">Each batch reserves ${HANDLE_MIN} min handling (load ${LOAD_MIN} + unload ${UNLOAD_MIN}) on top of dye time.</div>
+    <div style="margin-top:6px">Promised delivery: <b>${promiseD.toFixed(1)} days</b> <span class="note">(route time × 1.20 buffer)</span>
+      ${promiseD>o.due?`<div class="flag">⚠ Exceeds requested ${o.due}-day due date — sales would be alerted.</div>`:`<div style="color:var(--accent2);font-weight:600">Within requested ${o.due}-day window ✓</div>`}</div>
+    <div class="note" style="margin-top:8px">Switch to the <b>Schedule</b> tab — the new batches are outlined in blue.</div>`;
+}
+
+/* ---------- NAV + INIT ---------- */
+function show(v){
+  document.querySelectorAll("nav.tabs button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
+  document.querySelectorAll(".view").forEach(s=>s.classList.toggle("on",s.id===v));
+}
+document.getElementById("tabs").addEventListener("click",e=>{if(e.target.dataset.v)show(e.target.dataset.v);});
+function fillSelects(){
+  f_cust.innerHTML=customers.map(c=>`<option>${c}</option>`).join("");
+  f_qual.innerHTML=qualities.map(q=>`<option>${q.name}</option>`).join("");
+  addShadeLine("Sky Blue",3000);   // seed one shade row
+}
+fillSelects();
+runAndRender();
+</script>
+</body>
+</html>

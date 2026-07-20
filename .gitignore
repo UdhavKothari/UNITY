@@ -1,0 +1,10 @@
+
+# Playwright
+/blob-report/
+/playwright-report/
+/playwright/.auth/
+/playwright/.cache/
+/test-results/
+__pycache__/
+mvp/data.json
+node_modules/
