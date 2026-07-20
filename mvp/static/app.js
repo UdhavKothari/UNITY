@@ -227,7 +227,7 @@ function batchesForSchedule(){
       meters:Math.round(meters), kg:Math.round(kg),
       dyeMins:q.dyeMins, finishMins:q.finishMins,
       pri:+b.pri||2, due:+b.due||7, urgent:!!b.urgent, redye:(b.status==="redye"),
-      family:sh.family, tone:sh.tone, q:q,
+      family:sh.family, tone:sh.tone, q:q, mcPin:b.mcPin||"",
       pcs:tot.pcs, inTime:b.inTime||"", outTime:b.outTime||"",
       notes:b.notes||"", operator:b.operator||"", lotIds:(b.lots||[]).map(r=>r.lotId).filter(Boolean).concat(b.lots?[]:(b.lotIds||[]))});
   });
@@ -268,8 +268,18 @@ function computeSchedule(){
     if(!steps.length){ b.unplanned=true; return; }
     steps.forEach(st=>{
       const occ=H+st.time;
-      const elig=DB.machines.filter(m=> m.type===st.mc && (!st.isDye || (m.capMax||0)>=b.kg));
-      if(!elig.length){ b.unplanned=true; return; }
+      let elig=DB.machines.filter(m=> m.type===st.mc && (!st.isDye || (m.capMax||0)>=b.kg));
+      if(st.isDye && b.mcPin){
+        const pinned=DB.machines.find(m=>m.id===b.mcPin);
+        if(!pinned || pinned.type!==st.mc){
+          b.pinWarning="M/C pin "+b.mcPin+" doesn't match this quality's dye machine ("+st.mc+") — auto-assigned instead";
+        } else if((pinned.capMax||0) < b.kg){
+          b.unplanned=true; b.unplannedReason=b.mcPin+" ("+pinned.capMax+" kg) is too small for this "+b.kg+" kg batch"; return;
+        } else {
+          elig=[pinned];
+        }
+      }
+      if(!elig.length){ b.unplanned=true; b.unplannedReason=b.unplannedReason||"No "+st.mc+" machine can take this "+(st.isDye?b.kg+" kg ":"")+"batch"; return; }
       let best=null;
       elig.forEach(m=>{
         const q=tl[m.id];
@@ -345,6 +355,9 @@ function showGanttHover(blk,e){
     +row("In time", b.inTime)
     +row("Out time", b.outTime)
     +row("Machine", b.mcAssigned)
+    +(b.mcPin?row("M/C pin", b.mcPin):'')
+    +(b.pinWarning?'<div class="gh-note"><span class="material-symbols-rounded">warning</span>'+esc(b.pinWarning)+'</div>':'')
+    +(b.unplannedReason?'<div class="gh-note"><span class="material-symbols-rounded">error</span>'+esc(b.unplannedReason)+'</div>':'')
     +(b.notes?'<div class="gh-note"><span class="material-symbols-rounded">sticky_note_2</span>'+esc(b.notes)+'</div>':'');
   h.classList.add("on");
   const pad=14, w=h.offsetWidth||260, hh=h.offsetHeight||180;

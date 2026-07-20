@@ -81,6 +81,7 @@
           <label class="fld">Quality<span class="req">*</span><select id="b_qual"></select><span class="hint" id="b_qualHint"></span></label>
           <label class="fld">Shade no.<select id="b_shade"></select><span class="help" id="b_shadeHint"></span></label>
           <label class="fld">Shade date<input id="b_shadeDate" type="date"></label>
+          <label class="fld">M/C No<select id="b_mc"><option value="">— auto-assign —</option></select><span class="help">Optional — pin to a specific dye machine, e.g. JET-2</span></label>
         </div>
         <div class="fldlabel">Lots &amp; quantity taken from each <span class="small muted">— up to 8 lots; a batch may take only part of a lot</span></div>
         <div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span></div>
@@ -239,12 +240,23 @@ function bSnapRow(row){
       : over>0 ? ' <span class="muted">(asked '+want+' m; +'+over+' m — takas cannot be cut)</span>' : '');
 }
 
+/* ---- M/C No: dropdown of dye-capable machines for the selected quality ---- */
+function bRefreshMachines(){
+  const q=Q(document.getElementById("b_qual").value);
+  const sel=document.getElementById("b_mc"); if(!sel) return;
+  const cur=sel.value;
+  const dyeType = q ? routeStep(q, +q.dyeStep||3).mc : "";
+  const list = dyeType ? DB.machines.filter(m=>m.type===dyeType) : [];
+  sel.innerHTML = '<option value="">— auto-assign —</option>'
+    + list.map(m=>'<option value="'+esc(m.id)+'"'+(m.id===cur?" selected":"")+'>'+esc(m.id)+' ('+m.capMax+' kg)</option>').join("");
+}
+
 /* ---- one batch = one quality: the first lot decides it ---- */
 function bLockQuality(){
   const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>s2.value).filter(Boolean);
   const qs=[...new Set(ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.quality;}).filter(Boolean))];
   const sel=document.getElementById("b_qual"), hint=document.getElementById("b_qualHint");
-  if(qs.length===1 && sel.value!==qs[0]){ sel.value=qs[0]; bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); }
+  if(qs.length===1 && sel.value!==qs[0]){ sel.value=qs[0]; bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); bRefreshMachines(); }
   sel.disabled = qs.length>0;
   sel.classList.toggle("locked", qs.length>0);
   if(hint) hint.innerHTML = qs.length
@@ -342,6 +354,7 @@ async function submitBatch(){
                weight:Math.round(grp.reduce((a,r)=>a+r.weight,0)*10)/10};
     const row={ lots:grp, lotIds:grp.map(r=>r.lotId),
       orderId:g("b_order"), quality:q, shadeNo:g("b_shade"), shadeDate:g("b_shadeDate"),
+      mcPin:g("b_mc"),
       pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight,
       status:"planned", notes:g("b_notes") };   // in/out time, pH, operator & shift are filled by the operator at the machine
     const res=await API.save("batches",row);
@@ -358,6 +371,7 @@ async function submitBatch(){
        <div class="small muted">${created[0].pcs} pcs · ${created[0].mtr} m · ${created[0].weight} kg · ${esc(q)}${g("b_shade")?" · "+esc(g("b_shade")):""}</div>`;
   document.getElementById("b_lotBox").innerHTML=""; bLotCount(); bSyncTotals();
   ["b_notes","b_shadeDate"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("b_mc").value="";
   renderBatchList(); draw(created.map(c=>c.id));
   toast(created.length>1 ? "Split into "+created.length+" batches \u2014 added to the schedule" : "Batch created \u2014 added to the schedule");
 }
@@ -379,9 +393,9 @@ boot(()=>{
   // batch maker
   b_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
   bRefreshOrders();
-  b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); });
+  b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); bRefreshMachines(); });
   b_order.addEventListener("change",()=>{ bRefreshLotSelects(); bRefreshShades(); });
-  bRefreshShades(); bRefreshOrders(); bLotCount(); bSyncTotals(); bLockQuality(); renderBatchList();
+  bRefreshShades(); bRefreshOrders(); bRefreshMachines(); bLotCount(); bSyncTotals(); bLockQuality(); renderBatchList();
   // show only the section tabs this role may see
   const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));
   document.querySelectorAll('#secTabs button').forEach(b=>{ b.style.display=allowed.includes(b.dataset.s)?"":"none"; });
