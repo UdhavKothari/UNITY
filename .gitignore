@@ -7,4 +7,5 @@
 /test-results/
 __pycache__/
 mvp/data.json
+mvp/data.json.backup-*
 node_modules/

@@ -76,11 +76,9 @@
       <h2>Create a batch</h2><span class="sub">group lots into a dyeing batch</span></div>
       <div class="card-b">
         <div class="grid2">
-          <label class="fld">Batch ID<div class="ro-field"><span class="muted">generated on save</span></div></label>
           <label class="fld">Order (optional)<select id="b_order"></select><span class="help" id="b_orderHint">Pick lots first — orders are filtered to that customer</span></label>
           <label class="fld">Quality<span class="req">*</span><select id="b_qual"></select><span class="hint" id="b_qualHint"></span></label>
           <label class="fld">Shade no.<select id="b_shade"></select><span class="help" id="b_shadeHint"></span></label>
-          <label class="fld">Shade date<input id="b_shadeDate" type="date"></label>
           <label class="fld">M/C No<select id="b_mc"><option value="">— auto-assign —</option></select><span class="help">Optional — pin to a specific dye machine, e.g. JET-2</span></label>
         </div>
         <div class="fldlabel">Lots &amp; quantity taken from each <span class="small muted">— up to 8 lots; a batch may take only part of a lot</span></div>
@@ -174,25 +172,17 @@ async function submitOrder(){
 
 /* init */
 /* ---------- batch maker ---------- */
-function bLotOptions(sel){
+function bLotCount(){ const c=document.getElementById("b_lotCount"),b=document.getElementById("b_lotBox"); if(c&&b) c.textContent=b.children.length+" / 8"; }
+function bLotFilter(l){
   const q=document.getElementById("b_qual").value;
+  const locked=document.getElementById("b_qual").disabled;
   const ordEl=document.getElementById("b_order");
   const ord=(DB.orders||[]).find(o=>o.id===(ordEl?ordEl.value:""));
-  const locked=document.getElementById("b_qual").disabled;
-  const list=(DB.lots||[]).filter(l=>(!q || l.quality===q || (!locked && l.id===sel))
-                                  && (!ord || l.customer===ord.cust || l.id===sel));
-  if(!list.length) return '<option value="">— no lots for this quality —</option>';
-  return list.map(l=>{
-    const a=lotAllocation(l.id), blocked=a.blocked && l.id!==sel;
-    return `<option value="${esc(l.id)}"${l.id===sel?" selected":""}${blocked?" disabled":""}>`
-      + esc(lotLabel(l.id)) + (a.blocked?("   [fully used \u2192 "+esc(a.batches.join(", "))+"]")
-                              : a.used?("   [part used]"):"") + `</option>`;
-  }).join("");
+  return (!q || l.quality===q || !locked) && (!ord || l.customer===ord.cust);
 }
-function bLotCount(){ const c=document.getElementById("b_lotCount"),b=document.getElementById("b_lotBox"); if(c&&b) c.textContent=b.children.length+" / 8"; }
 function bLotRow(){
   return `<div class="lotqrow">
-    <select class="b-lot">${bLotOptions()}</select>
+    ${lotPickerHTML("", "b-lot")}
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
     <input class="b-mtr" type="number" min="0" placeholder="m">
     <input class="b-wt"  type="number" min="0" step="0.1" placeholder="kg">
@@ -205,14 +195,15 @@ function bAddLot(){
   if(box.children.length>=8){ toast("A batch can hold at most 8 lots"); return; }
   box.insertAdjacentHTML("beforeend", bLotRow());
   const row=box.lastElementChild;
-  row.querySelector(".b-lot").onchange=()=>{ bLockQuality(); bPrefillRow(row); bSyncTotals(); bRefreshOrders(); };
+  wireLotPicker(row.querySelector(".b-lot"), { filterFn: bLotFilter,
+    onSelect: ()=>{ bLockQuality(); bPrefillRow(row); bSyncTotals(); bRefreshOrders(); } });
   row.querySelectorAll(".b-pcs,.b-mtr,.b-wt").forEach(i=>i.oninput=bSyncTotals);
   row.querySelector(".b-mtr").addEventListener("input",()=>bSuggestWeight(row));
   row.querySelector(".b-mtr").addEventListener("change",()=>{ bSnapRow(row); bSyncTotals(); });
   bLockQuality(); bPrefillRow(row); bLotCount(); bSyncTotals(); bRefreshOrders();
 }
 function bPrefillRow(row){                       // start from what is still LEFT in the lot
-  const id=row.querySelector(".b-lot").value, a=lotAllocation(id);
+  const id=lotPickVal(row.querySelector(".b-lot")), a=lotAllocation(id);
   row.querySelector(".b-mtr").value=a.remaining||"";
   row.querySelector(".b-mtr").max=a.remaining||undefined;
   row.querySelector(".b-pcs").max=a.remainingPcs||undefined;
@@ -221,7 +212,7 @@ function bPrefillRow(row){                       // start from what is still LEF
 
 /* ---- a taka cannot be cut: round the ask up to whole takas ---- */
 function bSnapRow(row){
-  const id=row.querySelector(".b-lot").value;
+  const id=lotPickVal(row.querySelector(".b-lot"));
   const out=row.querySelector(".taka-pick");
   const want=+row.querySelector(".b-mtr").value||0;
   if(!id || !want){ row.dataset.takas="[]"; if(out) out.innerHTML=""; return; }
@@ -253,10 +244,10 @@ function bRefreshMachines(){
 
 /* ---- one batch = one quality: the first lot decides it ---- */
 function bLockQuality(){
-  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>s2.value).filter(Boolean);
+  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>lotPickVal(s2)).filter(Boolean);
   const qs=[...new Set(ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.quality;}).filter(Boolean))];
   const sel=document.getElementById("b_qual"), hint=document.getElementById("b_qualHint");
-  if(qs.length===1 && sel.value!==qs[0]){ sel.value=qs[0]; bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); bRefreshMachines(); }
+  if(qs.length===1 && sel.value!==qs[0]){ sel.value=qs[0]; bRefreshShades(); bRefreshOrders(); bRefreshMachines(); }
   sel.disabled = qs.length>0;
   sel.classList.toggle("locked", qs.length>0);
   if(hint) hint.innerHTML = qs.length
@@ -270,7 +261,7 @@ function bSuggestWeight(row){                    // weight suggested from meters
 }
 function bRows(){
   return [...document.querySelectorAll('#b_lotBox .lotqrow')].map(r=>({
-    lotId:r.querySelector(".b-lot").value,
+    lotId:lotPickVal(r.querySelector(".b-lot")),
     pcs:+r.querySelector(".b-pcs").value||0,
     mtr:+r.querySelector(".b-mtr").value||0,
     weight:+r.querySelector(".b-wt").value||0,
@@ -289,7 +280,7 @@ function bSyncTotals(){
     : '<span class="muted">add a lot to build the batch</span>';
 }
 function bLotCustomers(){
-  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>s2.value).filter(Boolean);
+  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>lotPickVal(s2)).filter(Boolean);
   const names=ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.customer;}).filter(Boolean);
   return [...new Set(names)];
 }
@@ -306,9 +297,6 @@ function bRefreshOrders(){
       ? '<span class="flag">Lots belong to different customers — use one customer\'s fabric per batch</span>'
       : cs.length===1 ? ('Showing <b>'+esc(cs[0])+'</b> orders only — their fabric fulfils their order')
                       : 'Pick lots first — orders are filtered to that customer';
-}
-function bRefreshLotSelects(){
-  document.querySelectorAll('#b_lotBox .b-lot').forEach(sel=>{ const cur=sel.value; sel.innerHTML=bLotOptions(cur); });
 }
 function bRefreshShades(){
   const q=document.getElementById("b_qual").value;
@@ -353,7 +341,7 @@ async function submitBatch(){
     const tot={pcs:grp.reduce((a,r)=>a+r.pcs,0), mtr:grp.reduce((a,r)=>a+r.mtr,0),
                weight:Math.round(grp.reduce((a,r)=>a+r.weight,0)*10)/10};
     const row={ lots:grp, lotIds:grp.map(r=>r.lotId),
-      orderId:g("b_order"), quality:q, shadeNo:g("b_shade"), shadeDate:g("b_shadeDate"),
+      orderId:g("b_order"), quality:q, shadeNo:g("b_shade"),
       mcPin:g("b_mc"),
       pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight,
       status:"planned", notes:g("b_notes") };   // in/out time, pH, operator & shift are filled by the operator at the machine
@@ -370,7 +358,7 @@ async function submitBatch(){
     : `<h3>✓ ${esc(created[0].id)} created</h3>
        <div class="small muted">${created[0].pcs} pcs · ${created[0].mtr} m · ${created[0].weight} kg · ${esc(q)}${g("b_shade")?" · "+esc(g("b_shade")):""}</div>`;
   document.getElementById("b_lotBox").innerHTML=""; bLotCount(); bSyncTotals();
-  ["b_notes","b_shadeDate"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("b_notes").value="";
   document.getElementById("b_mc").value="";
   renderBatchList(); draw(created.map(c=>c.id));
   toast(created.length>1 ? "Split into "+created.length+" batches \u2014 added to the schedule" : "Batch created \u2014 added to the schedule");
@@ -393,8 +381,8 @@ boot(()=>{
   // batch maker
   b_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
   bRefreshOrders();
-  b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshLotSelects(); bRefreshMachines(); });
-  b_order.addEventListener("change",()=>{ bRefreshLotSelects(); bRefreshShades(); });
+  b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshMachines(); });
+  b_order.addEventListener("change",()=>{ bRefreshShades(); });
   bRefreshShades(); bRefreshOrders(); bRefreshMachines(); bLotCount(); bSyncTotals(); bLockQuality(); renderBatchList();
   // show only the section tabs this role may see
   const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));

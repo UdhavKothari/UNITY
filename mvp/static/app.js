@@ -203,6 +203,62 @@ function lotsAvailable(quality){
   return (DB.lots||[]).filter(l=> (!quality || l.quality===quality) && !lotAllocation(l.id).blocked );
 }
 
+/* ---------- searchable lot picker (250+ open lots — a plain <select> stops scaling fast) ---------- */
+/* Renders as a text input + filtered dropdown instead of a giant <select>. The picked lot id
+   lives in the root element's data-val (read it with lotPickVal()) — nothing else changes about
+   how callers treat "the lot select": swap .value for lotPickVal(el), swap onchange for the
+   onSelect callback passed to wireLotPicker. */
+function lotPickerHTML(selId, extraCls){
+  const label = selId ? lotLabel(selId) : "";
+  return '<div class="lotpick'+(extraCls?(' '+extraCls):'')+'" data-val="'+esc(selId||"")+'">'
+    +'<input class="lotpick-in" type="text" autocomplete="off" placeholder="Search lot no., customer, quality…" value="'+esc(label)+'">'
+    +'<div class="lotpick-menu"></div></div>';
+}
+function lotPickVal(root){ return root ? (root.dataset.val||"") : ""; }
+function lotPickerMatches(root, filterFn){
+  const term=(root.querySelector(".lotpick-in").value||"").trim().toLowerCase();
+  const cur=root.dataset.val;
+  let ids=(DB.lots||[]).filter(l=> (!filterFn || filterFn(l) || l.id===cur)).map(l=>l.id);
+  if(term) ids=ids.filter(id=> lotLabel(id).toLowerCase().indexOf(term)>=0);
+  return ids.slice(0,60);                                 // type to narrow further past the cap
+}
+function wireLotPicker(root, opts){
+  opts=opts||{};
+  const inp=root.querySelector(".lotpick-in"), menu=root.querySelector(".lotpick-menu");
+  let hi=-1;
+  function close(){ menu.classList.remove("on"); menu.innerHTML=""; hi=-1; }
+  function items(){ return [...menu.querySelectorAll(".lotpick-opt:not(.disabled)")]; }
+  function setHi(i){ const list=items(); list.forEach(x=>x.classList.remove("hi"));
+    hi=Math.max(0,Math.min(list.length-1,i)); if(list[hi]){ list[hi].classList.add("hi"); list[hi].scrollIntoView({block:"nearest"}); } }
+  function paint(){
+    const ids=lotPickerMatches(root, opts.filterFn);
+    if(!ids.length){ menu.innerHTML='<div class="lotpick-empty">No matching lots</div>'; menu.classList.add("on"); hi=-1; return; }
+    menu.innerHTML=ids.map(id=>{
+      const a=lotAllocation(id), blocked=a.blocked && id!==root.dataset.val;
+      return '<div class="lotpick-opt'+(blocked?' disabled':'')+'" data-id="'+esc(id)+'">'+esc(lotLabel(id))
+        +(a.blocked?' <span class="flag">fully used</span>':a.used?' <span class="muted">part used</span>':'')+'</div>';
+    }).join("");
+    menu.classList.add("on"); hi=-1;
+  }
+  function pick(id){
+    root.dataset.val=id; inp.value=lotLabel(id); close();
+    if(opts.onSelect) opts.onSelect(id);
+  }
+  inp.addEventListener("focus", ()=>{ inp.value=""; paint(); });
+  inp.addEventListener("input", paint);
+  inp.addEventListener("keydown", e=>{
+    if(e.key==="ArrowDown"){ e.preventDefault(); if(!menu.classList.contains("on")) paint(); else setHi(hi+1); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); setHi(hi-1); }
+    else if(e.key==="Enter"){ e.preventDefault(); const list=items(); if(list[hi]) pick(list[hi].dataset.id); }
+    else if(e.key==="Escape"){ close(); inp.blur(); }
+  });
+  menu.addEventListener("mousedown", e=>{
+    const o=e.target.closest(".lotpick-opt:not(.disabled)"); if(!o) return;
+    e.preventDefault(); pick(o.dataset.id);               // preventDefault keeps the input focused so blur-close doesn't race the pick
+  });
+  inp.addEventListener("blur", ()=> setTimeout(()=>{ close(); inp.value = root.dataset.val ? lotLabel(root.dataset.val) : ""; }, 150));
+}
+
 /* ---------- batch totals (sum of the per-lot quantities) ---------- */
 function batchTotals(b){
   const rows=(b&&b.lots)||[];

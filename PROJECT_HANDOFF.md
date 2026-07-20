@@ -139,3 +139,22 @@ Operations → Batch maker gained an optional **M/C No** dropdown (populated fro
 - Pin fits the type but is too small for the batch's kg → batch stays `unplanned` with a specific reason (`"JET-1 (250 kg) is too small for this 300 kg batch"`) instead of being silently reassigned — the operator chose that machine on purpose.
 - Unpinned batches schedule exactly as before (regression-tested).
 - Also editable from Admin → Batch maker (new `msel` field type) — which surfaced and fixed a **pre-existing bug**: `saveModal()` had a corrupted block (referenced an undefined `val`) that threw on saving *any* batch edited through Admin's generic modal. Fixed — Admin batch editing now works.
+
+## Update — 20 Jul 2026 (evening)
+
+### 6. Batch Maker form cleanup
+Removed **Shade date** (redundant — the shade *number* already identifies it) and the **Batch ID** placeholder row from Operations → Batch maker's create-batch form. Batch IDs are still system-generated exactly as before, just no longer shown as a blank field before the batch exists.
+
+### 7. Searchable lot picker
+The plain `<select>` for choosing a lot on Operations → Batch maker didn't scale — with 20–30 new lots landing daily and ~250 open lots at any time, scrolling a dropdown was unworkable. Replaced with a type-to-filter combobox (`lotPickerHTML`/`wireLotPicker`/`lotPickVal` in `app.js`): click in, type any part of the lot no., customer, or quality, arrow keys + Enter to pick, fully-used lots shown greyed out and disabled. Same filtering rules as before (locked to the batch's quality/order once the first lot is picked). Admin → Batch maker's lot picker (the generic schema-driven modal) still uses the old plain select — lower priority since the Operations page is the daily-use path; can get the same treatment later if it becomes a pain point there too.
+
+### 8. Shade 0 = greige, generated automatically
+Every quality now gets an automatic **Shade "0"** recipe (family Neutral, tone 0 → renders near-white) the moment the quality is created — via the regular Add-quality form, Quick add, and the Excel lot importer's placeholder-quality creation. Represents undyed/greige fabric; nothing is ever actually dyed at shade 0. Idempotent (`ensureGreigeShade()` in `admin.html` checks for an existing shade-0 recipe on that quality before creating one), so re-saving an existing quality never duplicates it.
+
+### 9. Stentor route steps: speed replaces time, not alongside it
+Each of a quality's 4 route steps used to show 3 boxes (machine, time, stentor speed) regardless of which machine was picked — confusing, since only one of time/speed is ever meaningful for a given step. Now the time box and speed box show/hide based on that step's machine select: pick **stentor** → the time box is replaced by the speed box (m/min); pick anything else → only the time box shows. Generic mechanism (`showIf:{k,eq|ne}` on any field + `evalConditionalFields()` in `admin.html`), reusable for future conditional fields. The actual schedule math was already correct — `routeOf()` in `app.js` has always computed a stentor step's time from meters ÷ speed + setup; this was purely a form-clutter fix.
+
+### 10. Database wiped to a clean production-empty state
+Per owner's request ("ready for a test"), `mvp/data.json` was rebuilt to hold only: the `ADMIN` user (existing credentials preserved), the `Administrator` role (perms re-synced to every current page), and `settings`. Every data table — machines, qualities, shade recipes, quality recipes, customers, storage areas, suppliers, operators, QC metrics, orders, lots, batches, weavers — is now empty, and `_seq` was reset so new IDs (LOT-0001, B-0001, …) start clean. The real mill data imported earlier this session (236 lots, 118 qualities, etc.) is preserved at `mvp/data.json.backup-2026-07-20` (gitignored, not committed) in case anything needs to be restored or re-diffed later. Deleting `data.json` outright was **not** used — `server.py`'s `load_db()` reseeds `seed_data.json`'s demo dataset when the file is missing, which is not what "empty" means here.
+
+⚠ Not done: no in-app "wipe to empty" button exists — this was a one-time direct edit of the data file. If this needs to be repeatable (e.g. for a demo reset), it should become a proper admin-gated API op rather than a manual file edit.
