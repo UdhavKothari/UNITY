@@ -98,6 +98,20 @@ function lotRemainingTakas(lotId){
   return pool;
 }
 
+/* ---------- synthesize taka lengths when only piece-count + total meters are known ---------- */
+/* Used by the lot importer: the source sheet has BAL PC / BAL MTS but no per-piece lengths.
+   Every piece gets the average length (rounded to the nearest 0.5 m, matching manual taka
+   entry); the last piece absorbs the rounding remainder so the sum is exact. */
+function synthTakas(totalMeters, pieceCount){
+  const n=Math.max(1,Math.round(pieceCount)||1);
+  const avg=Math.round((totalMeters/n)*2)/2;              // nearest 0.5 m
+  const out=Array(n-1).fill(avg);
+  const used=avg*(n-1);
+  const last=Math.round((totalMeters-used)*2)/2;
+  out.push(Math.max(0.5,last));                            // never a zero/negative last piece
+  return out;
+}
+
 /* ---------- oversized batch: split lot rows into N machine-sized batches ---------- */
 /* A batch heavier than the quality's max batch size can never run as one machine load.
    Split at the taka level (nothing gets cut) using best-fit-decreasing bin packing: largest
