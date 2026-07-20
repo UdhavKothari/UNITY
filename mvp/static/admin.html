@@ -352,6 +352,7 @@ function render(){
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="SEARCH[CUR]=this.value;render();setTimeout(()=>{var i=document.querySelector(\'.search input\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},0)"></div>'
     +'<div class="spacer"></div>'
     +(CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
+    +(CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
     +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th>'+x[1]+'</th>').join("")+'<th></th></tr></thead><tbody>'
     +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
@@ -567,14 +568,14 @@ async function saveModal(){
       row.meters = Math.round(row.takas.reduce((a,b2)=>a+b2,0));
       return; }
     if(f.t==="lotqty"){
-    const rows=Array.isArray(val)?val:[], ids=(DB.lots||[]).map(l=>l.id);
-    if(!ids.length) return '<div class="ro-field"><span class="muted">No lots yet - create them in Lot master first</span></div>';
-    return '<div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span></div>'
-      +'<div id="lotBox">'+rows.map(r=>lotQRow(r,ids)).join("")+'</div>'
-      +'<div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="addLotRow()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="lotCount"></span></div>';
-  }
-  if(f.t==="batchTotal") return '<div class="ro-field" id="batchTotalBox"></div>';
-  if(f.t==="lotsel"){ const b=document.getElementById("lotBox"); row.lotIds = b?[...b.querySelectorAll(".lot-sel")].map(s=>s.value):[]; return; }
+      row.lots = lotQRows();
+      row.lotIds = row.lots.map(r=>r.lotId);
+      row.pcs = row.lots.reduce((a,r)=>a+r.pcs,0);
+      row.mtr = row.lots.reduce((a,r)=>a+r.mtr,0);
+      row.weight = Math.round(row.lots.reduce((a,r)=>a+r.weight,0)*10)/10;
+      return;
+    }
+    if(f.t==="batchTotal") return;   // derived/display-only, nothing to read back
     const el=document.querySelector('#mBody [data-k="'+f.k+'"]'); if(!el)return;
     let v = f.t==="bool"?el.checked : (f.t==="number"? (el.value===""?"":+el.value) : el.value);
     const lab=el.closest(".fld"); const err=lab.querySelector(".err");
@@ -698,6 +699,42 @@ async function commitLotImport(){
   document.getElementById("importOverlay").remove();
   renderNav(); render();
   toast("Imported "+ok+" of "+plan.rows.length+" lots");
+}
+function openQualityQuickAdd(){
+  const ex=document.getElementById("qqaOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="qqaOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:640px;max-width:94vw">'
+    +'<div class="m-h"><h3>Quick add qualities</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b"><p class="small muted">One quality per line. Just a name is fine (defaults: GSM 100, width '+(cfg().widthDefault||56)+', max batch 300 kg) '
+    +'— or tab/comma-separated <b>name, gsm, width, maxBatch</b>. An existing name updates that quality instead of duplicating it. Route (machine steps) still needs the full Edit form.</p>'
+    +'<textarea id="qqaText" rows="10" placeholder="BRITANNIA\nMILAN 60 INCH, 110, 60, 300\nCRYSTAL LINE 60 INCH"></textarea>'
+    +'<div id="qqaPreview" class="small muted" style="margin-top:8px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" onclick="commitQualityQuickAdd()">Save all</button></div></div>';
+  document.body.appendChild(o);
+  document.getElementById("qqaText").addEventListener("input", ()=>{
+    const n=parseQualityQuickAdd(document.getElementById("qqaText").value).length;
+    document.getElementById("qqaPreview").textContent = n ? (n+" quality row(s) ready") : "";
+  });
+}
+function parseQualityQuickAdd(text){
+  const dW=cfg().widthDefault||56;
+  return text.split("\n").map(l=>l.trim()).filter(Boolean).map(line=>{
+    const parts=line.split(/\t|,/).map(s=>s.trim());
+    return { name:parts[0], gsm:+parts[1]||100, width:+parts[2]||dW, maxBatch:+parts[3]||300 };
+  }).filter(r=>r.name);
+}
+async function commitQualityQuickAdd(){
+  const rows=parseQualityQuickAdd(document.getElementById("qqaText").value);
+  if(!rows.length){ toast("Nothing to add"); return; }
+  const byName={}; (DB.qualities||[]).forEach(q=>byName[q.name]=q);
+  for(const r of rows){
+    const existing=byName[r.name];
+    const row=existing ? Object.assign({},existing,r) : r;
+    await API.save("qualities", row);
+  }
+  await API.db(); document.getElementById("qqaOverlay").remove(); renderNav(); render();
+  toast("Saved "+rows.length+" quality(ies)");
 }
 async function delRow(table,id){ if(!confirm("Delete this record?"))return; await API.del(table,id); await API.db(); renderNav(); render(); toast("Deleted"); }
 async function resetData(){ if(!confirm("Reset ALL data to the sample seed? This cannot be undone."))return; await API.reset(); await API.db(); renderNav(); render(); toast("Data reset"); }
