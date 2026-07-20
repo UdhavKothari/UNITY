@@ -712,7 +712,7 @@ function openQualityQuickAdd(){
     +'<textarea id="qqaText" rows="10" placeholder="BRITANNIA\nMILAN 60 INCH, 110, 60, 300\nCRYSTAL LINE 60 INCH"></textarea>'
     +'<div id="qqaPreview" class="small muted" style="margin-top:8px"></div></div>'
     +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
-    +'<button class="btn" onclick="commitQualityQuickAdd()">Save all</button></div></div>';
+    +'<button class="btn" id="qqaSaveBtn" onclick="commitQualityQuickAdd()">Save all</button></div></div>';
   document.body.appendChild(o);
   document.getElementById("qqaText").addEventListener("input", ()=>{
     const n=parseQualityQuickAdd(document.getElementById("qqaText").value).length;
@@ -729,6 +729,7 @@ function parseQualityQuickAdd(text){
 async function commitQualityQuickAdd(){
   const rows=parseQualityQuickAdd(document.getElementById("qqaText").value);
   if(!rows.length){ toast("Nothing to add"); return; }
+  const btn=document.getElementById("qqaSaveBtn"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
   const byName={}; (DB.qualities||[]).forEach(q=>byName[q.name]=q);
   for(const r of rows){
     const existing=byName[r.name];

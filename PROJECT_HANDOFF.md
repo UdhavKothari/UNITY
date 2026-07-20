@@ -109,3 +109,33 @@ Fixed at the source: `submitBatch()` now checks the total against the quality's 
 - `bSyncTotals()` shows a live warning while building the batch ("exceeds 400 kg max for Cotton Poplin — will save as 2 separate batches") before you even hit Create.
 - `submitBatch()` saves each group with a sequential `API.save` call (server assigns B-000x ids in order) and reports all created batches together.
 - Verified against the real B-0002 data (LOT-0003 + LOT-0004, 678.2 kg): splits into two batches (386.7 kg + 291.4 kg), both under JET-2's 400 kg cap, all 40 takas conserved exactly.
+
+## Update — 20 Jul 2026 (later same day)
+
+**Now under git.** This project had no version control before today — `git init` was run in `REL_DYEING/` with one baseline commit, then each feature below landed as its own commit (`git log --oneline` has the full list). Note for future sessions: the mounted dev folder has a filesystem quirk where Bash-level `rm`/`unlink` fails ("Operation not permitted") even though file edits and `git add`/`git commit` work fine — git write commands may need `mv .git/index.lock .git/index.lock.old-$RANDOM` (rename, not delete) before retrying if a stale lock blocks them. Harmless `.git/*.lock.old-*` and `.git/objects/*/tmp_obj_*` files may be lying around from this — safe to ignore or clean up later from a normal (non-sandboxed) terminal.
+
+Four features, built from a real inventory export (`LOT INF.xlsx`, 475 lots / 118 distinct qualities from the mill's actual stock sheet) and a plan written with `superpowers:writing-plans` (`docs/superpowers/plans/2026-07-20-weaver-import-mcno.md` — full column-mapping rationale and verification numbers live there):
+
+### 1. Weaver master table
+New Admin page (`SCHEMAS.weavers` in `admin.html`): name, contact person, phone, notes. Server-registered like every other table (`WV-0001` ids, `weavers` page-permission key in `server.py`). Lot master gained a `weaver` select field plus a `master` free-text field (the mill's process/category tag, e.g. "PRINT" — confirmed constant across all 475 real rows, so it's plain text, not its own master table).
+
+### 2. Lot master gained full mill-tracking fields
+`srcLotNo` (the weaver's own lot number, for matching physical rolls), `inwardPcs`/`inwardMeters`, `dispatchedPcs`/`dispatchedMeters`, `oldStockPcs`/`oldStockMeters`, `prodMeters`/`pendingProd` — all informational, mirroring the mill's existing tracking sheet columns. None of these feed the scheduler; only `takas` does.
+
+### 3. Mass import lots from Excel
+Admin → Lot master → **Import from Excel**. Vendored SheetJS (`static/vendor/xlsx.full.min.js` — fetched via npm during the session since the sandbox blocks CDN pulls; no runtime CDN dependency, matches the LAN-only deployment) parses the mill's `.xlsx` by header name (tolerant of column order). Verified end-to-end against the real file: **475 lots parsed, 1 skipped (the sheet's own "GRAND TOTAL" row), 118 new qualities, 1 new customer ("RAVI EXPORTS LTD."), 2 new weavers ("R.E.L.(W)", "R.E.L. (M)")**.
+
+- The sheet has no per-piece taka lengths, only `BAL PC` (count) and `BAL MTS.` (total) — `synthTakas()` (new, in `app.js`) generates that many pieces at the average length (nearest 0.5 m), with the last piece absorbing the rounding remainder so the sum is exact. Owner confirmed this approach explicitly.
+- New qualities are created as **placeholder stubs** (gsm 100, width 56, maxBatch 300 kg) — not real process data. Report says so; Quick add (below) is how you fix them in bulk.
+- ⚠ **Known gap**: re-importing an updated sheet later will create *duplicate* qualities/customers/weavers rather than reusing existing ones by name — `commitLotImport()` doesn't do the `byName`-lookup-and-reuse-id merge that Quick add (below) does. Fine for a one-time bulk load; would need that same merge pattern added before this becomes a recurring weekly import.
+
+### 4. Quick add for Qualities
+Admin → Qualities → **Quick add**. Paste one quality per line (`name` alone, or `name, gsm, width, maxBatch`) — an existing name updates that quality in place (reuses its id) instead of duplicating it. Built specifically to flesh out the 118 placeholder qualities the importer creates. Doesn't touch the 4-step route — that still needs the full Edit form per quality.
+
+### 5. M/C No — manual machine pin on the Batch Maker
+Operations → Batch maker gained an optional **M/C No** dropdown (populated from machines matching the quality's dye-step type). Pin applies only to the dye step — pre-treatment stays on the shared auto-assigned pool as before.
+- Pin matches and fits → batch is forced onto that exact machine.
+- Pin is the wrong machine *type* for this quality → falls back to auto-assign, batch gets a visible `pinWarning` (Gantt hover + Live plan) rather than failing silently.
+- Pin fits the type but is too small for the batch's kg → batch stays `unplanned` with a specific reason (`"JET-1 (250 kg) is too small for this 300 kg batch"`) instead of being silently reassigned — the operator chose that machine on purpose.
+- Unpinned batches schedule exactly as before (regression-tested).
+- Also editable from Admin → Batch maker (new `msel` field type) — which surfaced and fixed a **pre-existing bug**: `saveModal()` had a corrupted block (referenced an undefined `val`) that threw on saving *any* batch edited through Admin's generic modal. Fixed — Admin batch editing now works.
