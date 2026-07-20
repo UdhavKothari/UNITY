@@ -680,10 +680,10 @@ function parseLotWorkbook(rows){
 }
 function renderImportReport(plan){
   const el=document.getElementById("importReport");
-  const chip=(label,list)=> list.length ? ('<div class="small" style="margin-top:8px"><b>'+list.length+'</b> new '+label+' will be created: '
+  const chip=(label,list)=> list.length ? ('<div class="small" style="margin-top:8px"><b class="tnum">'+list.length+'</b> new '+label+' will be created: '
     +list.slice(0,12).map(x=>'<span class="chip">'+esc(x)+'</span>').join("")+(list.length>12?' <span class="muted">+'+(list.length-12)+' more</span>':'')+'</div>') : '';
-  el.innerHTML = '<div class="lot-totals"><span class="material-symbols-rounded">functions</span><b>'+plan.rows.length+'</b> lots ready to import'
-    +(plan.skipped?' &middot; <span class="muted">'+plan.skipped+' row(s) skipped (blank quality, zero balance, or a total row)</span>':'')+'</div>'
+  el.innerHTML = '<div class="lot-totals"><span class="material-symbols-rounded">functions</span><b class="tnum">'+plan.rows.length+'</b> lots ready to import'
+    +(plan.skipped?' &middot; <span class="muted tnum">'+plan.skipped+'</span><span class="muted"> row(s) skipped (blank quality, zero balance, or a total row)</span>':'')+'</div>'
     + chip("qualities", plan.newQualities) + chip("customers", plan.newCustomers) + chip("weavers", plan.newWeavers)
     + (plan.newQualities.length ? '<div class="small muted" style="margin-top:8px">New qualities are created with placeholder GSM/route — use Qualities → Quick add to fill them in before scheduling.</div>' : '');
   document.getElementById("importCommitBtn").style.display = plan.rows.length ? "" : "none";
@@ -716,7 +716,7 @@ function openQualityQuickAdd(){
   document.body.appendChild(o);
   document.getElementById("qqaText").addEventListener("input", ()=>{
     const n=parseQualityQuickAdd(document.getElementById("qqaText").value).length;
-    document.getElementById("qqaPreview").textContent = n ? (n+" quality row(s) ready") : "";
+    document.getElementById("qqaPreview").innerHTML = n ? ('<b class="tnum">'+n+'</b> quality row(s) ready') : "";
   });
 }
 function parseQualityQuickAdd(text){
