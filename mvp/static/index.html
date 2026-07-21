@@ -178,7 +178,7 @@ function bLotFilter(l){
   const locked=document.getElementById("b_qual").disabled;
   const ordEl=document.getElementById("b_order");
   const ord=(DB.orders||[]).find(o=>o.id===(ordEl?ordEl.value:""));
-  return (!q || l.quality===q || !locked) && (!ord || l.customer===ord.cust);
+  return (!q || sameFabric(l.quality,q) || !locked) && (!ord || l.customer===ord.cust);
 }
 function bLotRow(){
   return `<div class="lotqrow">
@@ -242,16 +242,20 @@ function bRefreshMachines(){
     + list.map(m=>'<option value="'+esc(m.id)+'"'+(m.id===cur?" selected":"")+'>'+esc(m.id)+' ('+m.capMax+' kg)</option>').join("");
 }
 
-/* ---- one batch = one quality: the first lot decides it ---- */
+/* ---- one batch = one fabric: the first lot decides it — rebranded names (shared fabric
+   group tag) are treated as the same fabric and can combine in one batch ---- */
 function bLockQuality(){
   const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>lotPickVal(s2)).filter(Boolean);
-  const qs=[...new Set(ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.quality;}).filter(Boolean))];
+  const names=ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.quality;}).filter(Boolean);
+  const qs=[...new Set(names)];
+  const groupKey=n=>{ const q=Q(n); return (q&&q.fabricGroup)||n; };
+  const groups=[...new Set(names.map(groupKey))];
   const sel=document.getElementById("b_qual"), hint=document.getElementById("b_qualHint");
-  if(qs.length===1 && sel.value!==qs[0]){ sel.value=qs[0]; bRefreshShades(); bRefreshOrders(); bRefreshMachines(); }
+  if(groups.length===1 && names.length && sel.value!==names[0]){ sel.value=names[0]; bRefreshShades(); bRefreshOrders(); bRefreshMachines(); }
   sel.disabled = qs.length>0;
   sel.classList.toggle("locked", qs.length>0);
   if(hint) hint.innerHTML = qs.length
-    ? '<span class="material-symbols-rounded">lock</span>Locked by '+esc(ids[0])+' — a batch cannot mix qualities'
+    ? '<span class="material-symbols-rounded">lock</span>Locked by '+esc(ids[0])+(qs.length>1?' — combining rebranded names as one fabric':'')+' — a batch cannot mix different fabrics'
     : 'Pick a quality, or just add a lot and it will set itself';
 }
 function bSuggestWeight(row){                    // weight suggested from meters x gsm, still editable
@@ -325,8 +329,9 @@ async function submitBatch(){
   for(const r of rows){ const a=lotAllocation(r.lotId);
     if(r.mtr > a.remaining){ toast(r.lotId+" has only "+a.remaining+" m left"); return; } }
   const quals=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId); return l&&l.quality;}).filter(Boolean))];
-  if(quals.length>1){ toast("This batch mixes "+quals.join(" and ")+" — one quality per batch"); return; }
-  if(quals.length===1 && quals[0]!==q){ toast("The lots are "+quals[0]+", not "+q); return; }
+  const groupKey=n=>{ const qq=Q(n); return (qq&&qq.fabricGroup)||n; };
+  if(new Set(quals.map(groupKey)).size>1){ toast("This batch mixes "+quals.join(" and ")+" — different fabrics, one fabric per batch"); return; }
+  if(quals.length===1 && groupKey(quals[0])!==groupKey(q)){ toast("The lots are "+quals[0]+", a different fabric than "+q); return; }
   for(const r of rows){ if(!(r.takas||[]).length){ toast(r.lotId+": pick whole takas (enter the meters you need)"); return; } }
   const custs=bLotCustomers();
   if(custs.length>1){ toast("This batch mixes fabric from "+custs.join(" and ")+" — use one customer per batch"); return; }

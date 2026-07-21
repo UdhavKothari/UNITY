@@ -75,10 +75,11 @@ const SCHEMAS={
       {k:"maintIntervalDays",l:"Service every (days)",sec:"Maintenance",t:"number",min:0,help:"e.g. a drum every 60 days - the next date fills in automatically"},
       {k:"schedMaint",l:"Next maintenance (auto)",sec:"Maintenance",t:"readonly",help:"Calculated from last maintenance + interval"}]},
   qualities:{label:"Qualities",single:"quality",
-    cols:[["name","Quality"],["gsm","GSM"],["route","Route (4 steps)"],["dyeStep","Dye @"],["maxBatch","Max kg"]],
+    cols:[["name","Quality"],["fabricGroup","Fabric group"],["gsm","GSM"],["route","Route (4 steps)"],["dyeStep","Dye @"],["maxBatch","Max kg"]],
     search:["name"],
     fields:[
       {k:"name",l:"Quality name",sec:"Fabric",req:true},
+      {k:"fabricGroup",l:"Same fabric as (group tag)",sec:"Fabric",help:"Give two or more qualities the exact same tag if they're really the same physical fabric sold under different names (a rebrand). Lots under any name sharing a tag can be dyed in one batch and see the same shade list. Leave blank if this quality isn't rebranded."},
       {k:"gsm",l:"Greige GSM",sec:"Fabric",t:"number",req:true,min:1,help:"Converts order meters to kg"},
       {k:"width",l:"Width (inch)",sec:"Fabric",t:"number",min:1},
       {k:"maxBatch",l:"Max batch (kg)",sec:"Fabric",t:"number",req:true,min:1},
@@ -336,6 +337,18 @@ function cellVal(table,r,k){
   if(k==="shift" && r.shift) return '<span class="pill '+(r.shift==="Night"?"wash":"pre")+'">'+esc(r.shift)+'</span>';
   return esc(r[k]);
 }
+const _textCache=document.createElement("div");
+function cellText(table,r,k){
+  _textCache.innerHTML=cellVal(table,r,k);
+  return (_textCache.textContent||"").trim();
+}
+const SORT={};
+function toggleSort(k){
+  const cur=SORT[CUR];
+  if(cur && cur.k===k) SORT[CUR]= cur.dir==="asc" ? {k,dir:"desc"} : null;
+  else SORT[CUR]={k,dir:"asc"};
+  render();
+}
 
 function render(){
   const c=document.getElementById("content");
@@ -345,8 +358,19 @@ function render(){
   if(CUR==="plan") return renderPlan(c);
   const sc=SCHEMAS[CUR];
   const term=(SEARCH[CUR]||"").toLowerCase();
+  const colKeys=sc.cols.map(x=>x[0]);
   let rows=DB[CUR]||[];
-  if(term) rows=rows.filter(r=>sc.search.some(k=>String(r[k]||"").toLowerCase().indexOf(term)>=0));
+  // search every visible column (the rendered text, not just a hand-picked subset of raw fields)
+  if(term) rows=rows.filter(r=>colKeys.some(k=>cellText(CUR,r,k).toLowerCase().indexOf(term)>=0));
+  const st=SORT[CUR];
+  if(st){
+    rows=rows.slice().sort((a,b)=>{
+      const av=cellText(CUR,a,st.k), bv=cellText(CUR,b,st.k);
+      const an=parseFloat(av.replace(/,/g,"")), bn=parseFloat(bv.replace(/,/g,""));
+      const c=(av!==""&&bv!==""&&!isNaN(an)&&!isNaN(bn)) ? (an-bn) : av.localeCompare(bv,undefined,{sensitivity:"base",numeric:true});
+      return st.dir==="desc" ? -c : c;
+    });
+  }
   c.innerHTML='<div class="page-head"><h1>'+sc.label+'</h1><p>'+(DB[CUR]||[]).length+' record(s). Click Edit to change, or Add to create a new one.</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="SEARCH[CUR]=this.value;render();setTimeout(()=>{var i=document.querySelector(\'.search input\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},0)"></div>'
@@ -354,7 +378,8 @@ function render(){
     +(CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
-    +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th>'+x[1]+'</th>').join("")+'<th></th></tr></thead><tbody>'
+    +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
+      +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
     +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
       +'<td><div class="rowbtns"><button class="btn ghost sm" onclick=\'openModal("'+CUR+'",'+JSON.stringify(r.id)+')\'>Edit</button>'
       +'<button class="btn danger sm" onclick=\'delRow("'+CUR+'",'+JSON.stringify(r.id)+')\'>Delete</button></div></td></tr>').join("")
@@ -567,12 +592,13 @@ function updateShadePreview(){
   sw.style.background=colorFT(g("family"),g("tone"));
   meta.innerHTML='<b>'+(esc(g("shade"))||"(shade)")+'</b> in '+(esc(g("quality"))||"(quality)")+'<br>family '+esc(g("family"))+', tone '+esc(g("tone"))+' &nbsp; L* '+esc(g("specL"))+' a* '+esc(g("speca"))+' b* '+esc(g("specb"));
 }
-/* ---- every quality starts life as undyed greige — shade "0", nothing is dyed here ---- */
+/* ---- every quality gets a shade "0" recipe by default — a real dye step (white/near-colourless)
+   that produces RFP (Ready for Print) fabric, ready to go to the printer ---- */
 async function ensureGreigeShade(qualityName){
   if(!qualityName) return;
   if((DB.shadeRecipes||[]).some(s=>s.quality===qualityName && s.shade==="0")) return;
   await API.save("shadeRecipes", {quality:qualityName, shade:"0", family:"Neutral", tone:0,
-    program:"Greige — undyed. Nothing is ever dyed at shade 0."});
+    program:"RFP — Ready for Print"});
 }
 async function saveModal(){
   const sc=SCHEMAS[editTable]; const row=Object.assign({},editRow); let ok=true;

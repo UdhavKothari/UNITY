@@ -148,8 +148,8 @@ Removed **Shade date** (redundant — the shade *number* already identifies it) 
 ### 7. Searchable lot picker
 The plain `<select>` for choosing a lot on Operations → Batch maker didn't scale — with 20–30 new lots landing daily and ~250 open lots at any time, scrolling a dropdown was unworkable. Replaced with a type-to-filter combobox (`lotPickerHTML`/`wireLotPicker`/`lotPickVal` in `app.js`): click in, type any part of the lot no., customer, or quality, arrow keys + Enter to pick, fully-used lots shown greyed out and disabled. Same filtering rules as before (locked to the batch's quality/order once the first lot is picked). Admin → Batch maker's lot picker (the generic schema-driven modal) still uses the old plain select — lower priority since the Operations page is the daily-use path; can get the same treatment later if it becomes a pain point there too.
 
-### 8. Shade 0 = greige, generated automatically
-Every quality now gets an automatic **Shade "0"** recipe (family Neutral, tone 0 → renders near-white) the moment the quality is created — via the regular Add-quality form, Quick add, and the Excel lot importer's placeholder-quality creation. Represents undyed/greige fabric; nothing is ever actually dyed at shade 0. Idempotent (`ensureGreigeShade()` in `admin.html` checks for an existing shade-0 recipe on that quality before creating one), so re-saving an existing quality never duplicates it.
+### 8. Shade 0 = RFP (Ready for Print), generated automatically
+Every quality now gets an automatic **Shade "0"** recipe (family Neutral, tone 0 → renders near-white) the moment the quality is created — via the regular Add-quality form, Quick add, and the Excel lot importer's placeholder-quality creation. This is a real, dyeable shade — everything is dyeable to shade 0, and doing so produces **RFP (Ready for Print)** fabric (white/near-colourless, headed to the printer next), not "undyed greige." Idempotent (`ensureGreigeShade()` in `admin.html` checks for an existing shade-0 recipe on that quality before creating one), so re-saving an existing quality never duplicates it.
 
 ### 9. Stentor route steps: speed replaces time, not alongside it
 Each of a quality's 4 route steps used to show 3 boxes (machine, time, stentor speed) regardless of which machine was picked — confusing, since only one of time/speed is ever meaningful for a given step. Now the time box and speed box show/hide based on that step's machine select: pick **stentor** → the time box is replaced by the speed box (m/min); pick anything else → only the time box shows. Generic mechanism (`showIf:{k,eq|ne}` on any field + `evalConditionalFields()` in `admin.html`), reusable for future conditional fields. The actual schedule math was already correct — `routeOf()` in `app.js` has always computed a stentor step's time from meters ÷ speed + setup; this was purely a form-clutter fix.
@@ -158,3 +158,22 @@ Each of a quality's 4 route steps used to show 3 boxes (machine, time, stentor s
 Per owner's request ("ready for a test"), `mvp/data.json` was rebuilt to hold only: the `ADMIN` user (existing credentials preserved), the `Administrator` role (perms re-synced to every current page), and `settings`. Every data table — machines, qualities, shade recipes, quality recipes, customers, storage areas, suppliers, operators, QC metrics, orders, lots, batches, weavers — is now empty, and `_seq` was reset so new IDs (LOT-0001, B-0001, …) start clean. The real mill data imported earlier this session (236 lots, 118 qualities, etc.) is preserved at `mvp/data.json.backup-2026-07-20` (gitignored, not committed) in case anything needs to be restored or re-diffed later. Deleting `data.json` outright was **not** used — `server.py`'s `load_db()` reseeds `seed_data.json`'s demo dataset when the file is missing, which is not what "empty" means here.
 
 ⚠ Not done: no in-app "wipe to empty" button exists — this was a one-time direct edit of the data file. If this needs to be repeatable (e.g. for a demo reset), it should become a proper admin-gated API op rather than a manual file edit.
+
+## Update — 20 Jul 2026 (night)
+
+### 11. Shade 0 corrected: RFP, not "undyed"
+Owner corrected an earlier mistake in this doc and in the auto-created shade-0 recipe's label: **everything is dyeable to shade 0**, and dyeing to shade 0 produces **RFP (Ready for Print)** fabric — it's a real dye step, not "nothing happens." Fixed the `program` text `ensureGreigeShade()` writes (`admin.html`) and the wording above in item 8.
+
+### 12. Full-column search + sortable headers, every Admin table
+`render()` in `admin.html` used to search only a hand-picked subset of columns per table (e.g. Qualities only searched `name`) and had no way to sort at all. Now:
+- **Search** matches against every visible column's *rendered* text (`cellText()` strips the HTML that `cellVal()` produces, so computed columns like Route, Allocation, or Aux summary are searchable too, not just raw fields) — e.g. typing a quality name into the Lot master search box now matches.
+- **Sort**: every column header is clickable (`toggleSort()`); numeric-looking values sort numerically, everything else sorts as text. Click again to reverse, a third click clears back to insertion order.
+- The old per-schema `search:[...]` arrays are now unused (harmless, left in place) — full-column search superseded them.
+
+### 13. Rebranded qualities — "same fabric" group tag
+Some qualities are the exact same physical fabric sold again under a different commercial name, and the mill dyes them together. Added a **Fabric group** free-text field to Quality (`fabricGroup` — new column + form field in `admin.html`). Two qualities sharing the same non-empty tag are treated as one fabric:
+- **Batch Maker**: lots from either name can now go into the same batch (`bLotFilter`/`bLockQuality`/`submitBatch`'s mixing check in `index.html` all compare by `sameFabric()`, not literal name).
+- **Shades**: `shadesForQuality()`/`SH()` in `app.js` look across the whole tag group, so both names see the same shade list — set shades up once under either name.
+- **GSM/route/max batch are *not* inherited** — each quality keeps its own (deliberately simple: a tag, not a data hierarchy). If the rebrand really is identical fabric, fill in matching GSM/route on both; the app won't auto-sync them.
+- (Considered a "canonical alias" model where GSM/route/shades would auto-inherit from one parent quality — owner decided that was more confusing than useful; the flat tag is what shipped.)
+- ⚠ Not done: Admin's own batch-edit modal (`lotQRow`/`lotQRows`) and order-matching (`bRefreshOrders`) still compare by literal quality name, not fabric group — lower priority than the Operations Batch Maker, which is the daily-use path.

@@ -12,8 +12,35 @@ const API = {
 /* ---------- lookups ---------- */
 const byName = (arr,n)=> arr.find(x=>x.name===n);
 const Q = n => byName(DB.qualities,n);
-const SH = (n,quality)=>{ const a=DB.shadeRecipes||[]; return (quality && a.find(x=>x.shade===n && x.quality===quality)) || a.find(x=>x.shade===n); };
-const shadesForQuality = q => (DB.shadeRecipes||[]).filter(x=>x.quality===q);
+/* ---- rebrands: qualities sharing a non-empty fabricGroup tag are the exact same physical fabric,
+   just sold under different names. Each quality keeps its own GSM/route/maxBatch (no inheritance —
+   simple tag, not a data hierarchy) but lots from either name can share one dye batch, and shade
+   recipes/lookup are shared across the group so both names see the same shade list. ---- */
+function fabricGroupNames(name){
+  const q=byName(DB.qualities,name), names=new Set([name]);
+  const tag=q&&q.fabricGroup;
+  if(tag) (DB.qualities||[]).forEach(x=>{ if(x.fabricGroup===tag) names.add(x.name); });
+  return names;
+}
+function sameFabric(a,b){
+  if(!a || !b) return false;
+  if(a===b) return true;
+  const qa=byName(DB.qualities,a), qb=byName(DB.qualities,b);
+  return !!(qa && qb && qa.fabricGroup && qb.fabricGroup && qa.fabricGroup===qb.fabricGroup);
+}
+const SH = (n,quality)=>{
+  const a=DB.shadeRecipes||[];
+  if(quality){
+    const exact=a.find(x=>x.shade===n && x.quality===quality); if(exact) return exact;
+    const grp=fabricGroupNames(quality);
+    if(grp.size>1){ const g=a.find(x=>x.shade===n && grp.has(x.quality)); if(g) return g; }
+  }
+  return a.find(x=>x.shade===n);
+};
+const shadesForQuality = q => {
+  const names=fabricGroupNames(q);
+  return (DB.shadeRecipes||[]).filter(x=>names.has(x.quality));
+};
 const cfg = ()=> DB.settings;
 const kgOf = (meters,gsm,widthIn)=> meters*((widthIn||cfg().widthDefault||56)*0.0254)*gsm/1000;
 

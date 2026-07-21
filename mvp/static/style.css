@@ -107,6 +107,10 @@ main{max-width:1280px;margin:0 auto;padding:24px}
 table{width:100%;border-collapse:collapse;font-size:12.8px}
 th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);background:var(--surface-2);position:sticky;top:0;font-weight:600}
+th.sortable{cursor:pointer;user-select:none;transition:color var(--dur)}
+th.sortable:hover{color:var(--ink)}
+th.sortable.sort-asc,th.sortable.sort-desc{color:var(--accent)}
+th.sortable .sort-ic{font-size:13px;vertical-align:-3px;margin-left:1px}
 td{color:var(--ink)}
 tbody tr{transition:background var(--dur)}
 tbody tr:hover{background:var(--surface-2)}
