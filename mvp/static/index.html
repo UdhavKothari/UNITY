@@ -424,14 +424,14 @@ function paintStorageGrid(areaName){
   html+='<div class="stg-corner"></div>';
   for(let c=0;c<area.colCount;c++) html+='<div class="stg-colhead">'+colLetter(c)+'</div>';
   for(let sh=1;sh<=area.shelfCount;sh++){
-    html+='<button type="button" class="stg-shelfhead" aria-label="Open shelf '+sh+'" onclick="openShelfModal(\''+esc(areaName)+'\','+sh+')">'+sh+'</button>';
+    html+='<button type="button" class="stg-shelfhead" aria-label="Open shelf '+sh+'" onclick="openShelfModal(\''+esc(areaName).replace(/'/g,"\\'")+'\''+','+sh+')">'+sh+'</button>';
     for(let c=0;c<area.colCount;c++){
       const col=colLetter(c);
       const slot=(byShelf[sh]||[]).find(s=>s.col===col);
       const occ=slot&&slot.lotId;
       const lot=occ?(DB.lots||[]).find(l=>l.id===slot.lotId):null;
       const label="Shelf "+sh+", column "+col+(lot?" — "+lot.quality+", "+slot.lotId:" — empty");
-      html+='<button type="button" class="stg-cell'+(occ?" occ":"")+'" aria-label="'+esc(label)+'" title="'+(lot?esc(lot.quality||"")+" - "+esc(slot.lotId):"empty")+'" onclick="openShelfModal(\''+esc(areaName)+'\','+sh+')">'
+      html+='<button type="button" class="stg-cell'+(occ?" occ":"")+'" aria-label="'+esc(label)+'" title="'+(lot?esc(lot.quality||"")+" - "+esc(slot.lotId):"empty")+'" onclick="openShelfModal(\''+esc(areaName).replace(/'/g,"\\'")+'\''+','+sh+')">'
         +(occ?'<span class="stg-tag">'+esc(slot.lotId)+'</span>':'')+'</button>';
     }
   }
