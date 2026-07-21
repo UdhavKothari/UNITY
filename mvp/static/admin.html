@@ -766,19 +766,37 @@ async function commitLotImport(){
 }
 const BULK_ADD_TABLES=["machines","customers","suppliers","operators","qcMetrics","shadeRecipes","qualityRecipes","weavers"];
 const BULK_ADD_SKIP_TYPES=new Set(["readonly","perms","aux","takas","lotTotal","lotqty","batchTotal","lotsel","password"]);
+const BULK_ADD_KEY_FIELDS={shadeRecipes:["quality","shade"]};   // override when the first column alone isn't a unique key
 function bulkAddFields(table){
   return SCHEMAS[table].fields.filter(f=>!BULK_ADD_SKIP_TYPES.has(f.t)).slice(0,7);
+}
+function bulkAddKeyOf(table, row){
+  const keys=BULK_ADD_KEY_FIELDS[table] || [bulkAddFields(table)[0].k];
+  return keys.map(k=>String(row[k]==null?"":row[k])).join("");
+}
+function bulkAddOptsFor(f){
+  if(f.t==="select") return f.o;
+  if(f.t==="qsel") return DB.qualities.map(q=>q.name);
+  if(f.t==="csel") return DB.customers.map(x=>x.name);
+  if(f.t==="wsel") return (DB.weavers||[]).map(x=>x.name);
+  if(f.t==="msel") return (DB.machines||[]).map(x=>x.id);
+  if(f.t==="opsel") return (DB.operators||[]).map(o=>o.name);
+  if(f.t==="ordsel") return (DB.orders||[]).map(o=>o.id);
+  if(f.t==="rolesel") return (DB.roles||[]).map(r=>r.name);
+  return null;
 }
 function openBulkAdd(table){
   const sc=SCHEMAS[table], fields=bulkAddFields(table);
   const allSimple=SCHEMAS[table].fields.filter(f=>!BULK_ADD_SKIP_TYPES.has(f.t));
+  const keyFields=BULK_ADD_KEY_FIELDS[table] || [fields[0].k];
+  const keyLabels=keyFields.map(k=>{ const f=SCHEMAS[table].fields.find(x=>x.k===k); return f?f.l:k; }).join(" + ");
   const ex=document.getElementById("bulkOverlay"); if(ex) ex.remove();
   const o=document.createElement("div"); o.id="bulkOverlay"; o.className="modal-bg on";
   const colList=fields.map(f=>f.l).join(", ");
   o.innerHTML='<div class="modal" style="width:640px;max-width:94vw">'
     +'<div class="m-h"><h3>Bulk add '+esc(sc.label.toLowerCase())+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
     +'<div class="m-b"><p class="small muted">One '+esc(sc.single)+' per line, comma or tab separated, in this order: <b>'+esc(colList)+'</b>. '
-    +'An existing '+esc(sc.single)+' (matched by <b>'+esc(fields[0].l)+'</b>) updates in place instead of duplicating.'
+    +'An existing '+esc(sc.single)+' (matched by <b>'+esc(keyLabels)+'</b>) updates in place instead of duplicating.'
     +(fields.length<allSimple.length ? ' Remaining fields still need the full Edit form.' : '')+'</p>'
     +'<textarea id="bulkText" rows="10" placeholder="'+esc(fields.map(f=>f.l).join(", "))+'"></textarea>'
     +'<div id="bulkPreview" class="small muted" style="margin-top:8px"></div></div>'
@@ -799,7 +817,7 @@ function parseBulkAdd(table, text){
       let v=parts[i]!==undefined ? parts[i] : "";
       if(f.t==="number") v=v===""?"":+v;
       else if(f.t==="bool") v=/^(y|yes|true|1)$/i.test(v);
-      else if(f.t==="select" && f.o && v && f.o.indexOf(v)<0) v="";
+      else { const opts=bulkAddOptsFor(f); if(opts && v && opts.indexOf(v)<0) v=""; }
       row[f.k]=v;
     });
     return row;
@@ -809,10 +827,9 @@ async function commitBulkAdd(table){
   const rows=parseBulkAdd(table, document.getElementById("bulkText").value);
   if(!rows.length){ toast("Nothing to add"); return; }
   const btn=document.getElementById("bulkSaveBtn"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
-  const idKey=bulkAddFields(table)[0].k;
-  const byKey={}; (DB[table]||[]).forEach(r=>{ byKey[r[idKey]]=r; });
+  const byKey={}; (DB[table]||[]).forEach(r=>{ byKey[bulkAddKeyOf(table,r)]=r; });
   for(const r of rows){
-    const existing=byKey[r[idKey]];
+    const existing=byKey[bulkAddKeyOf(table,r)];
     const row=existing ? Object.assign({},existing,r) : r;
     await API.save(table, row);
   }
