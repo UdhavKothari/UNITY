@@ -24,7 +24,7 @@ LOCK = threading.Lock()
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage",
              "dashboard","machines","qualities","shadeRecipes","qualityRecipes",
              "batches","lots","weavers",
              "customers","orders","storageAreas","storageSlots","suppliers","operators","qcMetrics",

@@ -30,6 +30,7 @@
     <button data-s="sched"><span class="material-symbols-rounded">calendar_view_week</span>Schedule</button>
     <button data-s="order"><span class="material-symbols-rounded">add_circle</span>New order</button>
     <button data-s="batch"><span class="material-symbols-rounded">widgets</span>Batch maker</button>
+    <button data-s="storage"><span class="material-symbols-rounded">shelves</span>Storage</button>
   </div>
 
   <!-- Shop floor -->
@@ -96,6 +97,15 @@
       <div class="tbl-wrap" id="batchList"></div>
     </div>
   </section>
+
+  <!-- Storage -->
+  <section class="view" id="v-storage" style="display:none">
+    <div class="bar">
+      <select id="stg_area"></select>
+      <span class="small muted" id="stg_note"></span>
+    </div>
+    <div id="stg_grid"></div>
+  </section>
 </main>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -133,6 +143,7 @@ document.getElementById("secTabs").addEventListener("click",e=>{
   const s=e.target.dataset.s; if(!s)return;
   document.querySelectorAll("#secTabs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));
   document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
+  if(s==="storage") renderStorageMap();
 });
 function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
 
@@ -388,6 +399,94 @@ function exportBatchesToExcel(){
   XLSX.utils.book_append_sheet(wb, ws, "Batches");
   XLSX.writeFile(wb, "Batches_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
+/* ---------- storage map ---------- */
+function renderStorageMap(){
+  const sel=document.getElementById("stg_area");
+  const areas=DB.storageAreas||[];
+  if(!areas.length){
+    document.getElementById("stg_grid").innerHTML='<div class="empty"><span class="material-symbols-rounded">shelves</span><h3>No storage areas yet</h3><p>Add a storage area in Admin &mdash; set its shelf and column count &mdash; and the grid will appear here.</p></div>';
+    sel.innerHTML=""; document.getElementById("stg_note").textContent=""; return;
+  }
+  const cur=sel.value && areas.some(a=>a.name===sel.value) ? sel.value : areas[0].name;
+  sel.innerHTML=areas.map(a=>'<option'+(a.name===cur?" selected":"")+'>'+esc(a.name)+'</option>').join("");
+  paintStorageGrid(cur);
+}
+function paintStorageGrid(areaName){
+  const area=(DB.storageAreas||[]).find(a=>a.name===areaName);
+  const grid=document.getElementById("stg_grid");
+  if(!area){ grid.innerHTML=""; return; }
+  const slots=(DB.storageSlots||[]).filter(s=>s.area===areaName);
+  const byShelf={};
+  slots.forEach(s=>{ (byShelf[s.shelf]=byShelf[s.shelf]||[]).push(s); });
+  const occCount=slots.filter(s=>s.lotId).length;
+  document.getElementById("stg_note").textContent=occCount+" of "+(area.shelfCount*area.colCount)+" slots occupied";
+  let html='<div class="stg-grid-wrap"><div class="stg-grid" style="grid-template-columns:64px repeat('+area.colCount+',1fr)">';
+  html+='<div class="stg-corner"></div>';
+  for(let c=0;c<area.colCount;c++) html+='<div class="stg-colhead">'+colLetter(c)+'</div>';
+  for(let sh=1;sh<=area.shelfCount;sh++){
+    html+='<button type="button" class="stg-shelfhead" aria-label="Open shelf '+sh+'" onclick="openShelfModal(\''+esc(areaName)+'\','+sh+')">'+sh+'</button>';
+    for(let c=0;c<area.colCount;c++){
+      const col=colLetter(c);
+      const slot=(byShelf[sh]||[]).find(s=>s.col===col);
+      const occ=slot&&slot.lotId;
+      const lot=occ?(DB.lots||[]).find(l=>l.id===slot.lotId):null;
+      const label="Shelf "+sh+", column "+col+(lot?" — "+lot.quality+", "+slot.lotId:" — empty");
+      html+='<button type="button" class="stg-cell'+(occ?" occ":"")+'" aria-label="'+esc(label)+'" title="'+(lot?esc(lot.quality||"")+" - "+esc(slot.lotId):"empty")+'" onclick="openShelfModal(\''+esc(areaName)+'\','+sh+')">'
+        +(occ?'<span class="stg-tag">'+esc(slot.lotId)+'</span>':'')+'</button>';
+    }
+  }
+  html+='</div></div>';
+  grid.innerHTML=html;
+}
+document.addEventListener("change", e=>{ if(e.target && e.target.id==="stg_area") paintStorageGrid(e.target.value); });
+
+function openShelfModal(areaName, shelf){
+  const area=(DB.storageAreas||[]).find(a=>a.name===areaName); if(!area) return;
+  const ex=document.getElementById("shelfOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="shelfOverlay"; o.className="modal-bg on";
+  const cols=[]; for(let c=0;c<area.colCount;c++) cols.push(colLetter(c));
+  o.innerHTML='<div class="modal" style="width:560px;max-width:94vw">'
+    +'<div class="m-h"><h3>'+esc(areaName)+' &middot; Shelf '+shelf+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b"><div class="shelf-rows" id="shelfRows">'
+    +cols.map(col=>shelfRowHTML(areaName,shelf,col)).join("")
+    +'</div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
+  document.body.appendChild(o);
+  cols.forEach(col=>wireShelfRow(areaName,shelf,col));
+}
+function shelfRowHTML(areaName,shelf,col){
+  const slot=(DB.storageSlots||[]).find(s=>s.area===areaName && +s.shelf===+shelf && s.col===col);
+  const lot=slot&&slot.lotId?(DB.lots||[]).find(l=>l.id===slot.lotId):null;
+  return '<div class="shelf-row" data-col="'+col+'">'
+    +'<span class="shelf-col-badge">'+col+'</span>'
+    +lotPickerHTML(slot?slot.lotId:"", "shelf-lot")
+    +'<button type="button" class="btn ghost sm shelf-save">Save</button>'
+    +(slot&&slot.lotId?'<button type="button" class="btn danger sm shelf-clear">Clear</button>':'')
+    +'</div>';
+}
+async function wireShelfRow(areaName,shelf,col){
+  const row=document.querySelector('.shelf-row[data-col="'+col+'"]'); if(!row) return;
+  const picker=row.querySelector(".shelf-lot");
+  wireLotPicker(picker, {});
+  row.querySelector(".shelf-save").onclick=async ()=>{
+    const lotId=lotPickVal(picker);
+    const existing=(DB.storageSlots||[]).find(s=>s.area===areaName && +s.shelf===+shelf && s.col===col);
+    if(!lotId){ toast("Pick a lot first — or use Clear to empty this slot"); return; }
+    const dup=(DB.storageSlots||[]).find(s=>s.lotId===lotId && (!existing || s.id!==existing.id));
+    if(dup){ toast(lotId+" is already stored at "+dup.area+", shelf "+dup.shelf+", column "+dup.col); return; }
+    const row2=Object.assign({}, existing||{}, {area:areaName, shelf:+shelf, col:col, lotId:lotId});
+    const res=await API.save("storageSlots", row2);
+    if(res && res.error){ toast(res.error); return; }
+    await API.db(); toast("Saved to shelf "+shelf+", column "+col); document.getElementById("shelfOverlay").remove(); openShelfModal(areaName,shelf); paintStorageGrid(areaName);
+  };
+  const clearBtn=row.querySelector(".shelf-clear");
+  if(clearBtn) clearBtn.onclick=async ()=>{
+    const existing=(DB.storageSlots||[]).find(s=>s.area===areaName && +s.shelf===+shelf && s.col===col);
+    if(existing) await API.del("storageSlots", existing.id);
+    await API.db(); toast("Cleared shelf "+shelf+", column "+col); document.getElementById("shelfOverlay").remove(); openShelfModal(areaName,shelf); paintStorageGrid(areaName);
+  };
+}
+
 function exportScheduleToExcel(){
   if(!S) return;
   const header=["Machine","Type","Kind","Batch","Order","Start (t+min)","Duration (min)","Step"];
@@ -403,7 +502,7 @@ function exportScheduleToExcel(){
   XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch"};
+const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch",storage:"op_storage"};
 boot(()=>{
   f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
   f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
@@ -415,6 +514,7 @@ boot(()=>{
   b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshMachines(); });
   b_order.addEventListener("change",()=>{ bRefreshShades(); });
   bRefreshShades(); bRefreshOrders(); bRefreshMachines(); bLotCount(); bSyncTotals(); bLockQuality(); renderBatchList();
+  renderStorageMap();
   // show only the section tabs this role may see
   const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));
   document.querySelectorAll('#secTabs button').forEach(b=>{ b.style.display=allowed.includes(b.dataset.s)?"":"none"; });
