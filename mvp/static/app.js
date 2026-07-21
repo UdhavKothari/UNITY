@@ -115,15 +115,6 @@ function pickTakas(pool, target){
   }
   return {takas:items.slice().sort((a,b)=>b-a), total:Math.round(all), pcs:items.length, short:false};
 }
-function lotRemainingTakas(lotId){
-  const l=(DB.lots||[]).find(x=>x.id===lotId); if(!l) return [];
-  const pool=(l.takas||[]).map(Number).filter(n=>!isNaN(n));
-  (DB.batches||[]).forEach(b=>(b.lots||[]).forEach(r=>{
-    if(r.lotId===lotId && Array.isArray(r.takas))
-      r.takas.forEach(t=>{ const i=pool.indexOf(+t); if(i>=0) pool.splice(i,1); });
-  }));
-  return pool;
-}
 
 /* ---------- synthesize taka lengths when only piece-count + total meters are known ---------- */
 /* Used by the lot importer: the source sheet has BAL PC / BAL MTS but no per-piece lengths.
@@ -211,19 +202,36 @@ function batchLabel(id){
   return id+"  \u00b7  "+(b.quality||"")+(b.shadeNo?(" / "+b.shadeNo):"")+"  \u00b7  "+t.pcs+" pcs / "+t.mtr+" m";
 }
 
-/* ---------- lot allocation: a lot used in a batch is blocked ---------- */
-function lotAllocation(lotId){
-  let pcs=0, mtr=0; const by=[];
+/* ---------- lot allocation: memoized per DB snapshot (was O(batches) per call — see Task 1 in
+   docs/superpowers/plans/2026-07-21-scale-and-storage.md for why this matters at scale) ---------- */
+let _lotAllocCache = null;   // {forDB, map}
+function _lotAllocMap(){
+  if(_lotAllocCache && _lotAllocCache.forDB===DB) return _lotAllocCache.map;
+  const map={};
+  (DB.lots||[]).forEach(l=>{ map[l.id]={pcs:0, mtr:0, by:[], pool:(l.takas||[]).map(Number).filter(n=>!isNaN(n))}; });
   (DB.batches||[]).forEach(b=>{
     const rows = b.lots || (b.lotIds||[]).map(id=>({lotId:id}));
-    rows.forEach(r=>{ if(r.lotId===lotId){ by.push(b.id); pcs+=+r.pcs||0; mtr+=+r.mtr||0; } });
+    rows.forEach(r=>{
+      const m=map[r.lotId]; if(!m) return;
+      m.by.push(b.id); m.pcs+=+r.pcs||0; m.mtr+=+r.mtr||0;
+      if(Array.isArray(r.takas)) r.takas.forEach(t=>{ const i=m.pool.indexOf(+t); if(i>=0) m.pool.splice(i,1); });
+    });
   });
+  _lotAllocCache={forDB:DB, map};
+  return map;
+}
+function lotRemainingTakas(lotId){
+  const m=_lotAllocMap()[lotId];
+  return m ? m.pool.slice() : [];
+}
+function lotAllocation(lotId){
+  const m=_lotAllocMap()[lotId];
+  if(!m) return {used:false, blocked:false, batches:[], pcs:0, mtr:0, total:0, totalPcs:0, remaining:0, remainingPcs:0};
   const t=lotTotals([lotId]);
-  const left=lotRemainingTakas(lotId);
-  const remaining=Math.round(left.reduce((a,b2)=>a+b2,0));
-  const remainingPcs=left.length;
-  return {used:by.length>0, blocked:remaining<=0 && by.length>0,   // blocked only when fully consumed
-          batches:[...new Set(by)], pcs:pcs, mtr:Math.round(mtr),
+  const remaining=Math.round(m.pool.reduce((a,b2)=>a+b2,0));
+  const remainingPcs=m.pool.length;
+  return {used:m.by.length>0, blocked:remaining<=0 && m.by.length>0,
+          batches:[...new Set(m.by)], pcs:m.pcs, mtr:Math.round(m.mtr),
           total:t.mtr, totalPcs:t.pcs, remaining:remaining, remainingPcs:remainingPcs};
 }
 function lotsAvailable(quality){
