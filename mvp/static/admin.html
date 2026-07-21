@@ -816,7 +816,7 @@ function bulkAddFields(table){
 }
 function bulkAddKeyOf(table, row){
   const keys=BULK_ADD_KEY_FIELDS[table] || [bulkAddFields(table)[0].k];
-  return keys.map(k=>String(row[k]==null?"":row[k])).join("");
+  return keys.map(k=>String(row[k]==null?"":row[k])).join("\0");
 }
 function bulkAddOptsFor(f){
   if(f.t==="select") return f.o;
