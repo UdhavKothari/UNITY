@@ -457,9 +457,8 @@
     {
       "id": "A-01",
       "name": "Inward Shed A",
-      "shelves": 10,
-      "rowsPerShelf": 4,
-      "colsPerShelf": 6,
+      "shelfCount": 10,
+      "colCount": 6,
       "locX": 10,
       "locY": 5,
       "floor": 0
@@ -467,9 +466,8 @@
     {
       "id": "A-02",
       "name": "RFD Store B",
-      "shelves": 8,
-      "rowsPerShelf": 4,
-      "colsPerShelf": 6,
+      "shelfCount": 8,
+      "colCount": 6,
       "locX": 20,
       "locY": 5,
       "floor": 0
@@ -477,14 +475,14 @@
     {
       "id": "A-03",
       "name": "Finished Store C",
-      "shelves": 12,
-      "rowsPerShelf": 5,
-      "colsPerShelf": 6,
+      "shelfCount": 12,
+      "colCount": 6,
       "locX": 30,
       "locY": 8,
       "floor": 1
     }
   ],
+  "storageSlots": [],
   "qualityRecipes": [
     {
       "id": "QR-01",

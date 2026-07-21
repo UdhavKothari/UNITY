@@ -11,6 +11,11 @@ const API = {
 
 /* ---------- lookups ---------- */
 const byName = (arr,n)=> arr.find(x=>x.name===n);
+function colLetter(i){    // 0-based index -> A, B, ... Z, AA, AB, ... (spreadsheet-style)
+  let n=i+1, s="";
+  while(n>0){ const r=(n-1)%26; s=String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); }
+  return s;
+}
 const Q = n => byName(DB.qualities,n);
 /* ---- rebrands: qualities sharing a non-empty fabricGroup tag are the exact same physical fabric,
    just sold under different names. Each quality keeps its own GSM/route/maxBatch (no inheritance —

@@ -27,12 +27,12 @@ SESSION_TTL = 12 * 3600       # 12 hours
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch",
              "dashboard","machines","qualities","shadeRecipes","qualityRecipes",
              "batches","lots","weavers",
-             "customers","orders","storageAreas","suppliers","operators","qcMetrics",
+             "customers","orders","storageAreas","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","urgent_flag"]
 
 def _next_seq_id(db, table):
     """human-readable, sequential, system-generated id (never client supplied)"""
-    prefix = {"lots":"LOT","batches":"B","orders":"SO","weavers":"WV"}.get(table, table[:2].upper())
+    prefix = {"lots":"LOT","batches":"B","orders":"SO","weavers":"WV","storageSlots":"SL"}.get(table, table[:2].upper())
     seq = db.setdefault("_seq", {})
     n = int(seq.get(table, 0)) + 1
     seq[table] = n
