@@ -166,7 +166,7 @@ async function submitOrder(){
     <div class="small muted">${totalM} m of ${esc(o.qual)} @ ${q.gsm} gsm across ${lines.length} shade(s) → <b>${totalKg.toFixed(0)} kg</b></div>
     <div style="margin:8px 0">Split into <b>${batches.length}</b> batch(es):
       ${batches.map(b=>`<span class="chip"><span class="swatch" style="background:${shadeColor(b.shade,b.qual)}"></span>${b.key} · ${esc(b.shade)} · ${b.meters} m · ${b.kg} kg</span>`).join("")}</div>
-    <div class="small muted">Route: pre-treat (${q.pt_mc1||'—'}${q.pt_mc2?(' → '+q.pt_mc2):''}) → RFD → dye (${q.dyeType}). Each op reserves ${(cfg().loadMin+cfg().unloadMin)} min handling.</div>
+    <div class="small muted">Route: pre-treat (${q.pt_mc1||'—'}${q.pt_mc2?(' → '+q.pt_mc2):''}) → RFD → dye (${q.dyeType}). Each op reserves ${(+q.loadMin||cfg().loadMin||35)+(+q.unloadMin||cfg().unloadMin||25)} min handling.</div>
     <div style="margin-top:8px"><b>Next step:</b> create the batches for this order in <b>Batch maker</b> — the schedule is driven by batches, not orders.
       <div class="small muted" style="margin-top:4px">The split above is an estimate to guide batching. Link each batch to <b>${esc(o.id)}</b> so it groups under this order in the plan.</div></div>`;
   toast("Order saved");
