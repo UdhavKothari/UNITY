@@ -388,6 +388,7 @@ function render(){
     +'<div class="spacer"></div>'
     +(CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
+    +(BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
     +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
     +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
       +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
@@ -762,6 +763,61 @@ async function commitLotImport(){
   document.getElementById("importOverlay").remove();
   renderNav(); render();
   toast("Imported "+ok+" of "+plan.rows.length+" lots");
+}
+const BULK_ADD_TABLES=["machines","customers","suppliers","operators","qcMetrics","shadeRecipes","qualityRecipes","weavers"];
+const BULK_ADD_SKIP_TYPES=new Set(["readonly","perms","aux","takas","lotTotal","lotqty","batchTotal","lotsel","password"]);
+function bulkAddFields(table){
+  return SCHEMAS[table].fields.filter(f=>!BULK_ADD_SKIP_TYPES.has(f.t)).slice(0,7);
+}
+function openBulkAdd(table){
+  const sc=SCHEMAS[table], fields=bulkAddFields(table);
+  const allSimple=SCHEMAS[table].fields.filter(f=>!BULK_ADD_SKIP_TYPES.has(f.t));
+  const ex=document.getElementById("bulkOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="bulkOverlay"; o.className="modal-bg on";
+  const colList=fields.map(f=>f.l).join(", ");
+  o.innerHTML='<div class="modal" style="width:640px;max-width:94vw">'
+    +'<div class="m-h"><h3>Bulk add '+esc(sc.label.toLowerCase())+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b"><p class="small muted">One '+esc(sc.single)+' per line, comma or tab separated, in this order: <b>'+esc(colList)+'</b>. '
+    +'An existing '+esc(sc.single)+' (matched by <b>'+esc(fields[0].l)+'</b>) updates in place instead of duplicating.'
+    +(fields.length<allSimple.length ? ' Remaining fields still need the full Edit form.' : '')+'</p>'
+    +'<textarea id="bulkText" rows="10" placeholder="'+esc(fields.map(f=>f.l).join(", "))+'"></textarea>'
+    +'<div id="bulkPreview" class="small muted" style="margin-top:8px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" id="bulkSaveBtn" onclick="commitBulkAdd(\''+table+'\')">Save all</button></div></div>';
+  document.body.appendChild(o);
+  document.getElementById("bulkText").addEventListener("input", ()=>{
+    const n=parseBulkAdd(table, document.getElementById("bulkText").value).length;
+    document.getElementById("bulkPreview").innerHTML = n ? ('<b class="tnum">'+n+'</b> row(s) ready') : "";
+  });
+}
+function parseBulkAdd(table, text){
+  const fields=bulkAddFields(table);
+  return text.split("\n").map(l=>l.trim()).filter(Boolean).map(line=>{
+    const parts=line.split(/\t|,/).map(s=>s.trim());
+    const row={};
+    fields.forEach((f,i)=>{
+      let v=parts[i]!==undefined ? parts[i] : "";
+      if(f.t==="number") v=v===""?"":+v;
+      else if(f.t==="bool") v=/^(y|yes|true|1)$/i.test(v);
+      else if(f.t==="select" && f.o && v && f.o.indexOf(v)<0) v="";
+      row[f.k]=v;
+    });
+    return row;
+  }).filter(r=>r[fields[0].k]);
+}
+async function commitBulkAdd(table){
+  const rows=parseBulkAdd(table, document.getElementById("bulkText").value);
+  if(!rows.length){ toast("Nothing to add"); return; }
+  const btn=document.getElementById("bulkSaveBtn"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
+  const idKey=bulkAddFields(table)[0].k;
+  const byKey={}; (DB[table]||[]).forEach(r=>{ byKey[r[idKey]]=r; });
+  for(const r of rows){
+    const existing=byKey[r[idKey]];
+    const row=existing ? Object.assign({},existing,r) : r;
+    await API.save(table, row);
+  }
+  await API.db(); document.getElementById("bulkOverlay").remove(); renderNav(); render();
+  toast("Saved "+rows.length+" record(s)");
 }
 function openQualityQuickAdd(){
   const ex=document.getElementById("qqaOverlay"); if(ex) ex.remove();
