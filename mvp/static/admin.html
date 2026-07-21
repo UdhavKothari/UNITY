@@ -296,7 +296,7 @@ function renderNav(){
   document.getElementById("nav").innerHTML=h;
 }
 document.getElementById("nav").addEventListener("click",e=>{
-  const el=e.target.closest(".navitem"); if(!el)return; CUR=el.dataset.t; renderNav(); render();
+  const el=e.target.closest(".navitem"); if(!el)return; clearTimeout(_searchDebounce); CUR=el.dataset.t; renderNav(); render();
 });
 
 function cellVal(table,r,k){

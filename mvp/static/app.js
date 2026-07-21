@@ -212,7 +212,8 @@ function _lotAllocMap(){
   (DB.batches||[]).forEach(b=>{
     const rows = b.lots || (b.lotIds||[]).map(id=>({lotId:id}));
     rows.forEach(r=>{
-      const m=map[r.lotId]; if(!m) return;
+      if(!map[r.lotId]) map[r.lotId]={pcs:0, mtr:0, by:[], pool:[]};
+      const m=map[r.lotId];
       m.by.push(b.id); m.pcs+=+r.pcs||0; m.mtr+=+r.mtr||0;
       if(Array.isArray(r.takas)) r.takas.forEach(t=>{ const i=m.pool.indexOf(+t); if(i>=0) m.pool.splice(i,1); });
     });
