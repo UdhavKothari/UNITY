@@ -345,7 +345,6 @@ function routeOf(q, meters){
 
 /* ---------- scheduler: walks each batch through its 4-step route ---------- */
 function computeSchedule(){
-  const H = (cfg().loadMin||35)+(cfg().unloadMin||25);
   const BUF = cfg().buffer||1.2;
   const tl={}; DB.machines.forEach(m=> tl[m.id]={cursor:0,last:null,blocks:[],mc:m});
   let batches=batchesForSchedule();   // the Batch maker is the source of truth for scheduling
@@ -358,6 +357,7 @@ function computeSchedule(){
     let t=0, steps=routeOf(b.q, b.meters);
     if(b.redye) steps=steps.filter(st=>st.idx>= (+b.q.dyeStep||3));   // redye goes straight back to the dye machine
     if(!steps.length){ b.unplanned=true; return; }
+    const H = (+b.q.loadMin||cfg().loadMin||35) + (+b.q.unloadMin||cfg().unloadMin||25);
     steps.forEach(st=>{
       const occ=H+st.time;
       let elig=DB.machines.filter(m=> m.type===st.mc && (!st.isDye || (m.capMax||0)>=b.kg));
@@ -395,7 +395,7 @@ function computeSchedule(){
   });
 
   const maxMin=Math.max.apply(null,[60].concat(DB.machines.map(m=>tl[m.id].cursor)))+30;
-  return {tl,batches,washCount,orderFinish,batchCount:batches.length,maxMin,H,BUF};
+  return {tl,batches,washCount,orderFinish,batchCount:batches.length,maxMin,BUF};
 }
 
 /* ---------- gantt / floor rendering ---------- */
@@ -404,7 +404,6 @@ let LAST_S=null;
 
 function renderGantt(el,S,newKeys){
   newKeys=newKeys||[]; LAST_S=S;
-  const H=cfg().loadMin||35, U=cfg().unloadMin||25;
   let html='<div class="axis"><div></div><div class="ticks" style="width:'+px(S.maxMin)+'px">';
   for(let h=0;h<=Math.ceil(S.maxMin/60);h+=2) html+='<span class="tk" style="left:'+px(h*60)+'px">t+'+h+'h</span>';
   html+='</div></div>';
@@ -419,7 +418,7 @@ function renderGantt(el,S,newKeys){
       else{const bt=b.batch;const hot=newKeys.indexOf(bt.key)>=0?" newb":"";
         const marks=(bt.urgent?'<span class="material-symbols-rounded blk-ic">priority_high</span>':'')
                    +(bt.notes?'<span class="material-symbols-rounded blk-ic">sticky_note_2</span>':'');
-        html+='<div class="blk'+hot+(bt.urgent?' urgent':'')+'" data-bk="'+bt.key+'" style="left:'+left+'px;width:'+w+'px;background:'+shadeColor(bt.shade,bt.qual)+';color:'+(bt.tone>5?'#fff':'#20242c')+'"><div class="cap l" style="width:'+px(H)+'px"></div><div class="cap r" style="width:'+px(U)+'px"></div>'+marks+esc(bt.shade)+'<small>'+esc(bt.order)+' - '+bt.meters+'m</small></div>';}
+        html+='<div class="blk'+hot+(bt.urgent?' urgent':'')+'" data-bk="'+bt.key+'" style="left:'+left+'px;width:'+w+'px;background:'+shadeColor(bt.shade,bt.qual)+';color:'+(bt.tone>5?'#fff':'#20242c')+'"><div class="cap l" style="width:'+px((+bt.q.loadMin||cfg().loadMin||35))+'px"></div><div class="cap r" style="width:'+px((+bt.q.unloadMin||cfg().unloadMin||25))+'px"></div>'+marks+esc(bt.shade)+'<small>'+esc(bt.order)+' - '+bt.meters+'m</small></div>';}
     });
     html+='</div></div>';
   });

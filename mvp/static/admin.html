@@ -84,6 +84,8 @@ const SCHEMAS={
       {k:"gsm",l:"Greige GSM",sec:"Fabric",t:"number",req:true,min:1,help:"Converts order meters to kg"},
       {k:"width",l:"Width (inch)",sec:"Fabric",t:"number",min:1},
       {k:"maxBatch",l:"Max batch (kg)",sec:"Fabric",t:"number",req:true,min:1},
+      {k:"loadMin",l:"Loading time (min)",sec:"Fabric",t:"number",min:0,help:"Falls back to the Settings default if left blank"},
+      {k:"unloadMin",l:"Unloading time (min)",sec:"Fabric",t:"number",min:0,help:"Falls back to the Settings default if left blank"},
       {k:"step1_mc",l:"Step 1 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
       {k:"step1_time",l:"Step 1 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0,showIf:{k:"step1_mc",ne:"stentor"}},
       {k:"step1_speed",l:"Step 1 speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Time = meters ÷ speed + setup",showIf:{k:"step1_mc",eq:"stentor"}},
@@ -905,8 +907,8 @@ function renderSettings(c){
    +'<label class="fld">Minimum load (meters)<input id="s_min" type="number" value="'+s.minMeters+'"><span class="help">No batch below this</span></label>'
    +'<label class="fld">Stentor setup (min)<input id="s_sten" type="number" value="'+(s.stentorSetupMins||90)+'"><span class="help">Fixed time added to meters &divide; speed</span></label>'
    +'<label class="fld">Promise buffer (x)<input id="s_buf" type="number" step="0.05" value="'+s.buffer+'"><span class="help">Route time multiplier</span></label>'
-   +'<label class="fld">Loading time (min)<input id="s_load" type="number" value="'+s.loadMin+'"></label>'
-   +'<label class="fld">Unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"></label>'
+   +'<label class="fld">Default loading time (min)<input id="s_load" type="number" value="'+s.loadMin+'"><span class="help">Used only when a quality has no loading time of its own</span></label>'
+   +'<label class="fld">Default unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"><span class="help">Used only when a quality has no unloading time of its own</span></label>'
    +'<label class="fld">Family preference penalty (min)<input id="s_fampen" type="number" value="'+(s.familyPreferencePenaltyMins||120)+'"><span class="help">A non-preferred machine only wins over a preferred one if it finishes at least this much sooner</span></label>'
    +'</div><button class="btn" onclick="saveSettings()">Save settings</button></div></div>';
 }
