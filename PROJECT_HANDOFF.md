@@ -25,27 +25,28 @@ An ERP MVP (v1: **Planning & Scheduling**) for a textile **dyeing mill**. It tur
 ## Auth & roles (built and tested)
 - Login gates the **whole app**. Seed admin username **ADMIN** (default password is in `mvp/README.md`; change it after first login via top-right → Password).
 - Passwords hashed with **PBKDF2-HMAC-SHA256** (200k iterations, per-user salt); never stored or sent in plaintext. Sessions are in-memory with an **HttpOnly cookie** (12h).
-- **Roles master = per-page permissions (Discord-style):** each "page" is grantable per role. Page keys (server `ALL_PAGES`, mirrored in admin `PAGES`): `op_floor, op_schedule, op_order, dashboard, machines, qualities, shadeRecipes, qualityRecipes, customers, orders, storageAreas, suppliers, operators, qcMetrics, users, roles, plan, settings`.
+- **Roles master = per-page permissions (Discord-style):** each "page" is grantable per role. Page keys (server `ALL_PAGES`, mirrored in admin `PAGES`): `op_floor, op_schedule, op_order, op_batch, op_storage, dashboard, machines, qualities, shadeRecipes, qualityRecipes, customers, orders, storageAreas, suppliers, operators, qcMetrics, users, roles, plan, settings`.
 - The **server enforces permissions on every mutation (403)** — UI hiding is defense-in-depth only.
 - Admin creates **users** (username + password + role + active) and **roles** (name + permission checkboxes).
 - ⚠ **No HTTPS yet** — add TLS before any company-domain / internet hosting.
 
 ## Data model (master tables)
-- **machines** — type (drum/jigger/jet/stentor/hydro/rope), capMin/capMax (kg), wash (min), plc, lastMaint/schedMaint.
-- **qualities** — greige gsm, width, dyeType, dyeMins, finishMins, maxBatch, + **2-step pre-treatment** (pt_mc1/time_req1, pt_mc2/time_req2).
+- **machines** — type (drum/jigger/jet/stentor/hydro/rope), capMin/capMax (kg), wash (min), plc, lastMaint/schedMaint, **shadeFamilies** (multi-select — soft scheduling preference for the dye step).
+- **qualities** — greige gsm, width, dyeType, dyeMins, finishMins, maxBatch, **loadMin/unloadMin** (per-quality handling time, falls back to Settings default if blank), **fabricGroup** (free-text tag — qualities sharing a tag are treated as the same fabric for batching/shades), + **2-step pre-treatment** (pt_mc1/time_req1, pt_mc2/time_req2).
 - **shadeRecipes** — **quality-specific**: quality, shade, family, tone (0 light → 10 dark), dye1-3 + %, program, spectrophotometer standard (specL/speca/specb + allowed ΔE `dETol`).
 - **qualityRecipes** — auxiliary/process chemicals (aux1..5 now; infra for 20).
 - **customers**, **suppliers**, **operators**, **qcMetrics**.
 - **orders** — multi-shade: `lines:[{shade, m}]`, cust, qual, due (days), pri (1 urgent–3 low).
-- **storageAreas** — shelves × rowsPerShelf × colsPerShelf (for taka indexing), floor, locX/locY.
-- **users**, **roles**, **settings** (widthDefault 56, minMeters 300, buffer 1.20, loadMin 35, unloadMin 25).
+- **storageAreas** — name, **shelfCount** × **colCount** (grid dimensions, drives the Storage tab), floor, locX/locY.
+- **storageSlots** — lot-linked occupied slot: `{area, shelf(number), col(letter), lotId, notes}`. Only occupied coordinates exist as rows.
+- **users**, **roles**, **settings** (widthDefault 56, minMeters 300, buffer 1.20, **loadMin/unloadMin now the fallback default** for qualities without their own — see item 18 below, **familyPreferencePenaltyMins** default 120 — see item 17).
 
 ## Scheduler (greedy campaign scheduler, in `app.js` `computeSchedule`)
 1. meters → kg = `meters × (width_in × 0.0254) × gsm / 1000`.
 2. Split order into batches ≤ `maxBatch`, never below **300 m** min load.
 3. **Pass 1 — pre-treatment** (2 steps) on shared **drums/jiggers** (jiggers are a **shared pool** with dyeing) → sets `rfdReady` (the RFD buffer point).
-4. **Pass 2 — dyeing campaigns**: light → dark by tone per machine; a **wash auto-inserts** when the shade family changes or tone drops; a batch can't start before its `rfdReady`.
-5. Every machine operation reserves **60 min handling** (35 load + 25 unload).
+4. **Pass 2 — dyeing campaigns**: light → dark by tone per machine; a **wash auto-inserts** when the shade family changes or tone drops; a batch can't start before its `rfdReady`. If a machine is tagged with the batch's shade family (Admin → Machines → Shade families), it's preferred — but only *softly*: a non-preferred machine still wins if it finishes meaningfully sooner (configurable penalty, Settings → Family preference penalty, default 120 min).
+5. Every machine operation reserves handling time = that quality's own **loadMin/unloadMin** (Admin → Qualities), falling back to Settings' default (35 load + 25 unload) if the quality hasn't set its own.
 6. Promise date = (route time + finishing) × **1.20** buffer; flags if it misses the due date.
 - Verified: 0 overlaps / capacity violations / tone-drops / dye-before-RFD.
 
@@ -176,4 +177,42 @@ Some qualities are the exact same physical fabric sold again under a different c
 - **Shades**: `shadesForQuality()`/`SH()` in `app.js` look across the whole tag group, so both names see the same shade list — set shades up once under either name.
 - **GSM/route/max batch are *not* inherited** — each quality keeps its own (deliberately simple: a tag, not a data hierarchy). If the rebrand really is identical fabric, fill in matching GSM/route on both; the app won't auto-sync them.
 - (Considered a "canonical alias" model where GSM/route/shades would auto-inherit from one parent quality — owner decided that was more confusing than useful; the flat tag is what shipped.)
+
+## Update — 21 Jul 2026 (scale-up + storage)
+
+Seven-task plan (`docs/superpowers/plans/2026-07-21-scale-and-storage.md`), executed with `superpowers:subagent-driven-development` — fresh subagent per task, spec-compliance + code-quality review after each, then one whole-branch review at the end. Prompted by the owner needing the app ready for **mass data entry** (hundreds of qualities, ~20 shades each) plus new machine-assignment and storage-tracking capability. All 12 commits (`2a62608`..`27235e0`) are on `master`.
+
+### 14. Performance: lot allocation no longer scans every batch per lot
+`lotAllocation()`/`lotRemainingTakas()` in `app.js` used to re-scan the *entire* batches array on every call — O(lots × batches), fine at demo scale, a real problem heading into hundreds of qualities / thousands of lots. Replaced with `_lotAllocMap()`, a single O(lots + batches) pass memoized per `DB` object reference (auto-invalidates whenever the data reloads). Admin table search also got a **debounce** so typing in a search box with thousands of rows doesn't re-render on every keystroke.
+
+### 15. Bulk (mass) add for every master table
+Admin → any of **Machines, Customers, Suppliers, Operators, QC metrics, Shade recipes, Quality recipes, Weavers** → **Bulk add**. Paste one row per line, comma-separated fields in schema order; matches an existing record (by name, or by a compound key for tables like Shade recipes where `quality` alone isn't unique — see `BULK_ADD_KEY_FIELDS`) and updates it in place instead of duplicating. Relational-select fields (machine type, quality, etc.) are validated against the live DB before commit rather than silently accepting garbage.
+- ⚠ Qualities itself isn't in the bulk-add table list — it already has its own dedicated Quick add (item 4 above), which is deliberately narrower/simpler for that table's specific fields.
+
+### 16. Excel export for every master table, Batch maker, and the schedule
+Every Admin table, plus Operations → Batch maker's batch list and the Schedule view, now has an **Export** button producing a real `.xlsx` (vendored SheetJS, same library as the Task 3-era lot importer — no server round-trip, generated client-side from the same rendered data as the on-screen table).
+
+### 17. Machines can be tagged with preferred shade families (soft preference)
+Admin → Machines → **Shade families** (multi-select). When scheduling a batch's dye step, a machine tagged for that shade's family is preferred, but it's a **soft** preference, not a lock: `computeSchedule()` scores each eligible machine as `finish time + penalty (if not preferred)`, so a busy preferred machine can still lose to a free non-preferred one. Penalty is configurable at Admin → Settings → **Family preference penalty (min)** (default 120). Backward compatible — with no machine tagged (today's live state), scheduling is unchanged.
+
+### 18. Loading/unloading handling time moved from global Settings to per-Quality
+Every quality now has its own **Loading time (min)** / **Unloading time (min)** fields (Admin → Qualities). The old Settings fields (Admin → Settings) are relabeled **"Default loading/unloading time"** and now only apply as a fallback for qualities that haven't set their own. `computeSchedule()`, the Gantt's handling-time cap widths, and the order-confirmation preview text all read the per-quality value with the same fallback.
+
+### 19. Storage data model: lot-linked slots, numbered shelves, lettered columns
+New `storageSlots` table (`{id, area, shelf(number), col(letter), lotId, notes}`) — only *occupied* slots are materialized as rows; an empty coordinate simply has no record. `storageAreas` gained `shelfCount`/`colCount` (replacing the old `shelves`/`rowsPerShelf`/`colsPerShelf` fields) so a grid can be drawn without per-cell records existing in advance. New `colLetter(i)` helper in `app.js` does spreadsheet-style column lettering (0→A … 25→Z, 26→AA, 27→AB, …).
+
+### 20. Visual Storage tab
+Operations gained a fifth section tab, **Storage** (`op_storage` permission, same pattern as the existing Batch maker tab). Shows a grid — shelf numbers down the side, lettered columns across — for the selected storage area; occupied cells are tagged with their lot id and tinted, empty cells are plain. Clicking any shelf number or cell opens a modal listing every column on that shelf as an editable row (assign or clear a lot via the same searchable lot picker used in Batch maker), with a duplicate-lot guard so one lot can't occupy two slots at once. Went through an explicit design + copy polish pass (touch targets, focus-visible states, aria-labels, empty-state and toast copy matched to the app's existing voice) as its own step, per the `impeccable` skill's "polish last, not first" rule.
+
+### Fixes caught during review (all 7 tasks)
+- Orphaned lot references (a batch pointing at a deleted lot) no longer silently drop out of the allocation map.
+- Bulk-add's shade-recipe matching now uses a **delimited** compound key (`quality\0shade`) — the original undelimited join could theoretically conflate two different quality/shade pairs at a value boundary (e.g. `"AB"+"CD"` vs `"ABC"+"D"`).
+- A storage-area name containing an apostrophe could break out of the Storage tab's inline `onclick` JS string and inject script (low-severity, admin-entered-only) — fixed by escaping single quotes at both call sites. The same latent pattern exists at two pre-existing, out-of-scope spots in Admin's bulk-add UI (`admin.html:412`, `:848`) — both are safe today (table names are a hardcoded whitelist, never admin-entered text) but worth a general `esc()`-for-JS-context sweep if that ever changes.
+
+### Known non-issues, deliberately left as-is (final review's call)
+- A quality's `loadMin`/`unloadMin` of exactly `0` is indistinguishable from "unset" and falls back to the Settings default (JS `||` falsy-zero) — not fixed, since zero-minute handling isn't a real scenario on a dye floor and a `??` swap would actually break the intentional "blank string → fallback" behavior for genuinely-unset fields.
+- `storageSlots`' intended `SL-` id prefix is dead code (falls through to the same `ST-` prefix as `storageAreas`, since neither is in the server's `SYSTEM_IDS` list) — cosmetic only, IDs stay unique via the random suffix, mirrors a pre-existing identical gap for `weavers`/`WV`.
+
+### Still pending (not part of this plan)
+- **Quality Quick Add: derive GSM from lot data** — when adding/updating a quality via Quick add, if GSM isn't given directly, calculate it from a linked lot's meters + weight (assuming 54" width). Requested mid-session, deliberately deferred to land after this plan.
 - ⚠ Not done: Admin's own batch-edit modal (`lotQRow`/`lotQRows`) and order-matching (`bRefreshOrders`) still compare by literal quality name, not fabric group — lower priority than the Operations Batch Maker, which is the daily-use path.
