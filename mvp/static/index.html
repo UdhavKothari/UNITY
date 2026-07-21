@@ -48,7 +48,7 @@
   <section class="view" id="v-sched" style="display:none">
     <div class="bar">
       <span class="small muted" id="schednote"></span>
-    </div>
+      <button class="btn ghost sm" onclick="exportScheduleToExcel()"><span class="material-symbols-rounded">download</span>Export</button></div>
     <div class="gantt" id="gantt"></div>
     <div class="legend" id="legend"></div>
   </section>
@@ -91,12 +91,14 @@
         <div class="result" id="batchResult"></div>
       </div>
     </div>
-    <div class="card"><div class="card-h"><h2>Recent batches</h2><span class="sub" id="batchCount"></span></div>
+    <div class="card"><div class="card-h"><h2>Recent batches</h2><span class="sub" id="batchCount"></span>
+      <button class="btn ghost sm" onclick="exportBatchesToExcel()"><span class="material-symbols-rounded">download</span>Export</button></div>
       <div class="tbl-wrap" id="batchList"></div>
     </div>
   </section>
 </main>
 
+<script src="vendor/xlsx.full.min.js"></script>
 <script src="app.js"></script>
 <script>
 let S=null, CLOCK=0;
@@ -375,6 +377,30 @@ function renderBatchList(){
   el.innerHTML='<table><thead><tr><th>Batch</th><th>Lots</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>In</th><th>Out</th><th>pH</th><th>Operator</th><th>Shift</th></tr></thead><tbody>'
     +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td><td class="tnum">${esc(b.inTime||"")}</td><td class="tnum">${esc(b.outTime||"")}</td><td class="tnum">${esc(b.ph)}</td><td>${esc(b.operator||"")}</td><td>${b.shift?`<span class="pill ${b.shift==="Night"?"wash":"pre"}">${esc(b.shift)}</span>`:""}</td></tr>`).join("")
     +'</tbody></table>';
+}
+function exportBatchesToExcel(){
+  const header=["Batch","Lot no.","Quality","Shade","Pcs","Mtr","Kg","In","Out","pH","Operator","Shift"];
+  const body=(DB.batches||[]).slice().reverse().map(b=>[
+    b.id, (b.lotIds||[]).join(", "), b.quality, b.shadeNo||"", b.pcs, b.mtr, b.weight,
+    b.inTime||"", b.outTime||"", b.ph||"", b.operator||"", b.shift||""]);
+  const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Batches");
+  XLSX.writeFile(wb, "Batches_"+new Date().toISOString().slice(0,10)+".xlsx");
+}
+function exportScheduleToExcel(){
+  if(!S) return;
+  const header=["Machine","Type","Kind","Batch","Order","Start (t+min)","Duration (min)","Step"];
+  const body=[];
+  DB.machines.forEach(m=>{
+    (S.tl[m.id].blocks||[]).forEach(b=>{
+      body.push([m.id, m.type, b.kind, b.batch?b.batch.batchId:"", b.batch?b.batch.order:"", b.start, b.mins, b.step||""]);
+    });
+  });
+  const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Schedule");
+  XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
 const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch"};

@@ -342,6 +342,15 @@ function cellText(table,r,k){
   _textCache.innerHTML=cellVal(table,r,k);
   return (_textCache.textContent||"").trim();
 }
+function exportTableToExcel(table){
+  const sc=SCHEMAS[table], rows=DB[table]||[];
+  const header=sc.cols.map(x=>x[1]);
+  const body=rows.map(r=>sc.cols.map(x=>cellText(table,r,x[0])));
+  const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sc.label.slice(0,31));
+  XLSX.writeFile(wb, sc.label.replace(/[^a-z0-9]+/gi,"_")+"_"+new Date().toISOString().slice(0,10)+".xlsx");
+}
 const SORT={};
 function toggleSort(k){
   const cur=SORT[CUR];
@@ -389,7 +398,8 @@ function render(){
     +(CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +(BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
-    +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button></div>'
+    +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>'
+    +'<button class="btn ghost" onclick="exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export</button></div>'
     +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
       +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
     +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
