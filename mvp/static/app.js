@@ -372,13 +372,17 @@ function computeSchedule(){
         }
       }
       if(!elig.length){ b.unplanned=true; b.unplannedReason=b.unplannedReason||"No "+st.mc+" machine can take this "+(st.isDye?b.kg+" kg ":"")+"batch"; return; }
+      const familyPenalty=+cfg().familyPreferencePenaltyMins||120;
+      const preferSet=(st.isDye && b.family) ? new Set(DB.machines.filter(m=>(m.shadeFamilies||[]).includes(b.family)).map(m=>m.id)) : null;
       let best=null;
       elig.forEach(m=>{
         const q=tl[m.id];
         const needWash = st.isDye && q.last && (q.last.family!==b.family || q.last.tone>b.tone);
         const start=Math.max(q.cursor,t)+(needWash?(m.wash||0):0);
         const fin=start+occ;
-        if(!best||fin<best.fin) best={m,q,needWash,start,fin};
+        const penalty=(preferSet && preferSet.size && !preferSet.has(m.id)) ? familyPenalty : 0;
+        const score=fin+penalty;
+        if(!best||score<best.score) best={m,q,needWash,start,fin,score};
       });
       if(st.isDye && best.needWash){ best.q.blocks.push({kind:"wash",start:Math.max(best.q.cursor,t),mins:best.m.wash||0}); washCount++; }
       best.q.blocks.push({kind: st.isDye?"dye":"pre", batch:b, start:best.start, mins:occ, step:st.idx, mcType:st.mc});

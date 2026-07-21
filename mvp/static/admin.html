@@ -60,7 +60,7 @@ function ic(name){
 /* --- schemas: fields carry section (sec), type (t), help, req, min, max --- */
 const SCHEMAS={
   machines:{label:"Machines",single:"machine",
-    cols:[["id","ID"],["name","Name"],["type","Type"],["capMax","Cap kg"],["wash","Wash m"],["plc","PLC"],["lastMaint","Last maint."],["maintIntervalDays","Every (d)"],["maintDue","Next maint."]],
+    cols:[["id","ID"],["name","Name"],["type","Type"],["capMax","Cap kg"],["wash","Wash m"],["plc","PLC"],["shadeFamilies","Fam. pref"],["lastMaint","Last maint."],["maintIntervalDays","Every (d)"],["maintDue","Next maint."]],
     search:["id","name","type","company"],
     fields:[
       {k:"id",l:"MC ID",sec:"Identity",req:true,help:"Short code, e.g. JET-1"},
@@ -71,6 +71,7 @@ const SCHEMAS={
       {k:"capMax",l:"Capacity max (kg)",sec:"Capacity & process",t:"number",req:true,min:1,help:"Max fabric load the machine holds"},
       {k:"wash",l:"Wash cycle (min)",sec:"Capacity & process",t:"number",min:0,help:"Time to boil-out between incompatible shades"},
       {k:"plc",l:"PLC connected",sec:"Capacity & process",t:"bool"},
+      {k:"shadeFamilies",l:"Preferred shade families",sec:"Capacity & process",t:"famsel",help:"Scheduler prefers this machine for these families when it's free — a soft preference, not a hard restriction"},
       {k:"lastMaint",l:"Last maintenance done",sec:"Maintenance",t:"date"},
       {k:"maintIntervalDays",l:"Service every (days)",sec:"Maintenance",t:"number",min:0,help:"e.g. a drum every 60 days - the next date fills in automatically"},
       {k:"schedMaint",l:"Next maintenance (auto)",sec:"Maintenance",t:"readonly",help:"Calculated from last maintenance + interval"}]},
@@ -330,6 +331,7 @@ function cellVal(table,r,k){
   }
   if(k==="urgent") return r.urgent?'<span class="pill maint">urgent</span>':'';
   if(k==="permsCount") return (r.perms||[]).length+" pages";
+  if(k==="shadeFamilies") return (r.shadeFamilies||[]).length ? (r.shadeFamilies||[]).map(f=>'<span class="chip">'+esc(f)+'</span>').join("") : '<span class="muted">&mdash;</span>';
   if(k==="takaCount") return '<span class="tnum">'+((r.takas||[]).length)+'</span>';
   if(k==="lotCount") return '<span class="tnum">'+((DB.lots||[]).filter(l=>l.weaver===r.name).length)+'</span>';
   if(k==="lotMeters"){ const t=(r.takas||[]).map(Number).filter(n=>!isNaN(n)); return t.length?('<span class="tnum">'+Math.round(t.reduce((a,b)=>a+b,0))+'</span> <span class="muted">m</span>'):'<span class="muted">&mdash;</span>'; }
@@ -527,6 +529,12 @@ function fieldInput(f,val){
       +groups[g].map(p=>'<label style="display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink);margin:0"><input type="checkbox" data-perm="'+p[0]+'" '+(sel.indexOf(p[0])>=0?"checked":"")+' style="width:auto;margin:0">'+esc(p[1])+'</label>').join("")
       +'</div></div>').join("");
   }
+  if(f.t==="famsel"){
+    const sel=Array.isArray(val)?val:[];
+    return '<div style="display:flex;flex-wrap:wrap;gap:6px 16px">'
+      +FAMILIES.map(fam=>'<label style="display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink);margin:0"><input type="checkbox" data-fam="'+esc(fam)+'" '+(sel.indexOf(fam)>=0?"checked":"")+' style="width:auto;margin:0">'+esc(fam)+'</label>').join("")
+      +'</div>';
+  }
   if(f.t==="aux"){
     const list=Array.isArray(val)?val:[];
     return '<div class="auxbox" id="auxBox">'+list.map(auxRow).join("")+'</div>'
@@ -627,6 +635,7 @@ async function saveModal(){
   document.querySelectorAll("#mBody .fld").forEach(l=>l.classList.remove("invalid"));
   sc.fields.forEach(f=>{
     if(f.t==="perms"){ row.perms=[...document.querySelectorAll('#mBody [data-perm]')].filter(x=>x.checked).map(x=>x.dataset.perm); return; }
+    if(f.t==="famsel"){ row.shadeFamilies=[...document.querySelectorAll('#mBody [data-fam]')].filter(x=>x.checked).map(x=>x.dataset.fam); return; }
     if(f.t==="readonly") return;                       // system id — never submitted
     if(f.t==="aux"){ const b=document.getElementById("auxBox");
       row.aux = b?[...b.querySelectorAll(".auxrow")].map(r=>({name:r.querySelector(".a-name").value,
@@ -898,10 +907,11 @@ function renderSettings(c){
    +'<label class="fld">Promise buffer (x)<input id="s_buf" type="number" step="0.05" value="'+s.buffer+'"><span class="help">Route time multiplier</span></label>'
    +'<label class="fld">Loading time (min)<input id="s_load" type="number" value="'+s.loadMin+'"></label>'
    +'<label class="fld">Unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"></label>'
+   +'<label class="fld">Family preference penalty (min)<input id="s_fampen" type="number" value="'+(s.familyPreferencePenaltyMins||120)+'"><span class="help">A non-preferred machine only wins over a preferred one if it finishes at least this much sooner</span></label>'
    +'</div><button class="btn" onclick="saveSettings()">Save settings</button></div></div>';
 }
 async function saveSettings(){
-  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value};
+  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value};
   await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"upsert",table:"__settings__",row:st})});
   await API.db(); toast("Settings saved");
 }
