@@ -221,3 +221,27 @@ Operations gained a fifth section tab, **Storage** (`op_storage` permission, sam
     3. **Skip lot lookup entirely** — Quick Add's paste format gains an optional inline meters+weight pair (e.g. `MILAN 60 INCH, 300m, 45kg`), computed on the spot with no dependency on lot data.
   - Do not guess an answer and build ahead of this — the three options have materially different scope (schema change vs. reuse vs. pure UI), so implementation shouldn't start until the owner picks one.
 - ⚠ Not done: Admin's own batch-edit modal (`lotQRow`/`lotQRows`) and order-matching (`bRefreshOrders`) still compare by literal quality name, not fabric group — lower priority than the Operations Batch Maker, which is the daily-use path.
+
+## Update — 22 Jul 2026 (batch lifecycle, audit trail, taka numbers)
+
+Plan: `mvp/docs/superpowers/plans/2026-07-22-batch-lifecycle-audit-takas.md`. One commit `e08bfde`. All verified with live curl + VM-harness tests (jsdom still not installable in the sandbox; used vm-context harnesses instead).
+
+### 21. Batch lifecycle — Start / Complete, timestamped and attributed
+Operators now drive the board. Each batch has a status **planned → running → done** (plus **Reopen** to undo a completion). Transitions go through a dedicated server op `batchStatus {id,to}` that stamps `startedAt/startedBy` and `completedAt/completedBy` **server-side** (never a client clock) and writes an audit entry. Controls live on Operations → Batch maker's batch list (status pills + Start/Complete/Reopen buttons), permission-gated by `op_batch`. Admin batch rows get a **History** button.
+
+### 22. The Gantt now moves forward
+`batchesForSchedule()` **drops `done` batches**, so a finished load frees its machine and the remaining batches pull earlier — the plan advances as work completes. The Gantt axis now shows **real wall-clock times** (not `t+Nh`), a live **now-line** sweeps across (updates every 20 s), running blocks pulse, and the Operations board **re-anchors every 3 minutes** so it stays current without a manual refresh. (This supersedes the old pending item #3's "stable-plan + now-line" idea with a simpler now==t0 anchor that re-runs periodically.)
+
+### 23. Console history + batch history (audit trail)
+New append-only **`activityLog`** table is the single source for both. `_log()` in `server.py` records **login, logout, changePassword, reset, create, update, delete, and every batch lifecycle transition** with user + server timestamp. Direct writes to `activityLog` are refused (403). Two views: Admin → **Activity log** (full console history, searchable, Excel export) and a per-batch **History** modal (the same log filtered to one batch id). Capped at 5000 entries (oldest trimmed).
+
+### 24. Taka numbers + Taka master
+Every lot's takas now carry stable **positional taka numbers** (`takaNos = [1..N]`), assigned automatically on save; `_migrate` backfilled all 475 existing lots. New Admin → **Taka master** page: a wide grid of `Lot no. | Customer | Quality | Pcs | Total m | T1 | T2 | …` where each numbered cell is that piece's length in metres (Excel export included). The `takas` length array is unchanged — `takaNos` is a parallel, non-destructive field, so all existing pick/balance/split logic is untouched.
+
+### 25. Admin toggle: batch completion mode
+Settings → **Batch completion**: `manual` (default — operators press Start/Complete) vs `auto` ("Automatic (IoT sensors — coming soon)"). Groundwork for wiring jets to sensors later; in auto mode the buttons show a "sensor-driven" note but manual override stays available. Seeded `completionMode:"manual"`.
+
+### 26. Taka limit 30 → 50
+Every 30-taka cap (add guard, `NxM` bulk expander, trim, and the two schema labels) is now driven by a `MAX_TAKAS=50` constant.
+
+⚠ Note for next session: editing `server.py` auto-reloads the user's live server, which re-runs `_migrate` on the real `data.json` — that's how the 475 lots got `takaNos`/`activityLog`/`completionMode` this session. Safe, but be aware live data changes shape the moment the server file is saved.
