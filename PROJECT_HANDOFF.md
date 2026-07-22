@@ -214,7 +214,7 @@ Operations gained a fifth section tab, **Storage** (`op_storage` permission, sam
 - `storageSlots`' intended `SL-` id prefix is dead code (falls through to the same `ST-` prefix as `storageAreas`, since neither is in the server's `SYSTEM_IDS` list) — cosmetic only, IDs stay unique via the random suffix, mirrors a pre-existing identical gap for `weavers`/`WV`.
 
 ### Still pending (not part of this plan)
-- **Quality Quick Add: derive GSM from lot data** — when adding/updating a quality via Quick add, if GSM isn't given directly, calculate it from a linked lot's meters + weight (assuming 54" width, GSM = weight_kg × 1000 ÷ (meters × 1.3716)). Requested mid-session, deliberately deferred to land after the scale-and-storage plan.
+- **[DONE 22 Jul — see item 27] Quality Quick Add: derive GSM from lot data** — when adding/updating a quality via Quick add, if GSM isn't given directly, calculate it from a linked lot's meters + weight (assuming 54" width, GSM = weight_kg × 1000 ÷ (meters × 1.3716)). Requested mid-session, deliberately deferred to land after the scale-and-storage plan.
   - **Blocked on one open question, asked of the owner, not yet answered:** the Lot master has **no weight field at all today** — only pieces, meters, and taka lengths (confirmed against both the live `SCHEMAS.lots` in `admin.html` and the original mill import sheet's column mapping in `docs/superpowers/plans/2026-07-20-weaver-import-mcno.md`, which never had a weight/kg column either). The only place "weight (kg)" is ever entered anywhere in the app is per lot-row inside Batch Maker, typed in manually by the operator at batch-creation time — it isn't stored on the Lot record itself. So before building this, the owner needs to pick where the weight figure should come from:
     1. **Add a new `weight` (kg) field to Lot master** — entered/imported per lot; Quick Add looks up a lot by number and computes GSM from that lot's meters + this new field.
     2. **Reuse Batch Maker's existing per-row weight** — only works for lots that have already been used in at least one batch (weight isn't known before that).
@@ -245,3 +245,12 @@ Settings → **Batch completion**: `manual` (default — operators press Start/C
 Every 30-taka cap (add guard, `NxM` bulk expander, trim, and the two schema labels) is now driven by a `MAX_TAKAS=50` constant.
 
 ⚠ Note for next session: editing `server.py` auto-reloads the user's live server, which re-runs `_migrate` on the real `data.json` — that's how the 475 lots got `takaNos`/`activityLog`/`completionMode` this session. Safe, but be aware live data changes shape the moment the server file is saved.
+
+## Update — 22 Jul 2026 (later — GSM quick-add unblocked)
+
+### 27. Lot weight + GSM auto-derivation in Qualities Quick add
+The GSM-from-lot-data feature (parked in item 26's "Still pending" on the open weight-source question) is **built**. Owner chose **option 1 — add weight to Lot master**.
+- **Lot master** gains a **Greige weight (kg)** field.
+- **Qualities → Quick add**: leave GSM blank and it's **derived** as `kg × 1000 ÷ (meters × width_m)` aggregated over that quality's **weighed lots** (`deriveGsmForQuality()`), width from the row/default. Fallback ladder: **typed > derived > kept-existing > 100**. The live preview lists each row's resolved GSM and its source ("from 2 weighed lots" / "typed" / "default"). Verified: 350 m + 52.5 kg → GSM 105.
+- Existing 118 placeholder qualities can now be fleshed out by entering lot weights (or importing them later) and re-running Quick add name-only.
+- ⚠ The Excel lot importer still has no weight column mapping (the mill sheet has none); weight is entered manually per lot for now. If EMPIRE/weaver sheets later carry a weight column, map it in `commitLotImport()`.
