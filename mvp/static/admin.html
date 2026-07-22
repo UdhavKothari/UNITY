@@ -43,6 +43,7 @@ const AUTHS=["","drum","jigger","jet","stentor"];
 const MCTYPES=["","drum","jigger","jet","stentor","hydro","rope"];
 const UNITS=["g/l","%"];
 const FAMILIES=["Neutral","Blue","Red","Yellow","Green","Purple"];
+const MAX_TAKAS=50;
 
 /* --- icons (Google Material Symbols) --- */
 function ic(name){
@@ -52,7 +53,8 @@ function ic(name){
     orders:"receipt_long", storageAreas:"inventory_2", storageSlots:"shelves", suppliers:"local_shipping",
     operators:"badge", qcMetrics:"verified", users:"person",
     roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
-    batches:"widgets", lots:"qr_code_2", weavers:"factory"
+    batches:"widgets", lots:"qr_code_2", weavers:"factory",
+    activity:"history", takaMaster:"tag"
   };
   return '<span class="material-symbols-rounded">'+(M[name]||"circle")+'</span>';
 }
@@ -208,8 +210,8 @@ const SCHEMAS={
       {k:"inTime",l:"In time",sec:"Lot",t:"time",help:"When the lot physically came in"},
       {k:"location",l:"Storage location",sec:"Lot",help:"Where this fabric physically sits (area / shelf / row / column)"},
       {k:"status",l:"Status",sec:"Lot",t:"select",o:["in-stock","allocated","consumed"]},
-      {k:"totalMeters",l:"Lot total",sec:"Takas (up to 30) - usually 80-120 m each",t:"lotTotal",help:"Worked out from the taka lengths - cannot be typed"},
-      {k:"takas",l:"Taka lengths in meters",sec:"Takas (up to 30) - usually 80-120 m each",t:"takas",help:"Pieces and total meters are worked out from these lengths"},
+      {k:"totalMeters",l:"Lot total",sec:"Takas (up to 50) - usually 80-120 m each",t:"lotTotal",help:"Worked out from the taka lengths - cannot be typed"},
+      {k:"takas",l:"Taka lengths in meters",sec:"Takas (up to 50) - usually 80-120 m each",t:"takas",help:"Pieces and total meters are worked out from these lengths. Each taka is auto-numbered 1-50 (see Taka master)"},
       {k:"inwardPcs",l:"Inward pcs",sec:"Mill tracking (informational)",t:"number",min:0,help:"As received from the weaver — historical, not used by the scheduler"},   // NEW
       {k:"inwardMeters",l:"Inward meters",sec:"Mill tracking (informational)",t:"number",min:0},   // NEW
       {k:"dispatchedPcs",l:"Dispatched pcs",sec:"Mill tracking (informational)",t:"number",min:0},   // NEW
@@ -270,18 +272,20 @@ const PAGES=[
   ["customers","Customers","Admin"],["orders","Orders","Admin"],["storageAreas","Storage areas","Admin"],
   ["storageSlots","Storage slots","Admin"],
   ["suppliers","Suppliers","Admin"],["operators","Operators","Admin"],["qcMetrics","QC metrics","Admin"],
-  ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"]];
+  ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"],
+  ["takaMaster","Taka master","Admin"],["activity","Activity log","Admin"]];
 
 const NAV=[
   {grp:null, items:[["dashboard","Dashboard"]]},
   {grp:"Production setup", items:[["machines","Machines"],["qualities","Qualities"]]},
-  {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"],["weavers","Weavers"]]},
+  {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"],["takaMaster","Taka master"],["weavers","Weavers"]]},
   {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"]]},
   {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"]]},
   {grp:"Store & stock", items:[["storageAreas","Storage areas"],["storageSlots","Storage slots"],["suppliers","Suppliers"]]},
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
   {grp:"Access", items:[["users","Users"],["roles","Roles"]]},
-  {grp:"System", items:[["plan","Live plan"],["settings","Settings"]]}
+  {grp:"System", items:[["plan","Live plan"],["settings","Settings"]]},
+  {grp:"History & audit", items:[["activity","Activity log"]]}
 ];
 
 let CUR="dashboard", editTable=null, editRow=null;
@@ -388,6 +392,8 @@ function render(){
   if(CUR==="dashboard") return renderDashboard(c);
   if(CUR==="settings") return renderSettings(c);
   if(CUR==="plan") return renderPlan(c);
+  if(CUR==="activity") return renderActivity(c);
+  if(CUR==="takaMaster") return renderTakaMaster(c);
   const sc=SCHEMAS[CUR];
   const term=(SEARCH[CUR]||"").toLowerCase();
   const colKeys=sc.cols.map(x=>x[0]);
@@ -415,10 +421,109 @@ function render(){
     +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
       +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
     +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
-      +'<td><div class="rowbtns"><button class="btn ghost sm" onclick=\'openModal("'+CUR+'",'+JSON.stringify(r.id)+')\'>Edit</button>'
+      +'<td><div class="rowbtns">'
+      +(CUR==="batches"?'<button class="btn ghost sm" onclick=\'showBatchHistory('+JSON.stringify(r.id)+')\'>History</button>':'')
+      +'<button class="btn ghost sm" onclick=\'openModal("'+CUR+'",'+JSON.stringify(r.id)+')\'>Edit</button>'
       +'<button class="btn danger sm" onclick=\'delRow("'+CUR+'",'+JSON.stringify(r.id)+')\'>Delete</button></div></td></tr>').join("")
       :'<tr><td colspan="'+(sc.cols.length+1)+'" style="text-align:center;color:var(--muted);padding:26px">No records'+(term?' match your search':'')+'.</td></tr>')
     +'</tbody></table></div></div>';
+}
+
+/* ---- activity log (console history): every event, newest first, searchable ---- */
+const ACTION_LABEL={login:"signed in",logout:"signed out",create:"created",update:"updated",
+  delete:"deleted",running:"started batch",done:"completed batch",planned:"reopened batch",
+  reset:"reset data",changePassword:"changed password"};
+function renderActivity(c){
+  const term=(SEARCH.activity||"").toLowerCase();
+  let rows=(DB.activityLog||[]).slice().reverse();     // newest first
+  if(term) rows=rows.filter(e=>[e.ts,e.user,e.action,e.table,e.recordId,e.summary]
+                                 .some(v=>String(v||"").toLowerCase().indexOf(term)>=0));
+  c.innerHTML='<div class="page-head"><h1>Activity log</h1><p>'+(DB.activityLog||[]).length
+      +' event(s). A full audit trail — who did what, and when. Append-only.</p></div>'
+    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
+    +'<input placeholder="Search the log..." value="'+esc(SEARCH.activity||"")+'" oninput="onSearchInput(this)"></div>'
+    +'<div class="spacer"></div>'
+    +'<button class="btn ghost" onclick="exportActivityToExcel()"><span class="material-symbols-rounded">download</span>Export</button></div>'
+    +'<div class="card"><div class="tbl-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Table</th><th>Record</th><th>Detail</th></tr></thead><tbody>'
+    +(rows.length?rows.map(e=>'<tr><td class="tnum">'+esc(e.ts)+'</td><td><b>'+esc(e.user)+'</b></td>'
+        +'<td><span class="pill '+actionPill(e.action)+'">'+esc(ACTION_LABEL[e.action]||e.action)+'</span></td>'
+        +'<td>'+esc(e.table||"")+'</td><td class="tnum">'+esc(e.recordId||"")+'</td><td class="muted">'+esc(e.summary||"")+'</td></tr>').join("")
+      :'<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:26px">No events'+(term?' match your search':' yet')+'.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+function actionPill(a){
+  if(a==="delete"||a==="reset") return "wash";
+  if(a==="done") return "run";
+  if(a==="running") return "pre";
+  if(a==="login"||a==="create") return "free";
+  return "free";
+}
+function exportActivityToExcel(){
+  const header=["Time","User","Action","Table","Record","Detail"];
+  const body=(DB.activityLog||[]).slice().reverse().map(e=>[e.ts,e.user,ACTION_LABEL[e.action]||e.action,e.table||"",e.recordId||"",e.summary||""]);
+  const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Activity");
+  XLSX.writeFile(wb,"ActivityLog_"+new Date().toISOString().slice(0,10)+".xlsx");
+}
+
+/* ---- taka master: LOT No + Taka 1..N (each cell is that piece's length) ---- */
+function renderTakaMaster(c){
+  const term=(SEARCH.takaMaster||"").toLowerCase();
+  let lots=(DB.lots||[]);
+  if(term) lots=lots.filter(l=>[l.id,l.customer,l.quality].some(v=>String(v||"").toLowerCase().indexOf(term)>=0));
+  const maxN=Math.max(1, ...(DB.lots||[]).map(l=>(l.takas||[]).length));
+  let head='<th>Lot no.</th><th>Customer</th><th>Quality</th><th>Pcs</th><th>Total m</th>';
+  for(let i=1;i<=maxN;i++) head+='<th class="tk-col">T'+i+'</th>';
+  c.innerHTML='<div class="page-head"><h1>Taka master</h1><p>'+(DB.lots||[]).length
+      +' lot(s). Each taka is numbered (1&ndash;'+MAX_TAKAS+') and shows its length in metres. Numbers are assigned automatically when a lot is saved.</p></div>'
+    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
+    +'<input placeholder="Search lot / customer / quality..." value="'+esc(SEARCH.takaMaster||"")+'" oninput="onSearchInput(this)"></div>'
+    +'<div class="spacer"></div>'
+    +'<button class="btn ghost" onclick="exportTakaMasterToExcel()"><span class="material-symbols-rounded">download</span>Export</button></div>'
+    +'<div class="card"><div class="tbl-wrap"><table class="taka-tbl"><thead><tr>'+head+'</tr></thead><tbody>'
+    +(lots.length?lots.map(l=>{
+        const tk=(l.takas||[]).map(Number);
+        let row='<td><b class="tnum">'+esc(l.id)+'</b></td><td>'+esc(l.customer||"")+'</td><td>'+esc(l.quality||"")
+              +'</td><td class="tnum">'+tk.length+'</td><td class="tnum">'+Math.round(tk.reduce((a,b)=>a+b,0))+'</td>';
+        for(let i=0;i<maxN;i++) row+='<td class="tk-col tnum">'+(tk[i]!==undefined?tk[i]:'<span class="muted">·</span>')+'</td>';
+        return '<tr>'+row+'</tr>';
+      }).join("")
+      :'<tr><td colspan="'+(5+maxN)+'" style="text-align:center;color:var(--muted);padding:26px">No lots'+(term?' match your search':' yet')+'.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+function exportTakaMasterToExcel(){
+  const maxN=Math.max(1, ...(DB.lots||[]).map(l=>(l.takas||[]).length));
+  const header=["Lot no.","Customer","Quality","Pcs","Total m"];
+  for(let i=1;i<=maxN;i++) header.push("Taka "+i);
+  const body=(DB.lots||[]).map(l=>{ const tk=(l.takas||[]).map(Number);
+    const base=[l.id,l.customer||"",l.quality||"",tk.length,Math.round(tk.reduce((a,b)=>a+b,0))];
+    for(let i=0;i<maxN;i++) base.push(tk[i]!==undefined?tk[i]:"");
+    return base; });
+  const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Taka master");
+  XLSX.writeFile(wb,"TakaMaster_"+new Date().toISOString().slice(0,10)+".xlsx");
+}
+
+/* ---- per-batch history: the log filtered to one batch ---- */
+function showBatchHistory(id){
+  const events=(DB.activityLog||[]).filter(e=>e.recordId===id);
+  const body=events.length
+    ? '<table class="mini"><thead><tr><th>Time</th><th>User</th><th>Event</th></tr></thead><tbody>'
+      +events.map(e=>'<tr><td class="tnum">'+esc(e.ts)+'</td><td><b>'+esc(e.user)+'</b></td><td>'+esc(ACTION_LABEL[e.action]||e.action)+'</td></tr>').join("")
+      +'</tbody></table>'
+    : '<p class="muted">No history recorded for this batch yet.</p>';
+  openInfoModal('History — '+esc(id), body);
+}
+function closeInfoModal(){ const m=document.getElementById("infoModal"); if(m) m.classList.remove("on"); }
+function openInfoModal(title, bodyHtml){
+  let m=document.getElementById("infoModal");
+  if(!m){ m=document.createElement("div"); m.id="infoModal"; m.className="modal-bg"; document.body.appendChild(m);
+    m.addEventListener("click",e=>{ if(e.target===m) closeInfoModal(); }); }
+  m.innerHTML='<div class="modal" style="width:min(560px,100%)"><div class="m-h"><h3>'+title+'</h3>'
+    +'<button class="x" onclick="closeInfoModal()">&times;</button></div>'
+    +'<div class="m-b">'+bodyHtml+'</div>'
+    +'<div class="m-f"><button class="btn" onclick="closeInfoModal()">Close</button></div></div>';
+  m.classList.add("on");
 }
 
 /* ---- dashboard ---- */
@@ -467,7 +572,7 @@ function updateTakaCount(){
 function addTaka(){
   const inp=document.getElementById("takaNew"), box=document.getElementById("takaChips"); if(!inp||!box) return;
   const v=parseFloat(inp.value); if(isNaN(v)||v<=0){ toast("Enter the taka length in meters"); return; }
-  if(box.children.length>=30){ toast("Maximum 30 takas per lot"); return; }
+  if(box.children.length>=MAX_TAKAS){ toast("Maximum "+MAX_TAKAS+" takas per lot"); return; }
   if(v<50||v>200) toast("Note: "+v+" m is outside the usual 80-120 m range");
   box.insertAdjacentHTML("beforeend",takaChip(v)); inp.value=""; inp.focus(); updateTakaCount();
 }
@@ -477,10 +582,10 @@ function applyTakaBulk(){
   let out=[];
   ta.value.split(/[\s,;]+/).filter(Boolean).forEach(tok=>{
     const m=tok.match(/^(\d+)[xX*](\d+(?:\.\d+)?)$/);        // "12x100" = 12 takas of 100 m
-    if(m){ const n=Math.min(+m[1],30); for(let i=0;i<n;i++) out.push(+m[2]); }
+    if(m){ const n=Math.min(+m[1],MAX_TAKAS); for(let i=0;i<n;i++) out.push(+m[2]); }
     else { const v=parseFloat(tok); if(!isNaN(v)&&v>0) out.push(v); }
   });
-  if(out.length>30){ out=out.slice(0,30); toast("Trimmed to the first 30 takas"); }
+  if(out.length>MAX_TAKAS){ out=out.slice(0,MAX_TAKAS); toast("Trimmed to the first "+MAX_TAKAS+" takas"); }
   box.innerHTML=out.map(takaChip).join(""); updateTakaCount();
 }
 function lotRow(v,ids){ return lotQRow({lotId:v},ids); }
@@ -933,10 +1038,18 @@ function renderSettings(c){
    +'<label class="fld">Default loading time (min)<input id="s_load" type="number" value="'+s.loadMin+'"><span class="help">Used only when a quality has no loading time of its own</span></label>'
    +'<label class="fld">Default unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"><span class="help">Used only when a quality has no unloading time of its own</span></label>'
    +'<label class="fld">Family preference penalty (min)<input id="s_fampen" type="number" value="'+(s.familyPreferencePenaltyMins||120)+'"><span class="help">A non-preferred machine only wins over a preferred one if it finishes at least this much sooner</span></label>'
-   +'</div><button class="btn" onclick="saveSettings()">Save settings</button></div></div>';
+   +'</div></div></div>'
+   +'<div class="card" style="margin-top:16px"><div class="card-b">'
+   +'<h2 style="margin:0 0 10px;font-size:15px">Batch completion</h2>'
+   +'<label class="fld">How batches are marked complete<select id="s_cmode">'
+   +'<option value="manual"'+((s.completionMode||"manual")==="manual"?" selected":"")+'>Manual — operators press Start / Complete</option>'
+   +'<option value="auto"'+(s.completionMode==="auto"?" selected":"")+'>Automatic (IoT sensors — coming soon)</option>'
+   +'</select><span class="help">Manual today. When jets are wired to IoT sensors, switch to Automatic and completion will be logged from the floor. Manual override always stays available.</span></label>'
+   +'</div></div>'
+   +'<div style="margin-top:16px"><button class="btn" onclick="saveSettings()">Save settings</button></div>';
 }
 async function saveSettings(){
-  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value};
+  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,completionMode:document.getElementById("s_cmode").value};
   await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"upsert",table:"__settings__",row:st})});
   await API.db(); toast("Settings saved");
 }

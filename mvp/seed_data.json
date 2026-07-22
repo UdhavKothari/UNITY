@@ -848,6 +848,8 @@
     "buffer": 1.2,
     "loadMin": 35,
     "unloadMin": 25,
-    "stentorSetupMins": 90
-  }
+    "stentorSetupMins": 90,
+    "completionMode": "manual"
+  },
+  "activityLog": []
 }

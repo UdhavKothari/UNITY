@@ -381,12 +381,41 @@ async function submitBatch(){
   renderBatchList(); draw(created.map(c=>c.id));
   toast(created.length>1 ? "Split into "+created.length+" batches \u2014 added to the schedule" : "Batch created \u2014 added to the schedule");
 }
+const STATUS_ICON={planned:"schedule",running:"bolt",done:"check_circle"};
+function batchStatusPill(b){
+  const s=b.status||"planned";
+  return `<span class="bstatus ${s}"><span class="material-symbols-rounded">${STATUS_ICON[s]}</span>${s}</span>`;
+}
+function batchLifeCell(b){
+  const s=b.status||"planned";
+  const auto=(cfg().completionMode==="auto");
+  const autoNote=auto?'<div class="blife-auto">sensor-driven (manual override)</div>':'';
+  if(!can("op_batch")){
+    if(s==="running") return `<div class="blife-meta">started ${esc(b.startedAt||"")}${b.startedBy?" · "+esc(b.startedBy):""}</div>`;
+    if(s==="done")    return `<div class="blife-meta">done ${esc(b.completedAt||"")}${b.completedBy?" · "+esc(b.completedBy):""}</div>`;
+    return '<span class="muted">—</span>';
+  }
+  if(s==="planned")
+    return `<button class="blifebtn go" onclick="setBatchStatus('${esc(b.id)}','running')"><span class="material-symbols-rounded">play_arrow</span>Start</button>${autoNote}`;
+  if(s==="running")
+    return `<button class="blifebtn go" onclick="setBatchStatus('${esc(b.id)}','done')"><span class="material-symbols-rounded">check</span>Complete</button>`
+         + `<div class="blife-meta">started ${esc(b.startedAt||"")}${b.startedBy?" · "+esc(b.startedBy):""}</div>${autoNote}`;
+  // done
+  return `<div class="blife-meta">done ${esc(b.completedAt||"")}${b.completedBy?" · "+esc(b.completedBy):""}</div>`
+       + `<button class="blifebtn" onclick="setBatchStatus('${esc(b.id)}','planned')"><span class="material-symbols-rounded">undo</span>Reopen</button>`;
+}
+async function setBatchStatus(id,to){
+  const res=await API.batchStatus(id,to);
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); renderBatchList(); draw();       // Gantt advances immediately
+  toast(to==="running"?"Batch started":to==="done"?"Batch marked complete":"Batch reopened");
+}
 function renderBatchList(){
   const el=document.getElementById("batchList"), list=(DB.batches||[]).slice().reverse();
   document.getElementById("batchCount").textContent=list.length+" batch(es)";
   if(!list.length){ el.innerHTML='<div class="empty"><span class="material-symbols-rounded">widgets</span><h3>No batches yet</h3><p>Create your first batch above — pick a quality, add its lots, and save.</p></div>'; return; }
-  el.innerHTML='<table><thead><tr><th>Batch</th><th>Lots</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>In</th><th>Out</th><th>pH</th><th>Operator</th><th>Shift</th></tr></thead><tbody>'
-    +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td><td class="tnum">${esc(b.inTime||"")}</td><td class="tnum">${esc(b.outTime||"")}</td><td class="tnum">${esc(b.ph)}</td><td>${esc(b.operator||"")}</td><td>${b.shift?`<span class="pill ${b.shift==="Night"?"wash":"pre"}">${esc(b.shift)}</span>`:""}</td></tr>`).join("")
+  el.innerHTML='<table><thead><tr><th>Batch</th><th>Status</th><th>Action</th><th>Lots</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th></tr></thead><tbody>'
+    +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${batchStatusPill(b)}</td><td>${batchLifeCell(b)}</td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td></tr>`).join("")
     +'</tbody></table>';
 }
 function exportBatchesToExcel(){
@@ -524,6 +553,8 @@ boot(()=>{
   }
   draw();
   if(!allowed.includes('floor')) show(allowed[0]);
+  // keep the board live: re-anchor the plan to the wall clock every few minutes so it moves forward
+  setInterval(()=>{ if(document.getElementById("gantt")) draw(); }, 3*60000);
 });
 </script>
 </body>

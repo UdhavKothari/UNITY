@@ -6,6 +6,7 @@ const API = {
   async _post(body){ const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); return r.json(); },
   save(table,row){ return this._post({op:"upsert",table,row}); },
   del(table,id){ return this._post({op:"delete",table,id}); },
+  batchStatus(id,to){ return this._post({op:"batchStatus",id,to}); },
   reset(){ return this._post({op:"reset"}); }
 };
 
@@ -314,6 +315,7 @@ function batchTotals(b){
 function batchesForSchedule(){
   const out=[];
   (DB.batches||[]).forEach(b=>{
+    if(b.status==="done") return;                              // a finished load has left the machine — frees it, rest pull forward
     const q=Q(b.quality); if(!q) return;                       // quality must exist to route it
     const sh=SH(b.shadeNo,b.quality)||{family:"Neutral",tone:0};
     const tot=batchTotals(b);
@@ -324,6 +326,8 @@ function batchesForSchedule(){
       meters:Math.round(meters), kg:Math.round(kg),
       dyeMins:q.dyeMins, finishMins:q.finishMins,
       pri:+b.pri||2, due:+b.due||7, urgent:!!b.urgent, redye:(b.status==="redye"),
+      status:b.status||"planned", startedAt:b.startedAt||"", startedBy:b.startedBy||"",
+      completedAt:b.completedAt||"", completedBy:b.completedBy||"",
       family:sh.family, tone:sh.tone, q:q, mcPin:b.mcPin||"",
       pcs:tot.pcs, inTime:b.inTime||"", outTime:b.outTime||"",
       notes:b.notes||"", operator:b.operator||"", lotIds:(b.lots||[]).map(r=>r.lotId).filter(Boolean).concat(b.lots?[]:(b.lotIds||[]))});
@@ -407,10 +411,16 @@ function computeSchedule(){
 const PXH=60; const px=min=> min/60*PXH;
 let LAST_S=null;
 
+/* plan t0 == "now"; label a plan-minute offset as a real wall-clock time */
+function planClockLabel(min){
+  const d=new Date(Date.now()+min*60000);
+  return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0");
+}
+
 function renderGantt(el,S,newKeys){
   newKeys=newKeys||[]; LAST_S=S;
   let html='<div class="axis"><div></div><div class="ticks" style="width:'+px(S.maxMin)+'px">';
-  for(let h=0;h<=Math.ceil(S.maxMin/60);h+=2) html+='<span class="tk" style="left:'+px(h*60)+'px">t+'+h+'h</span>';
+  for(let h=0;h<=Math.ceil(S.maxMin/60);h+=2) html+='<span class="tk" style="left:'+px(h*60)+'px">'+planClockLabel(h*60)+'</span>';
   html+='</div></div>';
   DB.machines.forEach(m=>{
     const t=S.tl[m.id];
@@ -421,15 +431,38 @@ function renderGantt(el,S,newKeys){
       else if(b.kind==="pre"){const bt=b.batch;
         html+='<div class="blk pre" data-bk="'+bt.key+'" style="left:'+left+'px;width:'+w+'px">'+bt.order+'<small>step '+b.step+' &middot; '+esc(b.mcType)+'</small></div>';}
       else{const bt=b.batch;const hot=newKeys.indexOf(bt.key)>=0?" newb":"";
+        const run=(bt.status==="running")?" running":"";
         const marks=(bt.urgent?'<span class="material-symbols-rounded blk-ic">priority_high</span>':'')
+                   +(bt.status==="running"?'<span class="material-symbols-rounded blk-ic">bolt</span>':'')
                    +(bt.notes?'<span class="material-symbols-rounded blk-ic">sticky_note_2</span>':'');
-        html+='<div class="blk'+hot+(bt.urgent?' urgent':'')+'" data-bk="'+bt.key+'" style="left:'+left+'px;width:'+w+'px;background:'+shadeColor(bt.shade,bt.qual)+';color:'+(bt.tone>5?'#fff':'#20242c')+'"><div class="cap l" style="width:'+px((+bt.q.loadMin||cfg().loadMin||35))+'px"></div><div class="cap r" style="width:'+px((+bt.q.unloadMin||cfg().unloadMin||25))+'px"></div>'+marks+esc(bt.shade)+'<small>'+esc(bt.order)+' - '+bt.meters+'m</small></div>';}
+        html+='<div class="blk'+hot+run+(bt.urgent?' urgent':'')+'" data-bk="'+bt.key+'" style="left:'+left+'px;width:'+w+'px;background:'+shadeColor(bt.shade,bt.qual)+';color:'+(bt.tone>5?'#fff':'#20242c')+'"><div class="cap l" style="width:'+px((+bt.q.loadMin||cfg().loadMin||35))+'px"></div><div class="cap r" style="width:'+px((+bt.q.unloadMin||cfg().unloadMin||25))+'px"></div>'+marks+esc(bt.shade)+'<small>'+esc(bt.order)+' - '+bt.meters+'m</small></div>';}
     });
     html+='</div></div>';
   });
+  // live now-line: plan t0 is "now", so it sits at the left edge and sweeps right between renders
+  html+='<div class="nowline" id="nowline" style="left:calc(var(--glabel-w, 132px))"><span>now</span></div>';
   el.innerHTML=html;
+  startNowLine(el,S);
   el.onmousemove=e=>{ const blk=e.target.closest('.blk[data-bk]'); if(blk) showGanttHover(blk,e); else hideGanttHover(); };
   el.onmouseleave=hideGanttHover;
+}
+
+/* live now-line: t0 == render time; the line sweeps right until the next replan re-anchors it */
+let NOWLINE_TIMER=null, LAST_RENDER=Date.now();
+function startNowLine(el,S){
+  LAST_RENDER=Date.now();
+  if(NOWLINE_TIMER){ clearInterval(NOWLINE_TIMER); NOWLINE_TIMER=null; }
+  const place=()=>{
+    const line=el.querySelector("#nowline"); const track=el.querySelector(".gtrack");
+    if(!line||!track) return;
+    const mins=(Date.now()-LAST_RENDER)/60000;
+    // label column width: measured when layout exists (browser), else the CSS fallback 132px
+    const labelW=track.parentElement ? (track.getBoundingClientRect().left - el.getBoundingClientRect().left) : 132;
+    const x=(labelW||132)+px(Math.min(mins, S?S.maxMin:0));
+    line.style.left=x+"px";
+  };
+  place();
+  NOWLINE_TIMER=setInterval(place, 20000);   // sweep every 20s (real browser; harmless in jsdom)
 }
 
 /* ---------- gantt hover card: full batch detail ---------- */

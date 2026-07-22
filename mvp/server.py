@@ -26,9 +26,20 @@ SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage",
              "dashboard","machines","qualities","shadeRecipes","qualityRecipes",
-             "batches","lots","weavers",
+             "batches","lots","weavers","takaMaster",
              "customers","orders","storageAreas","storageSlots","suppliers","operators","qcMetrics",
-             "users","roles","plan","settings","urgent_flag"]
+             "users","roles","plan","settings","activity","urgent_flag"]
+
+LOG_CAP = 5000
+def _log(db, user, action, table, rid, summary=""):
+    """append an audit-trail entry — the single source for console + batch history"""
+    lg = db.setdefault("activityLog", [])
+    lg.append({"id": "LG-" + uuid.uuid4().hex[:10],
+               "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+               "user": user or "system", "action": action,
+               "table": table or "", "recordId": rid or "", "summary": summary or ""})
+    if len(lg) > LOG_CAP:
+        del lg[:len(lg) - LOG_CAP]
 
 def _next_seq_id(db, table):
     """human-readable, sequential, system-generated id (never client supplied)"""
@@ -120,6 +131,12 @@ def _migrate(db):
             m["maintIntervalDays"] = 60; changed = True
         before = m.get("schedMaint"); _auto_sched_maint(m)
         if m.get("schedMaint") != before: changed = True
+    for l in db.get("lots", []):                            # stable positional taka numbers
+        want = list(range(1, len(l.get("takas") or []) + 1))
+        if l.get("takaNos") != want:
+            l["takaNos"] = want; changed = True
+    db.setdefault("activityLog", [])
+    db.setdefault("settings", {}).setdefault("completionMode", "manual")
     return changed
 
 # ---------------------------------------------------------------- seed data
@@ -134,6 +151,7 @@ def seed():
         data = json.load(f)
     data["users"] = [_make_user("U-01", DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PW, "Administrator")]
     data.setdefault("_seq", {})
+    data.setdefault("activityLog", [])
     return data
 
 def load_db():
@@ -265,13 +283,17 @@ class Handler(BaseHTTPRequestHandler):
                 token = secrets.token_hex(24)
                 SESSIONS[token] = {"username": username, "expires": time.time() + SESSION_TTL}
                 perms = _perms_for(db, u)
+                _log(db, username, "login", "users", u.get("id", ""), "signed in"); save_db(db)
                 return self._send(200, {"ok": True, "user": {"username": username, "role": u["role"], "perms": perms}},
                                   cookies=[f"sid={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL}"])
 
             if op == "logout":
                 tok = self._sid()
+                who = SESSIONS.get(tok, {}).get("username") if tok else None
                 if tok:
                     SESSIONS.pop(tok, None)
+                if who:
+                    _log(db, who, "logout", "users", "", "signed out"); save_db(db)
                 return self._send(200, {"ok": True}, cookies=["sid=; HttpOnly; Path=/; Max-Age=0"])
 
             # ---- everything below requires a valid session ----
@@ -285,15 +307,43 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "New password must be at least 6 characters"})
                 if not hmac.compare_digest(u["passHash"], _hash_pw(req.get("oldPassword") or "", u["salt"])):
                     return self._send(403, {"error": "Current password is incorrect"})
-                u["salt"] = _new_salt(); u["passHash"] = _hash_pw(new, u["salt"]); save_db(db)
+                u["salt"] = _new_salt(); u["passHash"] = _hash_pw(new, u["salt"])
+                _log(db, u["username"], "changePassword", "users", u.get("id", ""), "changed password"); save_db(db)
                 return self._send(200, {"ok": True})
 
             if op == "reset":
                 if "settings" not in perms:
                     return self._send(403, {"error": "forbidden"})
-                db = seed(); save_db(db); return self._send(200, {"ok": True})
+                who = u["username"]
+                db = seed(); _log(db, who, "reset", "", "", "reset to seed data"); save_db(db)
+                return self._send(200, {"ok": True})
+
+            if op == "batchStatus":
+                if not any(p in perms for p in ("batches", "op_batch")):
+                    return self._send(403, {"error": "forbidden"})
+                to = req.get("to")
+                if to not in ("running", "done", "planned"):
+                    return self._send(400, {"error": "bad status"})
+                b = next((x for x in db.get("batches", []) if x.get("id") == req.get("id")), None)
+                if not b:
+                    return self._send(404, {"error": "batch not found"})
+                now = time.strftime("%Y-%m-%d %H:%M:%S")
+                if to == "running":
+                    b["status"] = "running"; b["startedAt"] = now; b["startedBy"] = u["username"]
+                elif to == "done":
+                    b["status"] = "done"; b["completedAt"] = now; b["completedBy"] = u["username"]
+                    if not b.get("startedAt"):
+                        b["startedAt"] = now; b["startedBy"] = u["username"]
+                else:  # planned = reopen / undo a completion
+                    b["status"] = "planned"
+                    b.pop("completedAt", None); b.pop("completedBy", None)
+                _log(db, u["username"], to, "batches", b["id"], "batch " + b["id"] + " -> " + to)
+                save_db(db)
+                return self._send(200, {"ok": True, "row": b})
 
             table = req.get("table")
+            if table == "activityLog":
+                return self._send(403, {"error": "the activity log is append-only"})
             # a table may be reachable from more than one page (e.g. batches from the
             # Operations "Batch maker" or the Admin one) — any of them grants write access
             if table == "__settings__":
@@ -328,6 +378,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(403, {"error": "Only a Master can flag a batch urgent"})
                     if bool(row.get("urgent")) and not was:
                         row["urgentBy"] = u["username"]; row["urgentAt"] = time.strftime("%Y-%m-%d %H:%M")
+                if table == "lots":
+                    tk = row.get("takas") or []
+                    row["takaNos"] = list(range(1, len(tk) + 1))   # stable positional taka numbers
                 SYSTEM_IDS = ("lots", "batches", "orders")
                 if table in SYSTEM_IDS and not existing:
                     # system-numbered tables: the id is ALWAYS generated here, never taken
@@ -343,12 +396,15 @@ class Handler(BaseHTTPRequestHandler):
                         if r.get("id") == row["id"]:
                             arr[i] = row; found = True; break
                     if not found: arr.append(row)
+                _log(db, u["username"], "create" if not existing else "update", table,
+                     row.get("id", ""), (table + " " + str(row.get("name") or row.get("id") or "")).strip())
                 save_db(db)
                 safe = {k: v for k, v in row.items() if k not in ("passHash", "salt")}
                 return self._send(200, {"ok": True, "row": safe})
             if op == "delete":
                 rid = req.get("id")
                 db[table] = [r for r in db[table] if r.get("id") != rid]
+                _log(db, u["username"], "delete", table, rid, "deleted " + str(rid))
                 save_db(db); return self._send(200, {"ok": True})
         return self._send(400, {"error": "unknown op"})
 
