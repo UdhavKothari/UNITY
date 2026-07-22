@@ -212,6 +212,7 @@ const SCHEMAS={
       {k:"status",l:"Status",sec:"Lot",t:"select",o:["in-stock","allocated","consumed"]},
       {k:"totalMeters",l:"Lot total",sec:"Takas (up to 50) - usually 80-120 m each",t:"lotTotal",help:"Worked out from the taka lengths - cannot be typed"},
       {k:"takas",l:"Taka lengths in meters",sec:"Takas (up to 50) - usually 80-120 m each",t:"takas",help:"Pieces and total meters are worked out from these lengths. Each taka is auto-numbered 1-50 (see Taka master)"},
+      {k:"weight",l:"Greige weight (kg)",sec:"Takas (up to 50) - usually 80-120 m each",t:"number",min:0,step:0.1,help:"Total weight of this lot. Lets the quality's GSM be derived in Qualities → Quick add (GSM = kg × 1000 ÷ (meters × width))"},
       {k:"inwardPcs",l:"Inward pcs",sec:"Mill tracking (informational)",t:"number",min:0,help:"As received from the weaver — historical, not used by the scheduler"},   // NEW
       {k:"inwardMeters",l:"Inward meters",sec:"Mill tracking (informational)",t:"number",min:0},   // NEW
       {k:"dispatchedPcs",l:"Dispatched pcs",sec:"Mill tracking (informational)",t:"number",min:0},   // NEW
@@ -990,24 +991,55 @@ function openQualityQuickAdd(){
   const o=document.createElement("div"); o.id="qqaOverlay"; o.className="modal-bg on";
   o.innerHTML='<div class="modal" style="width:640px;max-width:94vw">'
     +'<div class="m-h"><h3>Quick add qualities</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
-    +'<div class="m-b"><p class="small muted">One quality per line. Just a name is fine (defaults: GSM 100, width '+(cfg().widthDefault||56)+', max batch 300 kg) '
-    +'— or tab/comma-separated <b>name, gsm, width, maxBatch</b>. An existing name updates that quality instead of duplicating it. Route (machine steps) still needs the full Edit form.</p>'
-    +'<textarea id="qqaText" rows="10" placeholder="BRITANNIA\nMILAN 60 INCH, 110, 60, 300\nCRYSTAL LINE 60 INCH"></textarea>'
+    +'<div class="m-b"><p class="small muted">One quality per line. Just a name is fine — or tab/comma-separated <b>name, gsm, width, maxBatch</b>. '
+    +'<b>Leave GSM blank and it is derived from the lot weights</b> (GSM = kg × 1000 ÷ (meters × width)); if no lot of that quality has a weight yet, it defaults to 100. '
+    +'Width defaults to '+(cfg().widthDefault||56)+', max batch to 300 kg. An existing name updates that quality instead of duplicating it. Route (machine steps) still needs the full Edit form.</p>'
+    +'<textarea id="qqaText" rows="10" placeholder="BRITANNIA\nMILAN 60 INCH, , 60\nCRYSTAL LINE 60 INCH, 110"></textarea>'
     +'<div id="qqaPreview" class="small muted" style="margin-top:8px"></div></div>'
     +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
     +'<button class="btn" id="qqaSaveBtn" onclick="commitQualityQuickAdd()">Save all</button></div></div>';
   document.body.appendChild(o);
-  document.getElementById("qqaText").addEventListener("input", ()=>{
-    const n=parseQualityQuickAdd(document.getElementById("qqaText").value).length;
-    document.getElementById("qqaPreview").innerHTML = n ? ('<b class="tnum">'+n+'</b> quality row(s) ready') : "";
-  });
+  document.getElementById("qqaText").addEventListener("input", qqaRefreshPreview);
+}
+function lotMetersOf(l){
+  const t=(l.takas||[]).map(Number).filter(n=>!isNaN(n));
+  return t.length ? t.reduce((a,b)=>a+b,0) : (+l.meters||+l.totalMeters||0);
+}
+/* GSM from the weighed lots of a quality: kg x 1000 / (meters x width_m) */
+function deriveGsmForQuality(name, widthIn){
+  const w=(+widthIn||cfg().widthDefault||56)*0.0254;
+  let kg=0, m=0, n=0;
+  (DB.lots||[]).forEach(l=>{ if(l.quality!==name) return;
+    const wt=+l.weight||0, mt=lotMetersOf(l);
+    if(wt>0 && mt>0){ kg+=wt; m+=mt; n++; } });
+  if(!n || m<=0 || w<=0) return null;
+  return { gsm:Math.round(kg*1000/(m*w)), lots:n };
 }
 function parseQualityQuickAdd(text){
   const dW=cfg().widthDefault||56;
   return text.split("\n").map(l=>l.trim()).filter(Boolean).map(line=>{
     const parts=line.split(/\t|,/).map(s=>s.trim());
-    return { name:parts[0], gsm:+parts[1]||100, width:+parts[2]||dW, maxBatch:+parts[3]||300 };
+    const g=parseFloat(parts[1]);
+    return { name:parts[0], gsmRaw:(!isNaN(g)&&g>0)?g:null, width:+parts[2]||dW, maxBatch:+parts[3]||300 };
   }).filter(r=>r.name);
+}
+/* resolve the GSM that will actually be saved, and where it came from */
+function qqaResolveGsm(r, existing){
+  if(r.gsmRaw>0) return { gsm:r.gsmRaw, src:"typed" };
+  const d=deriveGsmForQuality(r.name, r.width);
+  if(d) return { gsm:d.gsm, src:"from "+d.lots+" weighed lot"+(d.lots>1?"s":"") };
+  if(existing && +existing.gsm>0) return { gsm:+existing.gsm, src:"kept existing" };
+  return { gsm:100, src:"default (no weighed lots)" };
+}
+function qqaRefreshPreview(){
+  const rows=parseQualityQuickAdd(document.getElementById("qqaText").value);
+  const byName={}; (DB.qualities||[]).forEach(q=>byName[q.name]=q);
+  const el=document.getElementById("qqaPreview");
+  if(!rows.length){ el.innerHTML=""; return; }
+  el.innerHTML='<b class="tnum">'+rows.length+'</b> quality row(s) ready:<ul style="margin:6px 0 0;padding-left:18px">'
+    +rows.map(r=>{ const res=qqaResolveGsm(r, byName[r.name]);
+        return '<li>'+esc(r.name)+' — GSM <b class="tnum">'+res.gsm+'</b> <span class="muted">('+res.src+')</span></li>'; }).join("")
+    +'</ul>';
 }
 async function commitQualityQuickAdd(){
   const rows=parseQualityQuickAdd(document.getElementById("qqaText").value);
@@ -1016,7 +1048,9 @@ async function commitQualityQuickAdd(){
   const byName={}; (DB.qualities||[]).forEach(q=>byName[q.name]=q);
   for(const r of rows){
     const existing=byName[r.name];
-    const row=existing ? Object.assign({},existing,r) : r;
+    const res=qqaResolveGsm(r, existing);
+    const clean={ name:r.name, gsm:res.gsm, width:r.width, maxBatch:r.maxBatch };
+    const row=existing ? Object.assign({},existing,clean) : clean;
     await API.save("qualities", row);
     await ensureGreigeShade(r.name);
   }
