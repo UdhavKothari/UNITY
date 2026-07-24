@@ -384,7 +384,7 @@ table.mini th{text-align:left;font:600 11px/1 "IBM Plex Mono",monospace;text-tra
 table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-size:13px}
 
 /* ---- taka picker (per-lot hand-selection panel in batch maker) ---- */
-.takapick{margin:6px 0 2px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+.takapick{grid-column:1/-1;margin:6px 0 2px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
 .takapick .tp-grid{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
 .tp-chip{font-family:var(--mono);font-size:11px;padding:4px 9px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);cursor:pointer;user-select:none}
 .tp-chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--primary)}
