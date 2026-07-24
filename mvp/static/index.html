@@ -543,9 +543,12 @@ async function mpMove(batchId, dir){
 }
 function MC_ICON(t){ return {jet:"water_drop",jigger:"waves",drum:"cyclone",stentor:"compress",hydro:"mode_fan",rope:"timeline"}[t]||"precision_manufacturing"; }
 function exportBatchesToExcel(){
-  const header=["Batch","Lot no.","Quality","Shade","Pcs","Mtr","Kg","In","Out","pH","Operator","Shift"];
+  const header=["Batch","Machine","Plan day","Seq","Lot no.","Taka Nos","Quality","Shade","Pcs","Mtr","Kg","In","Out","pH","Operator","Shift"];
   const body=(DB.batches||[]).slice().reverse().map(b=>[
-    b.id, (b.lotIds||[]).join(", "), b.quality, b.shadeNo||"", b.pcs, b.mtr, b.weight,
+    b.id, b.machine||"", b.planDay||"", b.seq||"",
+    (b.lotIds||(b.lots||[]).map(l=>l.lotId)||[]).join(", "),
+    (b.lots||[]).map(l=>(l.lotId+":"+(l.takaNos||[]).join("/"))).join("  "),
+    b.quality, b.shadeNo||"", b.pcs, b.mtr, b.weight,
     b.inTime||"", b.outTime||"", b.ph||"", b.operator||"", b.shift||""]);
   const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
   const wb=XLSX.utils.book_new();

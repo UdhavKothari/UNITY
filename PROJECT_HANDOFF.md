@@ -254,3 +254,30 @@ The GSM-from-lot-data feature (parked in item 26's "Still pending" on the open w
 - **Qualities → Quick add**: leave GSM blank and it's **derived** as `kg × 1000 ÷ (meters × width_m)` aggregated over that quality's **weighed lots** (`deriveGsmForQuality()`), width from the row/default. Fallback ladder: **typed > derived > kept-existing > 100**. The live preview lists each row's resolved GSM and its source ("from 2 weighed lots" / "typed" / "default"). Verified: 350 m + 52.5 kg → GSM 105.
 - Existing 118 placeholder qualities can now be fleshed out by entering lot weights (or importing them later) and re-running Quick add name-only.
 - ⚠ The Excel lot importer still has no weight column mapping (the mill sheet has none); weight is entered manually per lot for now. If EMPIRE/weaver sheets later carry a weight column, map it in `commitLotImport()`.
+
+## Update — 24 Jul 2026 (Mass Batch Planning + taka-wise selection)
+
+Plan: `docs/superpowers/plans/2026-07-24-mass-batch-planning.md`, spec: `docs/superpowers/specs/2026-07-24-mass-batch-planning-design.md`. Eight tasks, executed with `superpowers:subagent-driven-development`. Prompted by the owner: entering a day's plan one batch at a time (~25 jets × 4–5 batches) was taking ~6 hours; there was no whole-day view, no explicit machine load order, and takas were auto-picked rather than hand-selected off the floor.
+
+### Planning model: fully manual
+Auto-scheduling (light→dark campaign assignment, auto-wash insertion, capacity auto-split) is **parked, not removed** — `computeSchedule()` stays in the code as a fallback path but no longer drives the day's plan. A batch's place in the plan is now three explicit fields on the batch record:
+- `machine` — the assigned machine id. Promotes the old optional `mcPin` (dye-step pin) to the definitive assignment; `mcPin` is kept as a back-compat alias.
+- `planDay` — a plain ISO date label (e.g. `2026-07-24`) grouping batches for a day; the floor runs 24/7 and doesn't stop at day boundaries.
+- `seq` — integer position within (`machine`, `planDay`); each machine restarts at 1 each day.
+
+The Gantt and floor board render batches ordered by (`machine`, `planDay`, `seq`) instead of calling the greedy scheduler for assignment — route/duration math still computes each block's *length*, only machine choice and ordering moved from algorithm to operator. If the auto-scheduler path is ever reactivated, it renders the manual plan in machine+seq order across all plan-days, i.e. it degrades to reading the same explicit fields rather than reassigning batches — so both paths agree on layout.
+
+### New tab: Mass planning (`op_massplan`)
+Operations gained a new full-width tab, gated by the new `op_massplan` page permission (same pattern as `op_batch`/`op_storage`). One scrollable table-driven screen for an entire day's plan: a Day selector (today / date-pick / next day / history), per-machine sections (sticky header with machine id, type, capacity, and that day's batch/kg/m totals — shown even when empty), batch rows in `seq` order with inline add/edit, and drag-or-type sequence reordering scoped to one machine+day. `op_massplan` was already present server-side in `ALL_PAGES` (Task 1); this pass surfaces it as a checkbox in Admin → Roles (`mvp/static/admin.html`'s `PAGES` array), so non-Administrator roles can be granted the tab.
+
+### Per-lot taka picker (hand-selected Sr. Nos.)
+Reachable from any lot row in a batch (Mass Planning's inline add and the legacy single-batch form both use it). Flow: add the lot(s) to the batch, then pick takas within each lot from a chip list (`T{takaNo} · {meters}m`); takas already consumed by another batch show greyed/disabled (existing `_lotAllocMap`/`lotRemainingTakas` allocation logic, extended to taka-number granularity). Ticking takas sets both `takas[]` (lengths) and `takaNos[]` (the selected Sr. Nos.) and recomputes `pcs`/`mtr`/`weight`. The old "fill to target meters" auto-pick (`pickTakas`) remains available as a shortcut button inside the picker, but manual ticking is the default. Selected Sr. Nos. are shown in the row detail (`LOT-0003 · T1,T2,T3,…`) and now flow into the Excel export.
+
+### Capacity guard: block, don't auto-split
+In Mass Planning, if hand-picked takas exceed the assigned machine's `capMax`, the save is blocked with an inline warning — the operator removes takas or moves the batch to a bigger machine. The legacy single-batch form's automatic oversize-split (`splitBatchRows`) is **not** applied here; it would silently fight the operator's explicit machine choice. Allocation still guarantees a given taka can be in at most one batch.
+
+### Excel export: machine/plan-day/seq/taka columns
+`exportBatchesToExcel()` (`mvp/static/index.html`) gained four columns — `Machine`, `Plan day`, `Seq`, and per-lot `Taka Nos` (e.g. `LOT-0003:1/2/3`, one segment per lot in the batch) — ahead of the existing Quality/Shade/Pcs/Mtr/Kg/In/Out/pH/Operator/Shift columns. Same vendored SheetJS as every other export in the app, generated client-side.
+
+### New tests
+`mvp/tests/test_migrate_massplan.py` (server-side `_migrate` backfill of `planDay`/`machine`/`seq` on existing batches), `mvp/tests/test_taka_alloc.js` (taka-level allocation/double-booking guard), `mvp/tests/test_seq.js` (sequence renumbering on reorder and cross-machine move), `mvp/tests/test_manualplan.js` (manual-plan rendering order, capacity block, no auto-split). All pass alongside the existing `mvp/tests/*` suite.

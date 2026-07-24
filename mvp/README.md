@@ -62,9 +62,17 @@ Admin → **Qualities** → *Add quality*. The pre-treatment columns are **PT M/
 
 Machines, Qualities (+ pre-treatment), Shades/Colours (with tone), Recipes, Customers, Storage Areas, Operators, QC metrics, Store/Suppliers, Users, Orders — plus a **Live plan** view (auto-generated Machine Schedule + Batch Master).
 
+## Mass Batch Planning (Operations → Mass planning)
+
+Day plans (100+ batches across all machines) are entered on one screen instead of one batch at a time. Planning is **fully manual**: each batch carries an explicit `machine`, `planDay` (ISO date label), and `seq` (load order within that machine+day); the Gantt and floor board render batches in that order rather than through the auto-scheduler. The greedy campaign scheduler (`computeSchedule`, light→dark, auto-wash) is parked but stays in the code as a fallback — if reactivated it renders the manual plan in machine+seq order rather than reassigning batches.
+
+Within a batch, takas are hand-picked per lot (chip list of `T{no} · {meters}m`, already-consumed takas greyed out) instead of auto-filled; the old "fill to target meters" auto-pick is still available as a shortcut inside the picker. If picked takas exceed the assigned machine's capacity, the save is **blocked** (no automatic oversize-split, unlike the legacy single-batch form) — the operator removes takas or reassigns the machine.
+
+Access to the tab is gated by the `op_massplan` page permission (Admin → Roles), independent of the existing `op_batch`/`op_storage` permissions. The batch Excel export includes the `Machine`, `Plan day`, `Seq`, and per-lot `Taka Nos` columns.
+
 ## Known MVP limits (next steps)
 
 - No login yet — planned for the domain-hosted version (Users table already models username/role/auth).
 - Single JSON store (fine for a trial; move to a database when concurrent load grows).
-- Scheduler is a greedy planner (explainable, overridable). Wash-minimizing optimization and drag-to-override are future work.
+- Scheduler is a greedy planner (explainable, overridable) but no longer drives day-to-day planning — see Mass Batch Planning above. Wash-minimizing optimization and drag-to-override are future work if auto-scheduling is revisited.
 - Times are planning estimates; PLC actuals (jets) and inward-weighed kg will replace estimates in a later phase.
