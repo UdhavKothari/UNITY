@@ -83,7 +83,7 @@
           <label class="fld">M/C No<select id="b_mc"><option value="">— auto-assign —</option></select><span class="help">Optional — pin to a specific dye machine, e.g. JET-2</span></label>
         </div>
         <div class="fldlabel">Lots &amp; quantity taken from each <span class="small muted">— up to 8 lots; a batch may take only part of a lot</span></div>
-        <div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span></div>
+        <div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span><span></span></div>
         <div id="b_lotBox"></div>
         <div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="bAddLot()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="b_lotCount"></span></div>
         <div class="lot-totals" id="b_totals"></div>
@@ -199,6 +199,7 @@ function bLotRow(){
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
     <input class="b-mtr" type="number" min="0" placeholder="m">
     <input class="b-wt"  type="number" min="0" step="0.1" placeholder="kg">
+    <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span>Takas</button>
     <button type="button" class="rm" title="remove" onclick="this.closest('.lotqrow').remove();bLotCount();bSyncTotals();bRefreshOrders();bLockQuality()">&times;</button>
     <div class="taka-pick"></div></div>`;
 }
@@ -276,13 +277,54 @@ function bSuggestWeight(row){                    // weight suggested from meters
   const m=+row.querySelector(".b-mtr").value||0;
   if(q && m) row.querySelector(".b-wt").value=Math.round(kgOf(m,q.gsm,q.width)*10)/10;
 }
+function openTakaPicker(row){
+  const lotId=lotPickVal(row.querySelector(".b-lot"));
+  if(!lotId){ toast("Pick a lot first"); return; }
+  const lot=(DB.lots||[]).find(x=>x.id===lotId); if(!lot){ toast("Lot not found"); return; }
+  let panel=row.querySelector(".takapick");
+  if(panel){ panel.remove(); return; }               // toggle closed
+  const picked=new Set((row.dataset.takaNos?JSON.parse(row.dataset.takaNos):[]).map(Number));
+  const avail=lotTakaAvailability(lotId);
+  panel=document.createElement("div"); panel.className="takapick";
+  const draw=()=>{
+    const chips=avail.map(t=>{
+      const mine=picked.has(t.no);
+      const used=t.used && t.byBatch!==null && !mine;   // used by another batch
+      const cls="tp-chip"+(mine?" on":"")+(used?" used":"");
+      return `<span class="${cls}" data-no="${t.no}" ${used?"":`onclick="tpToggle(this)"`}>T${t.no} · ${t.meters}m</span>`;
+    }).join("");
+    const tot=takaSelectionTotals(lot,[...picked]);
+    panel.innerHTML=`<div class="small muted">Tick the takas for this batch — greyed = used by another batch.</div>
+      <div class="tp-grid">${chips}</div>
+      <div class="tp-sum">Selected: ${tot.pcs} pcs · ${tot.mtr} m</div>
+      <div style="margin-top:6px"><button type="button" class="btn sm" onclick="tpApply(this)">Apply</button>
+      <button type="button" class="btn ghost sm" onclick="this.closest('.takapick').remove()">Cancel</button></div>`;
+  };
+  panel.tpState={picked, lot, row, draw};
+  row.appendChild(panel); draw();
+}
+function tpToggle(chip){
+  const panel=chip.closest(".takapick"), no=+chip.dataset.no, st=panel.tpState;
+  st.picked.has(no)?st.picked.delete(no):st.picked.add(no); st.draw();
+}
+function tpApply(btn){
+  const panel=btn.closest(".takapick"), st=panel.tpState;
+  const tot=takaSelectionTotals(st.lot,[...st.picked]);
+  const row=st.row;
+  row.dataset.takas=JSON.stringify(tot.takas);
+  row.dataset.takaNos=JSON.stringify(tot.takaNos);
+  row.querySelector(".b-pcs").value=tot.pcs;
+  row.querySelector(".b-mtr").value=tot.mtr;
+  panel.remove(); bSyncTotals();
+}
 function bRows(){
   return [...document.querySelectorAll('#b_lotBox .lotqrow')].map(r=>({
     lotId:lotPickVal(r.querySelector(".b-lot")),
     pcs:+r.querySelector(".b-pcs").value||0,
     mtr:+r.querySelector(".b-mtr").value||0,
     weight:+r.querySelector(".b-wt").value||0,
-    takas:JSON.parse(r.dataset.takas||"[]") })).filter(x=>x.lotId);
+    takas:JSON.parse(r.dataset.takas||"[]"),
+    takaNos: r.dataset.takaNos ? JSON.parse(r.dataset.takaNos) : [] })).filter(x=>x.lotId);
 }
 function bSyncTotals(){
   const rows=bRows(), el=document.getElementById("b_totals"); if(!el) return;

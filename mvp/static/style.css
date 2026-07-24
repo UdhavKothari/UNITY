@@ -262,9 +262,10 @@ tbody tr.blocked td:first-child b,tbody tr.blocked .tnum{color:var(--ink-2)}
 select option:disabled{color:var(--faint);background:var(--surface-3)}
 
 /* ---- per-lot quantity rows in the batch maker ---- */
-.lotq-head{display:grid;grid-template-columns:1.6fr .7fr .8fr .8fr 38px;gap:8px;padding:0 2px 6px;
+.lotq-head{display:grid;grid-template-columns:1.6fr .7fr .8fr .8fr auto 38px;gap:8px;padding:0 2px 6px;
   font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
-.lotqrow{display:grid;grid-template-columns:1.6fr .7fr .8fr .8fr 38px;gap:8px;align-items:center;margin-bottom:8px;animation:riseIn .18s var(--ease) both}
+.lotqrow{display:grid;grid-template-columns:1.6fr .7fr .8fr .8fr auto 38px;gap:8px;align-items:center;margin-bottom:8px;animation:riseIn .18s var(--ease) both}
+.lotqrow .b-takabtn{height:38px;white-space:nowrap}
 .lotqrow select,.lotqrow input{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);
   font:inherit;font-family:var(--mono);font-size:12.5px;background:var(--surface);color:var(--ink)}
 .lotqrow select:focus,.lotqrow input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
@@ -381,3 +382,11 @@ table.mini{width:100%;border-collapse:collapse}
 table.mini th{text-align:left;font:600 11px/1 "IBM Plex Mono",monospace;text-transform:uppercase;
   letter-spacing:.4px;color:var(--ink-2,#5a6b8c);padding:6px 10px;border-bottom:1px solid var(--line,#e7ecf4)}
 table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-size:13px}
+
+/* ---- taka picker (per-lot hand-selection panel in batch maker) ---- */
+.takapick{margin:6px 0 2px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+.takapick .tp-grid{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.tp-chip{font-family:var(--mono);font-size:11px;padding:4px 9px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);cursor:pointer;user-select:none}
+.tp-chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--primary)}
+.tp-chip.used{opacity:.45;cursor:not-allowed;text-decoration:line-through}
+.tp-sum{font-family:var(--mono);font-size:11px;color:var(--ink-2);margin-top:4px}
