@@ -347,6 +347,7 @@ function batchesForSchedule(){
       status:b.status||"planned", startedAt:b.startedAt||"", startedBy:b.startedBy||"",
       completedAt:b.completedAt||"", completedBy:b.completedBy||"",
       family:sh.family, tone:sh.tone, q:q, mcPin:b.mcPin||"",
+      machine:b.machine||"", planDay:b.planDay||"", seq:+b.seq||0,
       pcs:tot.pcs, inTime:b.inTime||"", outTime:b.outTime||"",
       notes:b.notes||"", operator:b.operator||"", lotIds:(b.lots||[]).map(r=>r.lotId).filter(Boolean).concat(b.lots?[]:(b.lotIds||[]))});
   });
@@ -391,8 +392,41 @@ function routeOf(q, meters){
   return out;
 }
 
+/* ---------- manual plan: batches are placed by (machine, planDay, seq), not auto-assigned ----------
+   When any batch has been hand-placed (machine + seq set via Mass planning), the plan IS the table:
+   each machine's dye timeline is its batches laid head-to-tail in seq order. Produces the SAME S/block
+   shape computeSchedule does, so renderGantt/renderFloor render it unchanged. The greedy auto-scheduler
+   (below) is retained as the fallback for data with no manual placement. */
+function manualSchedule(){
+  const BUF = cfg().buffer||1.2;
+  const tl={}; DB.machines.forEach(m=> tl[m.id]={cursor:0,last:null,blocks:[],mc:m});
+  const enriched=batchesForSchedule();              // drops done batches, carries machine/planDay/seq
+  const byId={}; enriched.forEach(b=> byId[b.key]=b);
+  const day=(DB.batches||[]).reduce((d,b)=> b.planDay&&(!d||b.planDay<d)?b.planDay:d, null)
+            || new Date().toISOString().slice(0,10);
+  const batches=[];
+  DB.machines.forEach(m=>{
+    const q0=tl[m.id];
+    planBatches(m.id, day).forEach(raw=>{
+      const b=byId[raw.id]; if(!b) return;          // done/invalid batches were dropped — machine frees up
+      batches.push(b);
+      const steps=routeOf(b.q, b.meters);
+      const dyeStep=steps.find(s=>s.isDye) || steps[steps.length-1] || {time:+b.q.dyeMins||120, idx:(+b.q.dyeStep||3)};
+      const H=(+b.q.loadMin||cfg().loadMin||35)+(+b.q.unloadMin||cfg().unloadMin||25);
+      const mins=H+(+dyeStep.time||0);
+      const start=q0.cursor;
+      q0.blocks.push({kind:"dye", batch:b, start:start, mins:mins, step:dyeStep.idx, mcType:m.type});
+      q0.cursor=start+mins;
+      b.mcAssigned=m.id; b.dyeStart=start; b.dyeEnd=q0.cursor;
+    });
+  });
+  const maxMin=Math.max.apply(null,[60].concat(DB.machines.map(m=>tl[m.id].cursor)))+30;
+  return {tl,batches,washCount:0,orderFinish:{},batchCount:batches.length,maxMin,BUF};
+}
+
 /* ---------- scheduler: walks each batch through its 4-step route ---------- */
 function computeSchedule(){
+  if((DB.batches||[]).some(b=>b.machine && b.seq)) return manualSchedule();   // manual plan wins when hand-placed
   const BUF = cfg().buffer||1.2;
   const tl={}; DB.machines.forEach(m=> tl[m.id]={cursor:0,last:null,blocks:[],mc:m});
   let batches=batchesForSchedule();   // the Batch maker is the source of truth for scheduling
