@@ -402,12 +402,13 @@ function manualSchedule(){
   const tl={}; DB.machines.forEach(m=> tl[m.id]={cursor:0,last:null,blocks:[],mc:m});
   const enriched=batchesForSchedule();              // drops done batches, carries machine/planDay/seq
   const byId={}; enriched.forEach(b=> byId[b.key]=b);
-  const day=(DB.batches||[]).reduce((d,b)=> b.planDay&&(!d||b.planDay<d)?b.planDay:d, null)
-            || new Date().toISOString().slice(0,10);
   const batches=[];
   DB.machines.forEach(m=>{
     const q0=tl[m.id];
-    planBatches(m.id, day).forEach(raw=>{
+    // all of this machine's batches across every plan day, laid head-to-tail in (planDay, seq) order
+    const rows=(DB.batches||[]).filter(b=>b.machine===m.id).slice()
+      .sort((a,b)=> String(a.planDay||"").localeCompare(String(b.planDay||"")) || (+a.seq||0)-(+b.seq||0));
+    rows.forEach(raw=>{
       const b=byId[raw.id]; if(!b) return;          // done/invalid batches were dropped — machine frees up
       batches.push(b);
       const steps=routeOf(b.q, b.meters);
