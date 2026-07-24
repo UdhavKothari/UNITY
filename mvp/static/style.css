@@ -395,3 +395,21 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .mp-machine{margin-bottom:12px}
 .mp-table th{position:sticky;top:0}
+
+/* ---- Mass planning: inline batch editor ---- */
+.mp-machine.editing{border-color:var(--accent)}
+.mp-actions{display:flex;align-items:center;gap:4px;white-space:nowrap}
+.mp-del .material-symbols-rounded{color:var(--muted)}
+.mp-del:hover{border-color:#f0cccc;background:var(--danger-soft)}
+.mp-del:hover .material-symbols-rounded{color:var(--danger)}
+.mp-editrow>td{background:var(--accent-soft);padding:12px !important}
+.mp-editor{display:flex;flex-direction:column;gap:10px}
+.mp-ed-grid{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.mp-ed-f{display:flex;flex-direction:column;gap:4px;font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);min-width:180px}
+.mp-ed-f select{font-family:var(--font);font-size:13px;text-transform:none;letter-spacing:0;color:var(--ink)}
+.mp-ed-actions{margin-left:auto;display:flex;gap:6px;align-items:center}
+.mp-ed-lhead{margin-top:2px}
+.mp-lotline{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:6px}
+.mp-ed-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.mp-ed-total{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.mp-ed-total .flag{color:var(--danger);font-family:var(--font);margin-left:6px}

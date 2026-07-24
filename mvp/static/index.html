@@ -329,8 +329,10 @@ function tpApply(btn){
   row.dataset.takaNos=JSON.stringify(tot.takaNos);
   row.querySelector(".b-pcs").value=tot.pcs;
   row.querySelector(".b-mtr").value=tot.mtr;
-  bSuggestWeight(row);              // weight must track the picked takas (spec §5.2), else the capacity guard keys off a stale full-lot weight
-  panel.remove(); bSyncTotals();
+  const inMass=row.closest("#mp_lots");            // taka picker is shared by the batch maker and the mass-plan editor
+  if(inMass) mpEditorSuggestWeight(row); else bSuggestWeight(row);   // weight must track the picked takas (spec §5.2)
+  panel.remove();
+  if(inMass) mpEditorSync(); else bSyncTotals();
 }
 function bRows(){
   return [...document.querySelectorAll('#b_lotBox .lotqrow')].map(r=>({
@@ -494,7 +496,8 @@ function renderBatchList(){
     +'</tbody></table>';
 }
 let MP_DAY = new Date().toISOString().slice(0,10);
-function mpSetDay(v){ MP_DAY=v||MP_DAY; renderMassPlan(); }
+let MP_EDIT = null;   // {machineId} while an inline "new batch" editor is open
+function mpSetDay(v){ MP_DAY=v||MP_DAY; MP_EDIT=null; renderMassPlan(); }
 function renderMassPlan(){
   if(!can("op_massplan")) return;
   const dEl=document.getElementById("mp_day"); if(dEl && !dEl.value) dEl.value=MP_DAY;
@@ -507,30 +510,144 @@ function renderMassPlan(){
     totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
     const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
+    const canEdit=can("op_batch");                 // create/delete batches needs op_batch (server-enforced)
+    const editing=MP_EDIT && MP_EDIT.machineId===m.id;
     const bodyRows = (rows.length ? rows.map(b=>{
-      const q=Q(b.quality);
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
       return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
         <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
-        <td>${batchStatusPill(b)}
-          <button class="btn ghost sm" title="up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
-          <button class="btn ghost sm" title="down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
+        <td class="mp-actions">${batchStatusPill(b)}
+          <button class="btn ghost sm" title="move up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
+          <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
+          ${canEdit?`<button class="btn ghost sm mp-del" title="delete batch" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
         </td></tr>`;
     }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches for ${esc(m.id)} on this day.</td></tr>`)
-      + `<tr class="mp-add"><td>+${nextSeq(m.id,MP_DAY)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`;
-    return `<div class="card mp-machine"><div class="card-b">${head}
+      + (canEdit ? (editing
+          ? `<tr class="mp-editrow"><td colspan="9">${mpEditorHTML(m)}</td></tr>`
+          : `<tr class="mp-add"><td>+${nextSeq(m.id,MP_DAY)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`)
+        : '');
+    return `<div class="card mp-machine${editing?' editing':''}"><div class="card-b">${head}
       <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned for ${MP_DAY}`;
+  if(MP_EDIT) mpInitEditor();
 }
-function mpAddBatch(machineId){
-  show("batch");                                  // reuse the existing build form
-  document.getElementById("b_mc").value=machineId;
-  document.getElementById("b_mc").dataset.mpDay=MP_DAY;      // submitBatch reads these
-  document.getElementById("b_mc").dataset.mpMachine=machineId;
-  toast("Building a batch for "+machineId+" · "+MP_DAY);
+/* ---- inline batch editor, right inside the machine's table (the Excel-like quick path) ---- */
+function mpEditorHTML(m){
+  return `<div class="mp-editor">
+    <div class="mp-ed-grid">
+      <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorSync()"></select></label>
+      <label class="mp-ed-f">Shade<select id="mp_sh"></select></label>
+      <div class="mp-ed-actions">
+        <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>Save batch</button>
+        <button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button>
+      </div>
+    </div>
+    <div class="lotq-head mp-ed-lhead"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span>Takas</span><span></span></div>
+    <div id="mp_lots"></div>
+    <div class="mp-ed-foot">
+      <button class="btn ghost sm" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button>
+      <span class="mp-ed-total" id="mp_ed_total"></span>
+    </div>
+  </div>`;
+}
+function mpAddBatch(machineId){ MP_EDIT={machineId}; renderMassPlan(); }
+function mpCancelNew(){ MP_EDIT=null; renderMassPlan(); }
+function mpInitEditor(){
+  const qs=document.getElementById("mp_q"); if(!qs) return;
+  if(!qs.dataset.ready){
+    qs.innerHTML='<option value="">— pick quality —</option>'+(DB.qualities||[]).map(q=>`<option>${esc(q.name)}</option>`).join("");
+    qs.dataset.ready="1";
+    mpEditorRefreshShades();
+    if(!document.querySelector('#mp_lots .lotqrow')) mpAddEditorLot();
+    document.getElementById("mp_lots").addEventListener("input", mpEditorSync);   // catches taka-picker's dispatched input too
+  }
+}
+function mpEditorRefreshShades(){
+  const q=document.getElementById("mp_q").value, sh=document.getElementById("mp_sh");
+  const list=q?shadesForQuality(q):[];
+  sh.innerHTML=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
+}
+function mpLotFilter(l){
+  const qv=(document.getElementById("mp_q")||{}).value||"";
+  if(qv && !sameFabric(l.quality, qv)) return false;
+  return !lotAllocation(l.id).blocked;
+}
+function mpAddEditorLot(){
+  const box=document.getElementById("mp_lots"); if(!box) return;
+  const wrap=document.createElement("div"); wrap.className="lotqrow mp-lotline";
+  wrap.innerHTML=`${lotPickerHTML("", "b-lot")}
+    <input class="b-pcs" type="number" min="0" placeholder="pcs">
+    <input class="b-mtr" type="number" min="0" placeholder="meters">
+    <input class="b-wt" type="number" min="0" step="0.1" placeholder="kg">
+    <button type="button" class="btn ghost sm" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
+    <button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpEditorSync()">&times;</button>`;
+  box.appendChild(wrap);
+  const row=box.lastElementChild;
+  wireLotPicker(row.querySelector(".b-lot"), { filterFn: mpLotFilter, onSelect: ()=>{
+    const id=lotPickVal(row.querySelector(".b-lot")); const a=id?lotAllocation(id):null;
+    if(a){ row.querySelector(".b-pcs").value=a.remainingPcs; row.querySelector(".b-mtr").value=a.remaining; }
+    mpEditorSuggestWeight(row); mpEditorSync();
+  }});
+  row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
+  mpEditorSync();
+}
+function mpEditorSuggestWeight(row){
+  const q=Q((document.getElementById("mp_q")||{}).value||""), m=+row.querySelector(".b-mtr").value||0;
+  if(q && m) row.querySelector(".b-wt").value=Math.round(kgOf(m,q.gsm,q.width)*10)/10;
+}
+function mpEditorRows(){
+  return [...document.querySelectorAll('#mp_lots .lotqrow')].map(r=>({
+    lotId:lotPickVal(r.querySelector('.b-lot')),
+    pcs:+r.querySelector('.b-pcs').value||0, mtr:+r.querySelector('.b-mtr').value||0,
+    weight:+r.querySelector('.b-wt').value||0,
+    takas:r.dataset.takas?JSON.parse(r.dataset.takas):[],
+    takaNos:r.dataset.takaNos?JSON.parse(r.dataset.takaNos):[]
+  })).filter(x=>x.lotId);
+}
+function mpEditorSync(){
+  const el=document.getElementById("mp_ed_total"); if(!el) return;
+  const rows=mpEditorRows();
+  const pcs=rows.reduce((a,r)=>a+r.pcs,0), mtr=rows.reduce((a,r)=>a+r.mtr,0);
+  const wt=Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10;
+  const cap=((DB.machines.find(x=>x.id===MP_EDIT.machineId)||{}).capMax)||0;
+  const over=cap && wt>cap;
+  el.innerHTML=`<b class="tnum">${pcs}</b> pcs · <b class="tnum">${mtr}</b> m · <b class="tnum">${wt}</b> kg`
+    + (over?` <span class="flag">exceeds ${cap} kg — remove takas or pick a bigger machine</span>`:'');
+}
+async function mpSaveNew(machineId){
+  const q=(document.getElementById("mp_q")||{}).value||"";
+  if(!q){ toast("Pick a quality"); return; }
+  const rows=mpEditorRows();
+  if(!rows.length){ toast("Add at least one lot"); return; }
+  for(const r of rows){ const a=lotAllocation(r.lotId);
+    if(a.blocked){ toast(r.lotId+" is fully used"); return; }
+    if(r.mtr>a.remaining){ toast(r.lotId+" has only "+a.remaining+" m left"); return; } }
+  const quals=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId);return l&&l.quality;}).filter(Boolean))];
+  if(quals.some(n=>!sameFabric(n,q))){ toast("All lots must be the same fabric as "+q); return; }
+  const custs=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId);return l&&l.customer;}).filter(Boolean))];
+  if(custs.length>1){ toast("One customer per batch — this mixes "+custs.join(" & ")); return; }
+  const tot={pcs:rows.reduce((a,r)=>a+r.pcs,0), mtr:Math.round(rows.reduce((a,r)=>a+r.mtr,0)),
+             weight:Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10};
+  if(!mpCapacityOk(machineId, tot.weight)){
+    toast(machineId+" holds "+((DB.machines.find(x=>x.id===machineId)||{}).capMax)+" kg — this "+tot.weight+" kg batch is too heavy."); return; }
+  const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
+    machine:machineId, mcPin:machineId, planDay:MP_DAY, seq:nextSeq(machineId,MP_DAY),
+    pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status:"planned" };
+  const res=await API.save("batches", row);
+  if(res && res.error){ toast(res.error); return; }
+  MP_EDIT=null; await API.db(); renderMassPlan(); draw();
+  toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
+}
+async function mpDeleteBatch(id){
+  if(!can("op_batch")){ toast("You don't have permission to delete batches"); return; }
+  if(!window.confirm("Delete batch "+id+"? This cannot be undone.")) return;
+  const res=await API.del("batches", id);
+  if(res && res.error){ toast(res.error); return; }
+  await API.db(); renderMassPlan(); draw();
+  toast(id+" deleted");
 }
 async function mpMove(batchId, dir){
   const b=(DB.batches||[]).find(x=>x.id===batchId); if(!b) return;
