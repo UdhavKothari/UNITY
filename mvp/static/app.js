@@ -10,6 +10,10 @@ const API = {
   reset(){ return this._post({op:"reset"}); }
 };
 
+/* if running in a VM context (tests), inherit DB from global context */
+if (!DB && typeof globalThis !== 'undefined' && globalThis.DB) DB = globalThis.DB;
+if (!DB && typeof global !== 'undefined' && global.DB) DB = global.DB;
+
 /* ---------- lookups ---------- */
 const byName = (arr,n)=> arr.find(x=>x.name===n);
 function colLetter(i){    // 0-based index -> A, B, ... Z, AA, AB, ... (spreadsheet-style)
@@ -351,6 +355,22 @@ function batchesForSchedule(){
       notes:b.notes||"", operator:b.operator||"", lotIds:(b.lots||[]).map(r=>r.lotId).filter(Boolean).concat(b.lots?[]:(b.lotIds||[]))});
   });
   return out;
+}
+
+/* ---- manual plan ordering: batches are placed by (machine, planDay, seq) ---- */
+function planBatches(machine, day){
+  return (DB.batches||[])
+    .filter(b=>b.machine===machine && b.planDay===day)
+    .slice().sort((a,b)=>(+a.seq||0)-(+b.seq||0));
+}
+function nextSeq(machine, day){
+  const s=planBatches(machine,day).map(b=>+b.seq||0);
+  return s.length ? Math.max.apply(null,s)+1 : 1;
+}
+function resequenced(list){ return list.map((b,i)=>Object.assign(b,{seq:i+1})); }
+function reorderPlan(list, fromIdx, toIdx){
+  const a=list.slice(); const [it]=a.splice(fromIdx,1); a.splice(toIdx,0,it);
+  return resequenced(a);
 }
 
 /* ---------- routes: every quality is up to 4 machine steps ---------- */
