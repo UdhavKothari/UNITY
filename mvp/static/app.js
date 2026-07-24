@@ -214,14 +214,15 @@ let _lotAllocCache = null;   // {forDB, map}
 function _lotAllocMap(){
   if(_lotAllocCache && _lotAllocCache.forDB===DB) return _lotAllocCache.map;
   const map={};
-  (DB.lots||[]).forEach(l=>{ map[l.id]={pcs:0, mtr:0, by:[], pool:(l.takas||[]).map(Number).filter(n=>!isNaN(n))}; });
+  (DB.lots||[]).forEach(l=>{ map[l.id]={pcs:0, mtr:0, by:[], pool:(l.takas||[]).map(Number).filter(n=>!isNaN(n)), usedNos:new Set(), byNo:{}}; });
   (DB.batches||[]).forEach(b=>{
     const rows = b.lots || (b.lotIds||[]).map(id=>({lotId:id}));
     rows.forEach(r=>{
-      if(!map[r.lotId]) map[r.lotId]={pcs:0, mtr:0, by:[], pool:[]};
+      if(!map[r.lotId]) map[r.lotId]={pcs:0, mtr:0, by:[], pool:[], usedNos:new Set(), byNo:{}};
       const m=map[r.lotId];
       m.by.push(b.id); m.pcs+=+r.pcs||0; m.mtr+=+r.mtr||0;
       if(Array.isArray(r.takas)) r.takas.forEach(t=>{ const i=m.pool.indexOf(+t); if(i>=0) m.pool.splice(i,1); });
+      if(Array.isArray(r.takaNos)) r.takaNos.forEach(n=>{ m.usedNos.add(+n); m.byNo[+n]=b.id; });
     });
   });
   _lotAllocCache={forDB:DB, map};
@@ -243,6 +244,23 @@ function lotAllocation(lotId){
 }
 function lotsAvailable(quality){
   return (DB.lots||[]).filter(l=> (!quality || l.quality===quality) && !lotAllocation(l.id).blocked );
+}
+
+/* per-taka availability for the manual taka picker (add lots first, then pick takas) */
+function lotTakaAvailability(lotId){
+  const l=(DB.lots||[]).find(x=>x.id===lotId); if(!l) return [];
+  const m=_lotAllocMap()[lotId]||{usedNos:new Set(),byNo:{}};
+  const lens=l.takas||[], nos=l.takaNos||lens.map((_,i)=>i+1);
+  return nos.map((no,i)=>({no:+no, meters:+lens[i]||0,
+    used:m.usedNos.has(+no), byBatch:m.byNo[+no]||null}));
+}
+/* totals for a hand-picked set of taka numbers within one lot */
+function takaSelectionTotals(lot, nos){
+  const want=new Set((nos||[]).map(Number));
+  const lens=lot.takas||[], tn=lot.takaNos||lens.map((_,i)=>i+1);
+  const takas=[], takaNos=[];
+  tn.forEach((no,i)=>{ if(want.has(+no)){ takas.push(+lens[i]||0); takaNos.push(+no); } });
+  return {pcs:takaNos.length, mtr:Math.round(takas.reduce((a,b)=>a+b,0)), takas, takaNos};
 }
 
 /* ---------- searchable lot picker (250+ open lots — a plain <select> stops scaling fast) ---------- */
