@@ -329,6 +329,7 @@ function tpApply(btn){
   row.dataset.takaNos=JSON.stringify(tot.takaNos);
   row.querySelector(".b-pcs").value=tot.pcs;
   row.querySelector(".b-mtr").value=tot.mtr;
+  bSuggestWeight(row);              // weight must track the picked takas (spec §5.2), else the capacity guard keys off a stale full-lot weight
   panel.remove(); bSyncTotals();
 }
 function bRows(){
