@@ -24,7 +24,7 @@ LOCK = threading.Lock()
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
              "dashboard","machines","qualities","shadeRecipes","qualityRecipes",
              "batches","lots","weavers","takaMaster",
              "customers","orders","storageAreas","storageSlots","suppliers","operators","qcMetrics",
@@ -135,6 +135,17 @@ def _migrate(db):
         want = list(range(1, len(l.get("takas") or []) + 1))
         if l.get("takaNos") != want:
             l["takaNos"] = want; changed = True
+    today = time.strftime("%Y-%m-%d")
+    seq_by = {}
+    for b in db.get("batches", []):
+        if "machine" not in b:
+            b["machine"] = b.get("mcPin") or ""; changed = True
+        if "planDay" not in b:
+            b["planDay"] = today; changed = True
+        if "seq" not in b:
+            key = (b.get("machine",""), b.get("planDay",""))
+            seq_by[key] = seq_by.get(key, 0) + 1
+            b["seq"] = seq_by[key]; changed = True
     db.setdefault("activityLog", [])
     db.setdefault("settings", {}).setdefault("completionMode", "manual")
     return changed
