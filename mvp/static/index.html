@@ -31,6 +31,7 @@
     <button data-s="order"><span class="material-symbols-rounded">add_circle</span>New order</button>
     <button data-s="batch"><span class="material-symbols-rounded">widgets</span>Batch maker</button>
     <button data-s="storage"><span class="material-symbols-rounded">shelves</span>Storage</button>
+    <button data-s="massplan"><span class="material-symbols-rounded">table_view</span>Mass planning</button>
   </div>
 
   <!-- Shop floor -->
@@ -106,6 +107,15 @@
     </div>
     <div id="stg_grid"></div>
   </section>
+
+  <!-- Mass planning -->
+  <section class="view" id="v-massplan" style="display:none">
+    <div class="bar">
+      <label class="fld" style="max-width:200px">Plan day<input type="date" id="mp_day" onchange="mpSetDay(this.value)"></label>
+      <span class="small muted" id="mp_note"></span>
+    </div>
+    <div id="mp_body"></div>
+  </section>
 </main>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -144,6 +154,7 @@ document.getElementById("secTabs").addEventListener("click",e=>{
   document.querySelectorAll("#secTabs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));
   document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
   if(s==="storage") renderStorageMap();
+  if(s==="massplan") renderMassPlan();
 });
 function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
 
@@ -460,6 +471,35 @@ function renderBatchList(){
     +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${batchStatusPill(b)}</td><td>${batchLifeCell(b)}</td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td></tr>`).join("")
     +'</tbody></table>';
 }
+let MP_DAY = new Date().toISOString().slice(0,10);
+function mpSetDay(v){ MP_DAY=v||MP_DAY; renderMassPlan(); }
+function renderMassPlan(){
+  if(!can("op_massplan")) return;
+  const dEl=document.getElementById("mp_day"); if(dEl && !dEl.value) dEl.value=MP_DAY;
+  const body=document.getElementById("mp_body");
+  const machines=(DB.machines||[]).slice();
+  if(!machines.length){ body.innerHTML='<div class="empty"><span class="material-symbols-rounded">precision_manufacturing</span><h3>No machines yet</h3><p>Add machines in Admin and they will appear here to plan.</p></div>'; return; }
+  let totB=0, totKg=0;
+  body.innerHTML=machines.map(m=>{
+    const rows=planBatches(m.id, MP_DAY);
+    totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
+    const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
+      <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
+    const bodyRows = rows.length ? rows.map(b=>{
+      const q=Q(b.quality);
+      const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
+      return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
+        <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
+        <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
+        <td>${batchStatusPill(b)}</td></tr>`;
+    }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches for ${esc(m.id)} on this day.</td></tr>`;
+    return `<div class="card mp-machine"><div class="card-b">${head}
+      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th></tr></thead>
+      <tbody>${bodyRows}</tbody></table></div></div></div>`;
+  }).join("");
+  document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned for ${MP_DAY}`;
+}
+function MC_ICON(t){ return {jet:"water_drop",jigger:"waves",drum:"cyclone",stentor:"compress",hydro:"mode_fan",rope:"timeline"}[t]||"precision_manufacturing"; }
 function exportBatchesToExcel(){
   const header=["Batch","Lot no.","Quality","Shade","Pcs","Mtr","Kg","In","Out","pH","Operator","Shift"];
   const body=(DB.batches||[]).slice().reverse().map(b=>[
@@ -573,7 +613,7 @@ function exportScheduleToExcel(){
   XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch",storage:"op_storage"};
+const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch",storage:"op_storage",massplan:"op_massplan"};
 boot(()=>{
   f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
   f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");

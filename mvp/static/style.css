@@ -390,3 +390,8 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .tp-chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--primary)}
 .tp-chip.used{opacity:.45;cursor:not-allowed;text-decoration:line-through}
 .tp-sum{font-family:var(--mono);font-size:11px;color:var(--ink-2);margin-top:4px}
+
+/* ---- mass batch planning (per-machine, seq-ordered) ---- */
+.mp-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.mp-machine{margin-bottom:12px}
+.mp-table th{position:sticky;top:0}
