@@ -151,6 +151,9 @@ async function reload(){ await API.db(); draw(); }
 /* section tabs */
 document.getElementById("secTabs").addEventListener("click",e=>{
   const s=e.target.dataset.s; if(!s)return;
+  // drop any stale Mass-planning pins from an abandoned "Add batch" flow; mpAddBatch re-sets them
+  // right after it calls show("batch"), so a real manual add is unaffected.
+  const _mc=document.getElementById("b_mc"); if(_mc){ delete _mc.dataset.mpMachine; delete _mc.dataset.mpDay; }
   document.querySelectorAll("#secTabs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));
   document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
   if(s==="storage") renderStorageMap();
@@ -415,7 +418,7 @@ async function submitBatch(){
     const totalWt=Math.round(rows.reduce((a,r)=>a+(+r.weight||0),0)*10)/10;
     if(!mpCapacityOk(mpMachine, totalWt)){
       toast(mpMachine+" holds "+((DB.machines.find(x=>x.id===mpMachine)||{}).capMax)+" kg — this "+totalWt+" kg batch is too heavy. Remove takas or pick a bigger machine.");
-      return;
+      return;   // pins stay set so the operator can adjust takas and re-submit this same manual add
     }
     groups=[rows];
   } else {
