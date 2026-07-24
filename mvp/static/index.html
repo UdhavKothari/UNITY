@@ -582,17 +582,53 @@ function mpAddEditorLot(){
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
     <input class="b-mtr" type="number" min="0" placeholder="meters">
     <input class="b-wt" type="number" min="0" step="0.1" placeholder="kg">
-    <button type="button" class="btn ghost sm" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
-    <button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpEditorSync()">&times;</button>`;
+    <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
+    <button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpLockQuality();mpEditorSync()">&times;</button>
+    <div class="taka-pick"></div>`;
   box.appendChild(wrap);
   const row=box.lastElementChild;
-  wireLotPicker(row.querySelector(".b-lot"), { filterFn: mpLotFilter, onSelect: ()=>{
-    const id=lotPickVal(row.querySelector(".b-lot")); const a=id?lotAllocation(id):null;
-    if(a){ row.querySelector(".b-pcs").value=a.remainingPcs; row.querySelector(".b-mtr").value=a.remaining; }
-    mpEditorSuggestWeight(row); mpEditorSync();
-  }});
+  // same behaviour as the Batch maker: filter to the batch's fabric, lock quality on first lot,
+  // prefill from what's LEFT in the lot, and snap the meters to whole takas (takas cannot be cut)
+  wireLotPicker(row.querySelector(".b-lot"), { filterFn: mpLotFilter,
+    onSelect: ()=>{ mpLockQuality(); mpPrefillRow(row); mpEditorSync(); } });
   row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
+  row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
   mpEditorSync();
+}
+function mpPrefillRow(row){                       // start from what is still LEFT in the lot, then snap to takas
+  const id=lotPickVal(row.querySelector(".b-lot")), a=id?lotAllocation(id):null;
+  if(!a) return;
+  row.querySelector(".b-mtr").value=a.remaining||"";
+  row.querySelector(".b-mtr").max=a.remaining||undefined;
+  row.querySelector(".b-pcs").max=a.remainingPcs||undefined;
+  mpSnapRow(row);
+}
+function mpSnapRow(row){                           // a taka cannot be cut: round the ask up to whole takas
+  const id=lotPickVal(row.querySelector(".b-lot")), out=row.querySelector(".taka-pick");
+  const want=+row.querySelector(".b-mtr").value||0;
+  if(!id||!want){ row.dataset.takas="[]"; delete row.dataset.takaNos; if(out) out.innerHTML=""; return; }
+  const pick=pickTakas(lotRemainingTakas(id), want);
+  row.dataset.takas=JSON.stringify(pick.takas);
+  delete row.dataset.takaNos;                      // re-snapped by meters; the taka picker re-sets precise Sr. Nos. if used
+  row.querySelector(".b-pcs").value=pick.pcs;
+  row.querySelector(".b-mtr").value=pick.total;
+  mpEditorSuggestWeight(row);
+  if(!out) return;
+  if(!pick.takas.length){ out.innerHTML='<span class="flag">nothing left in this lot</span>'; return; }
+  const over=pick.total-want;
+  out.innerHTML='<span class="material-symbols-rounded">straighten</span>'
+    +'<b>'+pick.pcs+'</b> whole takas &middot; '+pick.takas.join(' + ')+' = <b class="tnum">'+pick.total+' m</b>'
+    +(pick.short?' <span class="flag">only '+pick.total+' m left — short by '+(want-pick.total)+' m</span>'
+      :over>0?' <span class="muted">(asked '+want+' m; +'+over+' m — takas cannot be cut)</span>':'');
+}
+function mpLockQuality(){                           // one batch = one fabric: the first lot decides it
+  const ids=[...document.querySelectorAll('#mp_lots .b-lot')].map(s=>lotPickVal(s)).filter(Boolean);
+  const names=ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id);return l&&l.quality;}).filter(Boolean);
+  const groupKey=n=>{const q=Q(n);return (q&&q.fabricGroup)||n;};
+  const sel=document.getElementById("mp_q"); if(!sel) return;
+  if([...new Set(names.map(groupKey))].length===1 && names.length && sel.value!==names[0]){ sel.value=names[0]; mpEditorRefreshShades(); }
+  sel.disabled = ids.length>0;
+  sel.classList.toggle("locked", ids.length>0);
 }
 function mpEditorSuggestWeight(row){
   const q=Q((document.getElementById("mp_q")||{}).value||""), m=+row.querySelector(".b-mtr").value||0;
@@ -608,14 +644,16 @@ function mpEditorRows(){
   })).filter(x=>x.lotId);
 }
 function mpEditorSync(){
-  const el=document.getElementById("mp_ed_total"); if(!el) return;
+  const el=document.getElementById("mp_ed_total"); if(!el || !MP_EDIT) return;
   const rows=mpEditorRows();
   const pcs=rows.reduce((a,r)=>a+r.pcs,0), mtr=rows.reduce((a,r)=>a+r.mtr,0);
   const wt=Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10;
   const cap=((DB.machines.find(x=>x.id===MP_EDIT.machineId)||{}).capMax)||0;
   const over=cap && wt>cap;
+  const custs=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId);return l&&l.customer;}).filter(Boolean))];
   el.innerHTML=`<b class="tnum">${pcs}</b> pcs · <b class="tnum">${mtr}</b> m · <b class="tnum">${wt}</b> kg`
-    + (over?` <span class="flag">exceeds ${cap} kg — remove takas or pick a bigger machine</span>`:'');
+    + (over?` <span class="flag">exceeds ${cap} kg — remove takas or pick a bigger machine</span>`:'')
+    + (custs.length>1?` <span class="flag">mixes ${custs.length} customers — one per batch</span>`:'');
 }
 async function mpSaveNew(machineId){
   const q=(document.getElementById("mp_q")||{}).value||"";
