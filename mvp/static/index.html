@@ -402,22 +402,31 @@ async function submitBatch(){
   const custs=bLotCustomers();
   if(custs.length>1){ toast("This batch mixes fabric from "+custs.join(" and ")+" — use one customer per batch"); return; }
 
-  // heavier than one machine load for this quality? split into whole-taka batches so the
-  // floor gets clean, separately-runnable loads instead of one un-schedulable oversized batch
   const qObj=Q(q), cap=qObj&&qObj.maxBatch;
-  const groups=splitBatchRows(rows, cap, cfg().minMeters||300);
-
-  const created=[];
   const mpMachine=document.getElementById("b_mc").dataset.mpMachine||g("b_mc");
   const mpDay=document.getElementById("b_mc").dataset.mpDay||new Date().toISOString().slice(0,10);
+  const manualMode=!!document.getElementById("b_mc").dataset.mpMachine;   // came from Mass planning "Add batch"
+
+  // Manual mode (Mass planning): one batch = one machine load. Block if the picked takas are
+  // heavier than the assigned machine's cap — never auto-split. The legacy Batch-maker form keeps
+  // the oversize whole-taka split (splitBatchRows) so a too-big order still becomes runnable loads.
+  let groups;
+  if(manualMode){
+    const totalWt=Math.round(rows.reduce((a,r)=>a+(+r.weight||0),0)*10)/10;
+    if(!mpCapacityOk(mpMachine, totalWt)){
+      toast(mpMachine+" holds "+((DB.machines.find(x=>x.id===mpMachine)||{}).capMax)+" kg — this "+totalWt+" kg batch is too heavy. Remove takas or pick a bigger machine.");
+      return;
+    }
+    groups=[rows];
+  } else {
+    groups=splitBatchRows(rows, cap, cfg().minMeters||300);
+  }
+
+  const created=[];
   let mpSeq=nextSeq(mpMachine, mpDay);   // local counter: DB doesn't refresh mid-loop, so nextSeq() alone would repeat for multi-group splits
   for(const grp of groups){
     const tot={pcs:grp.reduce((a,r)=>a+r.pcs,0), mtr:grp.reduce((a,r)=>a+r.mtr,0),
                weight:Math.round(grp.reduce((a,r)=>a+r.weight,0)*10)/10};
-    if(mpMachine && !mpCapacityOk(mpMachine, tot.weight)){
-      toast(mpMachine+" holds "+((DB.machines.find(x=>x.id===mpMachine)||{}).capMax)+" kg — this "+tot.weight+" kg batch is too heavy. Remove takas or pick a bigger machine.");
-      return;
-    }
     const row={ lots:grp, lotIds:grp.map(r=>r.lotId),
       orderId:g("b_order"), quality:q, shadeNo:g("b_shade"),
       mcPin:g("b_mc"), machine:mpMachine, planDay:mpDay, seq:mpSeq++,
