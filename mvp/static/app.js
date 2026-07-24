@@ -368,6 +368,11 @@ function reorderPlan(list, fromIdx, toIdx){
   const a=list.slice(); const [it]=a.splice(fromIdx,1); a.splice(toIdx,0,it);
   return resequenced(a);
 }
+function mpCapacityOk(machineId, kg){
+  const m=(DB.machines||[]).find(x=>x.id===machineId);
+  if(!m || !m.capMax) return true;
+  return (+kg||0) <= (+m.capMax);
+}
 
 /* ---------- routes: every quality is up to 4 machine steps ---------- */
 function routeStep(q,i){ return {mc:(q["step"+i+"_mc"]||""), time:(+q["step"+i+"_time"]||0)}; }

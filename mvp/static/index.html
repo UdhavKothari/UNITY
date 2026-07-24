@@ -408,18 +408,27 @@ async function submitBatch(){
   const groups=splitBatchRows(rows, cap, cfg().minMeters||300);
 
   const created=[];
+  const mpMachine=document.getElementById("b_mc").dataset.mpMachine||g("b_mc");
+  const mpDay=document.getElementById("b_mc").dataset.mpDay||new Date().toISOString().slice(0,10);
+  let mpSeq=nextSeq(mpMachine, mpDay);   // local counter: DB doesn't refresh mid-loop, so nextSeq() alone would repeat for multi-group splits
   for(const grp of groups){
     const tot={pcs:grp.reduce((a,r)=>a+r.pcs,0), mtr:grp.reduce((a,r)=>a+r.mtr,0),
                weight:Math.round(grp.reduce((a,r)=>a+r.weight,0)*10)/10};
+    if(mpMachine && !mpCapacityOk(mpMachine, tot.weight)){
+      toast(mpMachine+" holds "+((DB.machines.find(x=>x.id===mpMachine)||{}).capMax)+" kg — this "+tot.weight+" kg batch is too heavy. Remove takas or pick a bigger machine.");
+      return;
+    }
     const row={ lots:grp, lotIds:grp.map(r=>r.lotId),
       orderId:g("b_order"), quality:q, shadeNo:g("b_shade"),
-      mcPin:g("b_mc"),
+      mcPin:g("b_mc"), machine:mpMachine, planDay:mpDay, seq:mpSeq++,
       pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight,
       status:"planned", notes:g("b_notes") };   // in/out time, pH, operator & shift are filled by the operator at the machine
     const res=await API.save("batches",row);
     if(res && res.error){ toast(res.error); return; }
     created.push({id:(res.row&&res.row.id)||"Batch", pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight});
   }
+  delete document.getElementById("b_mc").dataset.mpMachine;
+  delete document.getElementById("b_mc").dataset.mpDay;
   await API.db();
   const r=document.getElementById("batchResult"); r.classList.add("on");
   r.innerHTML = created.length>1
@@ -485,19 +494,40 @@ function renderMassPlan(){
     totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
     const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
-    const bodyRows = rows.length ? rows.map(b=>{
+    const bodyRows = (rows.length ? rows.map(b=>{
       const q=Q(b.quality);
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
       return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
         <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
-        <td>${batchStatusPill(b)}</td></tr>`;
-    }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches for ${esc(m.id)} on this day.</td></tr>`;
+        <td>${batchStatusPill(b)}
+          <button class="btn ghost sm" title="up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
+          <button class="btn ghost sm" title="down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
+        </td></tr>`;
+    }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches for ${esc(m.id)} on this day.</td></tr>`)
+      + `<tr class="mp-add"><td>+${nextSeq(m.id,MP_DAY)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`;
     return `<div class="card mp-machine"><div class="card-b">${head}
       <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned for ${MP_DAY}`;
+}
+function mpAddBatch(machineId){
+  show("batch");                                  // reuse the existing build form
+  document.getElementById("b_mc").value=machineId;
+  document.getElementById("b_mc").dataset.mpDay=MP_DAY;      // submitBatch reads these
+  document.getElementById("b_mc").dataset.mpMachine=machineId;
+  toast("Building a batch for "+machineId+" · "+MP_DAY);
+}
+async function mpMove(batchId, dir){
+  const b=(DB.batches||[]).find(x=>x.id===batchId); if(!b) return;
+  const list=planBatches(b.machine,b.planDay);
+  const i=list.findIndex(x=>x.id===batchId), j=i+dir;
+  if(j<0||j>=list.length) return;
+  const reordered=reorderPlan(list,i,j);
+  for(const r of reordered){ await API.save("batches", r); }   // persists renumbered seq
+  await API.db(); renderMassPlan(); draw();
+  toast("Sequence updated");
 }
 function MC_ICON(t){ return {jet:"water_drop",jigger:"waves",drum:"cyclone",stentor:"compress",hydro:"mode_fan",rope:"timeline"}[t]||"precision_manufacturing"; }
 function exportBatchesToExcel(){
