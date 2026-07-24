@@ -10,10 +10,6 @@ const API = {
   reset(){ return this._post({op:"reset"}); }
 };
 
-/* if running in a VM context (tests), inherit DB from global context */
-if (!DB && typeof globalThis !== 'undefined' && globalThis.DB) DB = globalThis.DB;
-if (!DB && typeof global !== 'undefined' && global.DB) DB = global.DB;
-
 /* ---------- lookups ---------- */
 const byName = (arr,n)=> arr.find(x=>x.name===n);
 function colLetter(i){    // 0-based index -> A, B, ... Z, AA, AB, ... (spreadsheet-style)
