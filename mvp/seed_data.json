@@ -851,5 +851,6 @@
     "stentorSetupMins": 90,
     "completionMode": "manual"
   },
-  "activityLog": []
+  "activityLog": [],
+  "shelves": []
 }

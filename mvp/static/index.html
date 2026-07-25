@@ -684,11 +684,23 @@ function exportBatchesToExcel(){
   XLSX.writeFile(wb, "Batches_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 /* ---------- storage map ---------- */
+/* ---------- storage: Area → Shelves → rows×cols cells, each with a kg capacity ---------- */
+function qualityTint(name, alpha){                 // stable pastel per quality so a cell's fabric reads at a glance
+  if(alpha===undefined) alpha=1;
+  if(!name) return "hsla(220,12%,90%,"+alpha+")";
+  let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))>>>0;
+  return "hsla("+(h%360)+",50%,85%,"+alpha+")";
+}
+function shelvesFor(areaName){ return (DB.shelves||[]).filter(s=>s.area===areaName); }
+function shelfById(id){ return (DB.shelves||[]).find(s=>s.id===id); }
+function cellSlots(shelfId,row,col){ return (DB.storageSlots||[]).filter(s=>s.shelf===shelfId && +s.row===+row && s.col===col); }
+function cellUsed(shelfId,row,col){ return cellSlots(shelfId,row,col).reduce((a,s)=>a+(+s.weightKg||0),0); }
+
 function renderStorageMap(){
   const sel=document.getElementById("stg_area");
   const areas=DB.storageAreas||[];
   if(!areas.length){
-    document.getElementById("stg_grid").innerHTML='<div class="empty"><span class="material-symbols-rounded">shelves</span><h3>No storage areas yet</h3><p>Add a storage area in Admin &mdash; set its shelf and column count &mdash; and the grid will appear here.</p></div>';
+    document.getElementById("stg_grid").innerHTML='<div class="empty"><span class="material-symbols-rounded">inventory_2</span><h3>No storage areas yet</h3><p>Add a storage area in Admin, then add shelves to it — the racks will appear here.</p></div>';
     sel.innerHTML=""; document.getElementById("stg_note").textContent=""; return;
   }
   const cur=sel.value && areas.some(a=>a.name===sel.value) ? sel.value : areas[0].name;
@@ -696,79 +708,89 @@ function renderStorageMap(){
   paintStorageGrid(cur);
 }
 function paintStorageGrid(areaName){
-  const area=(DB.storageAreas||[]).find(a=>a.name===areaName);
   const grid=document.getElementById("stg_grid");
-  if(!area){ grid.innerHTML=""; return; }
-  const slots=(DB.storageSlots||[]).filter(s=>s.area===areaName);
-  const byShelf={};
-  slots.forEach(s=>{ (byShelf[s.shelf]=byShelf[s.shelf]||[]).push(s); });
-  const occCount=slots.filter(s=>s.lotId).length;
-  document.getElementById("stg_note").textContent=occCount+" of "+(area.shelfCount*area.colCount)+" slots occupied";
-  let html='<div class="stg-grid-wrap"><div class="stg-grid" style="grid-template-columns:64px repeat('+area.colCount+',1fr)">';
-  html+='<div class="stg-corner"></div>';
-  for(let c=0;c<area.colCount;c++) html+='<div class="stg-colhead">'+colLetter(c)+'</div>';
-  for(let sh=1;sh<=area.shelfCount;sh++){
-    html+='<button type="button" class="stg-shelfhead" aria-label="Open shelf '+sh+'" onclick="openShelfModal(\''+esc(areaName).replace(/'/g,"\\'")+'\''+','+sh+')">'+sh+'</button>';
-    for(let c=0;c<area.colCount;c++){
-      const col=colLetter(c);
-      const slot=(byShelf[sh]||[]).find(s=>s.col===col);
-      const occ=slot&&slot.lotId;
-      const lot=occ?(DB.lots||[]).find(l=>l.id===slot.lotId):null;
-      const label="Shelf "+sh+", column "+col+(lot?" — "+lot.quality+", "+slot.lotId:" — empty");
-      html+='<button type="button" class="stg-cell'+(occ?" occ":"")+'" aria-label="'+esc(label)+'" title="'+(lot?esc(lot.quality||"")+" - "+esc(slot.lotId):"empty")+'" onclick="openShelfModal(\''+esc(areaName).replace(/'/g,"\\'")+'\''+','+sh+')">'
-        +(occ?'<span class="stg-tag">'+esc(slot.lotId)+'</span>':'')+'</button>';
-    }
+  const shelves=shelvesFor(areaName);
+  if(!shelves.length){
+    grid.innerHTML='<div class="empty"><span class="material-symbols-rounded">shelves</span><h3>No shelves in '+esc(areaName)+'</h3><p>Add shelves to this area in Admin → Shelves — set rows, columns, and a cell capacity in kg.</p></div>';
+    document.getElementById("stg_note").textContent="0 shelves"; return;
   }
-  html+='</div></div>';
+  let totCells=0, occCells=0, html='';
+  shelves.forEach(sh=>{
+    const cols=+sh.cols||1, rows=+sh.rows||1, cap=+sh.cellCapKg||0; totCells+=cols*rows;
+    html+='<div class="stg-shelf"><div class="stg-shelf-h"><b class="tnum">'+esc(sh.name)+'</b>'
+      +'<span class="mc-type">'+rows+' × '+cols+' cells · '+cap+' kg each</span></div>';
+    html+='<div class="stg-grid" style="grid-template-columns:34px repeat('+cols+',minmax(58px,1fr))">';
+    html+='<div class="stg-corner"></div>';
+    for(let c=0;c<cols;c++) html+='<div class="stg-colhead">'+colLetter(c)+'</div>';
+    for(let r=1;r<=rows;r++){
+      html+='<div class="stg-rowhead">'+r+'</div>';
+      for(let c=0;c<cols;c++){
+        const col=colLetter(c);
+        const sl=cellSlots(sh.id,r,col), used=cellUsed(sh.id,r,col);
+        const lot=sl.length?(DB.lots||[]).find(l=>l.id===sl[0].lotId):null;
+        const occ=sl.length>0; if(occ) occCells++;
+        const pct=cap?Math.min(100,Math.round(used/cap*100)):0;
+        const lab=esc(sh.name)+" "+r+col+(occ?(" — "+sl.length+" lot(s), "+Math.round(used)+" kg"):" — empty");
+        html+='<button type="button" class="stg-cell'+(occ?" occ":"")+'" style="'+(occ?"background:"+qualityTint(lot&&lot.quality):"")+'" aria-label="'+lab+'" title="'+lab+'" onclick="openCellModal(\''+sh.id+'\','+r+',\''+col+'\')">'
+          +'<span class="stg-cc">'+r+col+'</span>'
+          +(occ?'<span class="stg-tag">'+esc(sl[0].lotId)+(sl.length>1?" +"+(sl.length-1):"")+'</span><span class="stg-cap"><i style="width:'+pct+'%"></i></span>':'')
+          +'</button>';
+      }
+    }
+    html+='</div></div>';
+  });
+  document.getElementById("stg_note").textContent=occCells+" of "+totCells+" cells occupied · "+shelves.length+" shelves";
   grid.innerHTML=html;
 }
 document.addEventListener("change", e=>{ if(e.target && e.target.id==="stg_area") paintStorageGrid(e.target.value); });
 
-function openShelfModal(areaName, shelf){
-  const area=(DB.storageAreas||[]).find(a=>a.name===areaName); if(!area) return;
-  const ex=document.getElementById("shelfOverlay"); if(ex) ex.remove();
-  const o=document.createElement("div"); o.id="shelfOverlay"; o.className="modal-bg on";
-  const cols=[]; for(let c=0;c<area.colCount;c++) cols.push(colLetter(c));
-  o.innerHTML='<div class="modal" style="width:560px;max-width:94vw">'
-    +'<div class="m-h"><h3>'+esc(areaName)+' &middot; Shelf '+shelf+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
-    +'<div class="m-b"><div class="shelf-rows" id="shelfRows">'
-    +cols.map(col=>shelfRowHTML(areaName,shelf,col)).join("")
-    +'</div></div>'
+function openCellModal(shelfId,row,col){
+  const sh=shelfById(shelfId); if(!sh) return;
+  const cap=+sh.cellCapKg||0, edit=can("op_storage");
+  const ex=document.getElementById("cellOverlay"); if(ex) ex.remove();
+  const sl=cellSlots(shelfId,row,col), used=cellUsed(shelfId,row,col), left=Math.max(0,cap-used);
+  const list = sl.length ? sl.map(s=>{ const lot=(DB.lots||[]).find(l=>l.id===s.lotId);
+      return '<div class="cell-lot"><span class="swatch" style="background:'+qualityTint(lot&&lot.quality)+'"></span>'
+        +'<span class="cell-lot-b"><b>'+esc(s.lotId)+'</b><small>'+esc((lot&&lot.quality)||"no quality")+'</small></span>'
+        +'<span class="tnum">'+(+s.weightKg||0)+' kg</span>'
+        +(edit?'<button class="btn danger sm" title="remove" onclick="removeCellSlot(\''+s.id+'\',\''+shelfId+'\','+row+',\''+col+'\')"><span class="material-symbols-rounded">delete</span></button>':'')
+        +'</div>'; }).join("")
+    : '<div class="muted" style="padding:8px 2px">Empty cell.</div>';
+  const o=document.createElement("div"); o.id="cellOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:520px;max-width:94vw">'
+    +'<div class="m-h"><h3><span class="material-symbols-rounded">shelves</span>'+esc(sh.name)+' &middot; cell '+row+col+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<div class="cell-cap"><span class="lbl">Capacity</span><span class="cell-cap-bar"><i style="width:'+(cap?Math.min(100,Math.round(used/cap*100)):0)+'%"></i></span><span class="tnum">'+Math.round(used)+' / '+cap+' kg</span></div>'
+    +'<div class="cell-lots">'+list+'</div>'
+    +(edit?('<div class="cell-add"><div class="fldlabel">Add a lot to this cell <span class="small muted">— '+Math.round(left)+' kg free</span></div>'
+      +'<div class="cell-add-row">'+lotPickerHTML("","cell-lot-pick")+'<input class="cell-wt" type="number" min="0" step="0.1" placeholder="kg"><button class="btn sm" id="cellAddBtn"><span class="material-symbols-rounded">add</span>Place</button></div></div>'):'')
+    +'</div>'
     +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
   document.body.appendChild(o);
-  cols.forEach(col=>wireShelfRow(areaName,shelf,col));
+  const pick=o.querySelector(".cell-lot-pick");
+  if(pick){
+    wireLotPicker(pick, { onSelect:()=>{ const id=lotPickVal(pick), lot=(DB.lots||[]).find(l=>l.id===id); const wt=o.querySelector(".cell-wt"); if(lot && wt) wt.value=+lot.weight||""; } });
+    o.querySelector("#cellAddBtn").onclick=()=>saveCellLot(shelfId,row,col);
+  }
 }
-function shelfRowHTML(areaName,shelf,col){
-  const slot=(DB.storageSlots||[]).find(s=>s.area===areaName && +s.shelf===+shelf && s.col===col);
-  const lot=slot&&slot.lotId?(DB.lots||[]).find(l=>l.id===slot.lotId):null;
-  return '<div class="shelf-row" data-col="'+col+'">'
-    +'<span class="shelf-col-badge">'+col+'</span>'
-    +lotPickerHTML(slot?slot.lotId:"", "shelf-lot")
-    +'<button type="button" class="btn ghost sm shelf-save">Save</button>'
-    +(slot&&slot.lotId?'<button type="button" class="btn danger sm shelf-clear">Clear</button>':'')
-    +'</div>';
+async function saveCellLot(shelfId,row,col){
+  const sh=shelfById(shelfId), cap=+sh.cellCapKg||0;
+  const pick=document.querySelector("#cellOverlay .cell-lot-pick"), lotId=lotPickVal(pick);
+  if(!lotId){ toast("Pick a lot"); return; }
+  const w=+document.querySelector("#cellOverlay .cell-wt").value||0;
+  const dup=(DB.storageSlots||[]).find(s=>s.lotId===lotId);
+  if(dup){ const ds=shelfById(dup.shelf); toast(lotId+" is already stored at "+((ds&&ds.name)||dup.shelf)+" "+dup.row+dup.col); return; }
+  const used=cellUsed(shelfId,row,col);
+  if(cap && used+w>cap){ toast("Over capacity — cell holds "+cap+" kg, only "+Math.round(cap-used)+" kg free"); return; }
+  const res=await API.save("storageSlots",{area:sh.area, shelf:shelfId, row:+row, col:col, lotId:lotId, weightKg:w});
+  if(res && res.error){ toast(res.error); return; }
+  await API.db(); toast(lotId+" placed at "+sh.name+" "+row+col); openCellModal(shelfId,row,col); paintStorageGrid(sh.area);
 }
-async function wireShelfRow(areaName,shelf,col){
-  const row=document.querySelector('.shelf-row[data-col="'+col+'"]'); if(!row) return;
-  const picker=row.querySelector(".shelf-lot");
-  wireLotPicker(picker, {});
-  row.querySelector(".shelf-save").onclick=async ()=>{
-    const lotId=lotPickVal(picker);
-    const existing=(DB.storageSlots||[]).find(s=>s.area===areaName && +s.shelf===+shelf && s.col===col);
-    if(!lotId){ toast("Pick a lot first — or use Clear to empty this slot"); return; }
-    const dup=(DB.storageSlots||[]).find(s=>s.lotId===lotId && (!existing || s.id!==existing.id));
-    if(dup){ toast(lotId+" is already stored at "+dup.area+", shelf "+dup.shelf+", column "+dup.col); return; }
-    const row2=Object.assign({}, existing||{}, {area:areaName, shelf:+shelf, col:col, lotId:lotId});
-    const res=await API.save("storageSlots", row2);
-    if(res && res.error){ toast(res.error); return; }
-    await API.db(); toast("Saved to shelf "+shelf+", column "+col); document.getElementById("shelfOverlay").remove(); openShelfModal(areaName,shelf); paintStorageGrid(areaName);
-  };
-  const clearBtn=row.querySelector(".shelf-clear");
-  if(clearBtn) clearBtn.onclick=async ()=>{
-    const existing=(DB.storageSlots||[]).find(s=>s.area===areaName && +s.shelf===+shelf && s.col===col);
-    if(existing) await API.del("storageSlots", existing.id);
-    await API.db(); toast("Cleared shelf "+shelf+", column "+col); document.getElementById("shelfOverlay").remove(); openShelfModal(areaName,shelf); paintStorageGrid(areaName);
-  };
+async function removeCellSlot(slotId,shelfId,row,col){
+  const res=await API.del("storageSlots",slotId);
+  if(res && res.error){ toast(res.error); return; }
+  const sh=shelfById(shelfId);
+  await API.db(); toast("Removed from cell"); openCellModal(shelfId,row,col); if(sh) paintStorageGrid(sh.area);
 }
 
 function exportScheduleToExcel(){

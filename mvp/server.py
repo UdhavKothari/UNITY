@@ -27,7 +27,7 @@ SESSION_TTL = 12 * 3600       # 12 hours
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
              "dashboard","machines","qualities","shadeRecipes","qualityRecipes",
              "batches","lots","weavers","takaMaster",
-             "customers","orders","storageAreas","storageSlots","suppliers","operators","qcMetrics",
+             "customers","orders","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]
 
 LOG_CAP = 5000
@@ -360,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
             if table == "__settings__":
                 allowed = ["settings"]
             else:
-                allowed = {"batches": ["batches", "op_batch"]}.get(table, [table])
+                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"]}.get(table, [table])
             if not any(p in perms for p in allowed):
                 return self._send(403, {"error": f"forbidden: no permission for {table}"})
 
