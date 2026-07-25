@@ -474,7 +474,7 @@ function renderMassPlan(){
   if(!machines.length){ body.innerHTML='<div class="empty"><span class="material-symbols-rounded">precision_manufacturing</span><h3>No machines yet</h3><p>Add machines in Admin and they will appear here to plan.</p></div>'; return; }
   let totB=0, totKg=0;
   body.innerHTML=machines.map(m=>{
-    const rows=planBatches(m.id);
+    const rows=planBatches(m.id).filter(b=>b.status!=="done");   // resolved (end-time logged) batches drop to history
     totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
     const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
@@ -485,9 +485,10 @@ function renderMassPlan(){
       return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
         <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
-        <td class="mp-actions">${batchStatusPill(b)}
+        <td class="mp-actions">${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc(b.startedAt)}</span>`:''}
           <button class="btn ghost sm" title="move up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
           <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
+          ${canEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}
           ${canEdit?`<button class="btn ghost sm mp-del" title="delete batch" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
         </td></tr>`;
     }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
@@ -658,6 +659,40 @@ async function mpDeleteBatch(id){
   if(res && res.error){ toast(res.error); return; }
   await API.db(); renderMassPlan(); draw();
   toast(id+" deleted");
+}
+/* ---- manual start/end time logging (a data-entry operator backfills times until the operator app exists) ---- */
+function toLocalInput(s){ return s ? String(s).replace(" ","T").slice(0,16) : ""; }   // "YYYY-MM-DD HH:MM:SS" -> datetime-local
+function fromLocalInput(v){ return v ? v.replace("T"," ") : ""; }                       // datetime-local -> stored string
+function mpLogTime(id){
+  const b=(DB.batches||[]).find(x=>x.id===id); if(!b) return;
+  const ex=document.getElementById("logOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="logOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:460px;max-width:94vw">'
+    +'<div class="m-h"><h3><span class="material-symbols-rounded">schedule</span>Log time &middot; '+esc(id)+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<label class="fld">Start time<input type="datetime-local" id="log_start" value="'+esc(toLocalInput(b.startedAt))+'"></label>'
+    +'<label class="fld" style="margin-top:12px">End time<input type="datetime-local" id="log_end" value="'+esc(toLocalInput(b.completedAt))+'"><span class="help">Logging an end time resolves the batch and moves it to history.</span></label>'
+    +'</div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" onclick="mpSaveLog(\''+esc(id)+'\')"><span class="material-symbols-rounded">check</span>Save log</button></div></div>';
+  document.body.appendChild(o);
+}
+async function mpSaveLog(id){
+  const b=(DB.batches||[]).find(x=>x.id===id); if(!b) return;
+  const st=document.getElementById("log_start").value, en=document.getElementById("log_end").value;
+  if(en && !st){ toast("Enter a start time before the end time"); return; }
+  if(st && en && fromLocalInput(en) < fromLocalInput(st)){ toast("End time can't be before the start time"); return; }
+  const who=(CURRENT_USER&&CURRENT_USER.username)||"";
+  const row=Object.assign({}, b, {
+    startedAt: st?fromLocalInput(st):"", startedBy: st?(b.startedBy||who):"",
+    completedAt: en?fromLocalInput(en):"", completedBy: en?(b.completedBy||who):"",
+    status: en?"done":(st?"running":"planned")
+  });
+  const res=await API.save("batches", row);
+  if(res && res.error){ toast(res.error); return; }
+  await API.db(); const ov=document.getElementById("logOverlay"); if(ov) ov.remove();
+  renderMassPlan(); draw();
+  toast(en ? id+" resolved — moved to history" : st ? id+" start time logged" : id+" times cleared");
 }
 async function mpMove(batchId, dir){
   const b=(DB.batches||[]).find(x=>x.id===batchId); if(!b) return;
