@@ -44,6 +44,7 @@ Shadow: `0 1px 2px rgba(16,24,40,.04), 0 2px 6px rgba(16,24,40,.05)`; lift on ho
 - **Shade swatch** — 13px rounded square, real shade colour from family + tone.
 - **KPI card** — icon tile + mono number + uppercase mono label. No gradient hero-metric template.
 - **Schema-driven admin tables** — sticky mono headers, hover row tint, row actions revealed on hover, compact search (≤240px) with the icon inside the field.
+- **Form controls (one styled set everywhere — Operations *and* Admin)** — never ship a raw browser control. Inputs / selects / textareas: `--surface` background, 1px `--line-2` border, 10px radius, accent focus ring (`box-shadow:0 0 0 3px var(--accent-soft)`). **Checkboxes are always custom**, never the native box: 16px square, 5px radius, `--surface` unchecked, filled `--accent` with a white tick when checked, accent focus-visible ring, 0.5 opacity when disabled. A disabled or "locked" select uses a dashed border on `--surface-2` with `--ink-2` text (the one-fabric-per-batch lock is the reference). Row-action icon buttons (up / down / delete) are `btn ghost sm`; a delete/bin turns `--danger` on hover only.
 
 ## 5. Time convention
 Current time lives in the header as a live clock — that is **t**. Everything scheduled is expressed **relative to now**: `t+2h`, `t+4h`, `t+12h`. Never show bare hour numbers on a plan axis.

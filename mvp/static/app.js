@@ -355,13 +355,13 @@ function batchesForSchedule(){
 }
 
 /* ---- manual plan ordering: batches are placed by (machine, planDay, seq) ---- */
-function planBatches(machine, day){
+function planBatches(machine){       // every batch on a machine, in load sequence (no day dimension)
   return (DB.batches||[])
-    .filter(b=>b.machine===machine && b.planDay===day)
+    .filter(b=>b.machine===machine)
     .slice().sort((a,b)=>(+a.seq||0)-(+b.seq||0));
 }
-function nextSeq(machine, day){
-  const s=planBatches(machine,day).map(b=>+b.seq||0);
+function nextSeq(machine){
+  const s=planBatches(machine).map(b=>+b.seq||0);
   return s.length ? Math.max.apply(null,s)+1 : 1;
 }
 function resequenced(list){ return list.map((b,i)=>Object.assign(b,{seq:i+1})); }
@@ -407,7 +407,7 @@ function manualSchedule(){
     const q0=tl[m.id];
     // all of this machine's batches across every plan day, laid head-to-tail in (planDay, seq) order
     const rows=(DB.batches||[]).filter(b=>b.machine===m.id).slice()
-      .sort((a,b)=> String(a.planDay||"").localeCompare(String(b.planDay||"")) || (+a.seq||0)-(+b.seq||0));
+      .sort((a,b)=> (+a.seq||0)-(+b.seq||0));
     rows.forEach(raw=>{
       const b=byId[raw.id]; if(!b) return;          // done/invalid batches were dropped — machine frees up
       batches.push(b);
@@ -603,13 +603,26 @@ function renderFloor(el,S,clockH){
         info='<div class="mc-info"><b><span class="swatch" style="background:'+shadeColor(b.shade,b.qual)+'"></span>'+esc(b.shade)+'</b><div class="sub">'+esc(b.order)+' &middot; '+esc(b.qual)+'</div><div class="q">'+b.meters+' m &middot; '+b.kg+' kg</div></div>';}
     }
     const queue=t.blocks.filter(b=>b.start>=nowMin && b.kind==="dye").length;
+    // "more info": the current dye load + the next two planned for this machine
+    const upcoming=t.blocks.filter(b=>b.kind==="dye" && (b.start+b.mins)>nowMin).slice(0,3);
+    let moreHtml='';
+    if(upcoming.length){
+      moreHtml='<details class="mc-more"><summary><span class="material-symbols-rounded">list_alt</span>Planning — current + next 2</summary><ol class="mc-plan">'
+        + upcoming.map((bk,idx)=>{ const b=bk.batch; const running=(nowMin>=bk.start && nowMin<bk.start+bk.mins);
+            return '<li><span class="mc-plan-tag '+(running?"now":"next")+'">'+(running?"NOW":"#"+(idx+1))+'</span>'
+              +'<span class="swatch" style="background:'+shadeColor(b.shade,b.qual)+'"></span>'
+              +'<span class="mc-plan-b"><b>'+esc(b.batchId||b.key)+'</b><small>'+esc(b.qual)+' &middot; shade '+esc(b.shade)+'</small></span>'
+              +'<span class="mc-plan-n tnum">'+b.pcs+' pcs &middot; '+b.meters+' m &middot; '+b.kg+' kg</span></li>'; }).join("")
+        + '</ol></details>';
+    }
     html+='<div class="mc rise" style="animation-delay:'+(i*35)+'ms">'
       +'<div class="mc-top"><div class="mc-ic"><span class="material-symbols-rounded">'+mcIcon(m.type)+'</span></div>'
       +'<div style="min-width:0;flex:1"><div class="mc-name">'+m.id+' <span class="pill '+status+'">'+label+'</span></div>'
       +'<div class="mc-type">'+esc(m.type)+(m.plc?" &middot; PLC":"")+' &middot; '+m.capMax+' kg</div></div></div>'
       +'<div class="mc-body"><div class="vat'+vatCls+'"><div class="fill" style="height:'+fillPct+'%;background:'+fillBg+'"></div>'
       +(fillPct?'<div class="pct">'+fillPct+'%</div>':'')+'</div>'+info+'</div>'
-      +'<div class="mc-foot"><span class="lbl">Queue</span><span class="tnum" style="font-weight:600">'+queue+' <span class="muted" style="font-weight:400">waiting</span></span></div></div>';
+      +'<div class="mc-foot"><span class="lbl">Queue</span><span class="tnum" style="font-weight:600">'+queue+' <span class="muted" style="font-weight:400">waiting</span></span></div>'
+      +moreHtml+'</div>';
   });
   el.innerHTML=html;
 }

@@ -29,9 +29,8 @@
     <button data-s="floor" class="on"><span class="material-symbols-rounded">grid_view</span>Shop floor</button>
     <button data-s="sched"><span class="material-symbols-rounded">calendar_view_week</span>Schedule</button>
     <button data-s="order"><span class="material-symbols-rounded">add_circle</span>New order</button>
-    <button data-s="batch"><span class="material-symbols-rounded">widgets</span>Batch maker</button>
     <button data-s="storage"><span class="material-symbols-rounded">shelves</span>Storage</button>
-    <button data-s="massplan"><span class="material-symbols-rounded">table_view</span>Mass planning</button>
+    <button data-s="massplan"><span class="material-symbols-rounded">table_view</span>Batch planner</button>
   </div>
 
   <!-- Shop floor -->
@@ -72,33 +71,6 @@
     </div></div>
   </section>
 
-  <!-- Batch maker -->
-  <section class="view" id="v-batch" style="display:none">
-    <div class="card" style="margin-bottom:16px"><div class="card-h">
-      <h2>Create a batch</h2><span class="sub">group lots into a dyeing batch</span></div>
-      <div class="card-b">
-        <div class="grid2">
-          <label class="fld">Order (optional)<select id="b_order"></select><span class="help" id="b_orderHint">Pick lots first — orders are filtered to that customer</span></label>
-          <label class="fld">Quality<span class="req">*</span><select id="b_qual"></select><span class="hint" id="b_qualHint"></span></label>
-          <label class="fld">Shade no.<select id="b_shade"></select><span class="help" id="b_shadeHint"></span></label>
-          <label class="fld">M/C No<select id="b_mc"><option value="">— auto-assign —</option></select><span class="help">Optional — pin to a specific dye machine, e.g. JET-2</span></label>
-        </div>
-        <div class="fldlabel">Lots &amp; quantity taken from each <span class="small muted">— up to 8 lots; a batch may take only part of a lot</span></div>
-        <div class="lotq-head"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span></span><span></span></div>
-        <div id="b_lotBox"></div>
-        <div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="bAddLot()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="b_lotCount"></span></div>
-        <div class="lot-totals" id="b_totals"></div>
-        <label class="fld">Notes<textarea id="b_notes" rows="2" placeholder="Batch-specific instructions — important for jet dyeing"></textarea></label>
-        <button class="btn" onclick="submitBatch()"><span class="material-symbols-rounded">add</span>Create batch</button>
-        <div class="result" id="batchResult"></div>
-      </div>
-    </div>
-    <div class="card"><div class="card-h"><h2>Recent batches</h2><span class="sub" id="batchCount"></span>
-      <button class="btn ghost sm" onclick="exportBatchesToExcel()"><span class="material-symbols-rounded">download</span>Export</button></div>
-      <div class="tbl-wrap" id="batchList"></div>
-    </div>
-  </section>
-
   <!-- Storage -->
   <section class="view" id="v-storage" style="display:none">
     <div class="bar">
@@ -111,7 +83,6 @@
   <!-- Mass planning -->
   <section class="view" id="v-massplan" style="display:none">
     <div class="bar">
-      <label class="fld" style="max-width:200px">Plan day<input type="date" id="mp_day" onchange="mpSetDay(this.value)"></label>
       <span class="small muted" id="mp_note"></span>
     </div>
     <div id="mp_body"></div>
@@ -495,18 +466,15 @@ function renderBatchList(){
     +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${batchStatusPill(b)}</td><td>${batchLifeCell(b)}</td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td></tr>`).join("")
     +'</tbody></table>';
 }
-let MP_DAY = new Date().toISOString().slice(0,10);
 let MP_EDIT = null;   // {machineId} while an inline "new batch" editor is open
-function mpSetDay(v){ MP_DAY=v||MP_DAY; MP_EDIT=null; renderMassPlan(); }
 function renderMassPlan(){
   if(!can("op_massplan")) return;
-  const dEl=document.getElementById("mp_day"); if(dEl && !dEl.value) dEl.value=MP_DAY;
   const body=document.getElementById("mp_body");
   const machines=(DB.machines||[]).slice();
   if(!machines.length){ body.innerHTML='<div class="empty"><span class="material-symbols-rounded">precision_manufacturing</span><h3>No machines yet</h3><p>Add machines in Admin and they will appear here to plan.</p></div>'; return; }
   let totB=0, totKg=0;
   body.innerHTML=machines.map(m=>{
-    const rows=planBatches(m.id, MP_DAY);
+    const rows=planBatches(m.id);
     totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
     const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
@@ -522,16 +490,16 @@ function renderMassPlan(){
           <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
           ${canEdit?`<button class="btn ghost sm mp-del" title="delete batch" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
         </td></tr>`;
-    }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches for ${esc(m.id)} on this day.</td></tr>`)
+    }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (canEdit ? (editing
           ? `<tr class="mp-editrow"><td colspan="9">${mpEditorHTML(m)}</td></tr>`
-          : `<tr class="mp-add"><td>+${nextSeq(m.id,MP_DAY)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`)
+          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`)
         : '');
     return `<div class="card mp-machine${editing?' editing':''}"><div class="card-b">${head}
       <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
-  document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned for ${MP_DAY}`;
+  document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
   if(MP_EDIT) mpInitEditor();
 }
 /* ---- inline batch editor, right inside the machine's table (the Excel-like quick path) ---- */
@@ -570,10 +538,14 @@ function mpEditorRefreshShades(){
   const list=q?shadesForQuality(q):[];
   sh.innerHTML=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
 }
-function mpLotFilter(l){
+function mpLotFilter(l, row){
   const qv=(document.getElementById("mp_q")||{}).value||"";
   if(qv && !sameFabric(l.quality, qv)) return false;
-  return !lotAllocation(l.id).blocked;
+  if(lotAllocation(l.id).blocked) return false;
+  // a lot already chosen in another line of this batch is hidden from the list (can't add it twice)
+  const mine=row && row.querySelector(".b-lot");
+  const taken=[...document.querySelectorAll('#mp_lots .b-lot')].filter(s=>s!==mine).map(s=>lotPickVal(s));
+  return taken.indexOf(l.id)<0;
 }
 function mpAddEditorLot(){
   const box=document.getElementById("mp_lots"); if(!box) return;
@@ -589,7 +561,7 @@ function mpAddEditorLot(){
   const row=box.lastElementChild;
   // same behaviour as the Batch maker: filter to the batch's fabric, lock quality on first lot,
   // prefill from what's LEFT in the lot, and snap the meters to whole takas (takas cannot be cut)
-  wireLotPicker(row.querySelector(".b-lot"), { filterFn: mpLotFilter,
+  wireLotPicker(row.querySelector(".b-lot"), { filterFn: (l)=>mpLotFilter(l,row),
     onSelect: ()=>{ mpLockQuality(); mpPrefillRow(row); mpEditorSync(); } });
   row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
   row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
@@ -672,7 +644,7 @@ async function mpSaveNew(machineId){
   if(!mpCapacityOk(machineId, tot.weight)){
     toast(machineId+" holds "+((DB.machines.find(x=>x.id===machineId)||{}).capMax)+" kg — this "+tot.weight+" kg batch is too heavy."); return; }
   const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
-    machine:machineId, mcPin:machineId, planDay:MP_DAY, seq:nextSeq(machineId,MP_DAY),
+    machine:machineId, mcPin:machineId, seq:nextSeq(machineId),
     pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status:"planned" };
   const res=await API.save("batches", row);
   if(res && res.error){ toast(res.error); return; }
@@ -689,7 +661,7 @@ async function mpDeleteBatch(id){
 }
 async function mpMove(batchId, dir){
   const b=(DB.batches||[]).find(x=>x.id===batchId); if(!b) return;
-  const list=planBatches(b.machine,b.planDay);
+  const list=planBatches(b.machine);
   const i=list.findIndex(x=>x.id===batchId), j=i+dir;
   if(j<0||j>=list.length) return;
   const reordered=reorderPlan(list,i,j);
@@ -814,18 +786,12 @@ function exportScheduleToExcel(){
   XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",batch:"op_batch",storage:"op_storage",massplan:"op_massplan"};
+const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",storage:"op_storage",massplan:"op_massplan"};
 boot(()=>{
   f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
   f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
   f_qual.addEventListener("change",refreshShadeSelects);
   addShadeLine();
-  // batch maker
-  b_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
-  bRefreshOrders();
-  b_qual.addEventListener("change",()=>{ bRefreshShades(); bRefreshOrders(); bRefreshMachines(); });
-  b_order.addEventListener("change",()=>{ bRefreshShades(); });
-  bRefreshShades(); bRefreshOrders(); bRefreshMachines(); bLotCount(); bSyncTotals(); bLockQuality(); renderBatchList();
   renderStorageMap();
   // show only the section tabs this role may see
   const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));
