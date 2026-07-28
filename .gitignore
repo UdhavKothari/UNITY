@@ -9,3 +9,13 @@ __pycache__/
 mvp/data.json
 mvp/data.json.backup-*
 node_modules/
+
+# SQLite store (runtime data — like data.json, never committed)
+mvp/data.sqlite
+mvp/data.sqlite-wal
+mvp/data.sqlite-shm
+mvp/backups/
+
+# Secrets — user-owned, NEVER committed, NEVER read by the assistant
+mvp/secrets.local.json
+**/secrets.local.*

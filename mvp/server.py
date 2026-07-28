@@ -8,17 +8,29 @@ Run:  python server.py            (defaults to port 8080, all interfaces)
 Then open on the host:      http://localhost:8080/
 From another LAN machine:   http://<this-machine-ip>:8080/
 
-Data persists to data.json in this folder. Delete that file (or POST /api reset)
-to restore the seeded sample data.
+Data persists to data.sqlite in this folder (SQLite). On first run it imports a
+legacy data.json if one is present, then serves purely from SQLite. POST /api
+reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
-DB_PATH = os.path.join(HERE, "data.json")
+DB_PATH = os.path.join(HERE, "data.sqlite")
+JSON_PATH = os.path.join(HERE, "data.json")   # legacy store - imported once into SQLite if present
+SECRETS_PATH = os.path.join(HERE, "secrets.local.json")   # user-owned, gitignored, never logged
 LOCK = threading.Lock()
+
+def load_secrets():
+    """External-system credentials (e.g. Livewire / EMPIRE) the operator keeps in secrets.local.json.
+    Returns {} if the file is absent. Never commit this file and never log its contents."""
+    try:
+        with open(SECRETS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
 
 # ---------------------------------------------------------------- auth helpers
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
@@ -166,10 +178,7 @@ def seed():
     return data
 
 def load_db():
-    if not os.path.exists(DB_PATH):
-        save_db(seed())
-    with open(DB_PATH, "r", encoding="utf-8") as f:
-        db = json.load(f)
+    db = _load_raw()
     # auto-migrate: ensure any new tables/keys from the current seed exist
     base = seed()
     changed = False
@@ -197,11 +206,67 @@ def load_db():
         save_db(db)
     return db
 
+# ---------------------------------------------------------------- SQLite store
+# Each data-table is a SQLite table of (id, data-JSON) documents, so records keep
+# their flexible shape and the whole API/UI is unchanged, while we gain real
+# tables, indexes, atomic transactions and headroom. _seq + settings live in _kv.
+# Writes are already serialized by the request handler's LOCK, so these don't lock.
+def _connect():
+    c = sqlite3.connect(DB_PATH, timeout=10)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
+    return c
+
+def _doc_tables(c):
+    return [r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name<>'_kv' AND name NOT LIKE 'sqlite_%'")]
+
+def _read_all(c):
+    db = {}
+    for t in _doc_tables(c):
+        db[t] = [json.loads(d) for (_id, d) in c.execute('SELECT id,data FROM "%s"' % t)]
+    for (k, v) in c.execute("SELECT k,v FROM _kv"):
+        db[k] = json.loads(v)
+    return db
+
+def _write_all(c, db):
+    c.execute("CREATE TABLE IF NOT EXISTS _kv (k TEXT PRIMARY KEY, v TEXT)")
+    lists = {k for k, v in db.items() if isinstance(v, list)}
+    for t in set(_doc_tables(c)) - lists:      # a table no longer in the db (reset/wipe) is emptied
+        c.execute('DELETE FROM "%s"' % t)
+    for k, v in db.items():
+        if isinstance(v, list):
+            c.execute('CREATE TABLE IF NOT EXISTS "%s" (id TEXT PRIMARY KEY, data TEXT)' % k)
+            c.execute('DELETE FROM "%s"' % k)
+            c.executemany('INSERT OR REPLACE INTO "%s" (id,data) VALUES (?,?)' % k,
+                          [(str(r.get("id") or ("_row%d" % i)), json.dumps(r, ensure_ascii=False))
+                           for i, r in enumerate(v)])
+        elif isinstance(v, dict):
+            c.execute("INSERT OR REPLACE INTO _kv (k,v) VALUES (?,?)", (k, json.dumps(v, ensure_ascii=False)))
+    c.commit()
+
 def save_db(db):
-    tmp = DB_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(db, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, DB_PATH)
+    c = _connect()
+    try:
+        _write_all(c, db)
+    finally:
+        c.close()
+
+def _load_raw():
+    c = _connect()
+    try:
+        c.execute("CREATE TABLE IF NOT EXISTS _kv (k TEXT PRIMARY KEY, v TEXT)")
+        fresh = (not _doc_tables(c)) and (c.execute("SELECT COUNT(*) FROM _kv").fetchone()[0] == 0)
+        if fresh:                                  # one-time: import legacy data.json, else seed
+            if os.path.exists(JSON_PATH):
+                with open(JSON_PATH, "r", encoding="utf-8") as f:
+                    base = json.load(f)
+            else:
+                base = seed()
+            _write_all(c, base)
+        return _read_all(c)
+    finally:
+        c.close()
 
 # ---------------------------------------------------------------- HTTP
 CT = {".html":"text/html",".js":"application/javascript",".css":"text/css",
