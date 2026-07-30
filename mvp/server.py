@@ -37,7 +37,7 @@ SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-mem
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
-             "dashboard","machines","qualities","shadeRecipes","qualityRecipes",
+             "dashboard","machines","qualities","shadeRecipes","qualityRecipes","recipes",
              "batches","lots","weavers","takaMaster",
              "customers","orders","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]
@@ -211,6 +211,10 @@ def load_db():
 # their flexible shape and the whole API/UI is unchanged, while we gain real
 # tables, indexes, atomic transactions and headroom. _seq + settings live in _kv.
 # Writes are already serialized by the request handler's LOCK, so these don't lock.
+# HEAVY_TABLES are big reference sets (e.g. 60k dye-recipe lines) that must NOT be
+# loaded into the in-memory db or sent in /api/db — they're queried on demand instead.
+HEAVY_TABLES = {"recipes"}
+
 def _connect():
     c = sqlite3.connect(DB_PATH, timeout=10)
     c.execute("PRAGMA journal_mode=WAL")
@@ -224,6 +228,8 @@ def _doc_tables(c):
 def _read_all(c):
     db = {}
     for t in _doc_tables(c):
+        if t in HEAVY_TABLES:                  # never load big reference tables into memory
+            continue
         db[t] = [json.loads(d) for (_id, d) in c.execute('SELECT id,data FROM "%s"' % t)]
     for (k, v) in c.execute("SELECT k,v FROM _kv"):
         db[k] = json.loads(v)
@@ -232,7 +238,7 @@ def _read_all(c):
 def _write_all(c, db):
     c.execute("CREATE TABLE IF NOT EXISTS _kv (k TEXT PRIMARY KEY, v TEXT)")
     lists = {k for k, v in db.items() if isinstance(v, list)}
-    for t in set(_doc_tables(c)) - lists:      # a table no longer in the db (reset/wipe) is emptied
+    for t in set(_doc_tables(c)) - lists - HEAVY_TABLES:   # heavy tables are managed by their own ops
         c.execute('DELETE FROM "%s"' % t)
     for k, v in db.items():
         if isinstance(v, list):
@@ -265,6 +271,58 @@ def _load_raw():
                 base = seed()
             _write_all(c, base)
         return _read_all(c)
+    finally:
+        c.close()
+
+# ---- dye recipes: a big on-demand table (imported from Excel), not part of /api/db ----
+def _ensure_recipes(c):
+    c.execute("CREATE TABLE IF NOT EXISTS recipes "
+              "(id TEXT PRIMARY KEY, name TEXT, party TEXT, quality TEXT, shade TEXT, data TEXT)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_recipes_qs ON recipes(quality, shade)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_recipes_name ON recipes(name)")
+
+def recipes_bulk_add(rows):
+    c = _connect()
+    try:
+        _ensure_recipes(c)
+        payload = [( "RC-" + uuid.uuid4().hex[:10], r.get("name", ""), r.get("party", ""),
+                     r.get("quality", ""), str(r.get("shade", "")), json.dumps(r, ensure_ascii=False) )
+                   for r in rows]
+        c.executemany("INSERT INTO recipes (id,name,party,quality,shade,data) VALUES (?,?,?,?,?,?)", payload)
+        c.commit()
+        return len(payload)
+    finally:
+        c.close()
+
+def recipes_search(q, limit=200):
+    c = _connect()
+    try:
+        _ensure_recipes(c)
+        q = (q or "").strip()
+        if q:
+            like = "%" + q + "%"
+            rows = c.execute(
+                "SELECT data FROM recipes WHERE name LIKE ? OR party LIKE ? OR quality LIKE ? OR shade LIKE ? "
+                "ORDER BY name LIMIT ?", (like, like, like, like, limit)).fetchall()
+        else:
+            rows = c.execute("SELECT data FROM recipes ORDER BY name LIMIT ?", (limit,)).fetchall()
+        return [json.loads(d) for (d,) in rows]
+    finally:
+        c.close()
+
+def recipes_count():
+    c = _connect()
+    try:
+        _ensure_recipes(c)
+        return c.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
+    finally:
+        c.close()
+
+def recipes_clear():
+    c = _connect()
+    try:
+        _ensure_recipes(c)
+        c.execute("DELETE FROM recipes"); c.commit()
     finally:
         c.close()
 
@@ -417,6 +475,46 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], to, "batches", b["id"], "batch " + b["id"] + " -> " + to)
                 save_db(db)
                 return self._send(200, {"ok": True, "row": b})
+
+            # ---- dye recipes (big on-demand table; imported from Excel) ----
+            if op == "recipesBulkAdd":
+                if "recipes" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                n = recipes_bulk_add(req.get("rows") or [])
+                _log(db, u["username"], "recipesImport", "recipes", "", "added %d recipes" % n); save_db(db)
+                return self._send(200, {"ok": True, "added": n, "total": recipes_count()})
+
+            if op == "recipesClear":
+                if "recipes" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                recipes_clear()
+                _log(db, u["username"], "recipesClear", "recipes", "", "cleared all recipes"); save_db(db)
+                return self._send(200, {"ok": True})
+
+            if op == "recipesSearch":
+                if "recipes" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                return self._send(200, {"rows": recipes_search(req.get("q"), int(req.get("limit") or 200)),
+                                        "total": recipes_count()})
+
+            # ---- fast bulk insert into a normal table (client has already de-duped) ----
+            if op == "bulkUpsert":
+                table = req.get("table")
+                if table in ("activityLog",) or table in HEAVY_TABLES:
+                    return self._send(403, {"error": "not allowed for this table"})
+                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"]}.get(table, [table])
+                if not any(p in perms for p in allowed):
+                    return self._send(403, {"error": "forbidden: no permission for %s" % table})
+                if table not in db or not isinstance(db.get(table), list):
+                    return self._send(400, {"error": "unknown table %s" % table})
+                SYSTEM_IDS = ("lots", "batches", "orders")
+                added = 0
+                for row in (req.get("rows") or []):
+                    if not row.get("id"):
+                        row["id"] = _next_seq_id(db, table) if table in SYSTEM_IDS else (table[:2].upper() + "-" + uuid.uuid4().hex[:6])
+                    db[table].append(row); added += 1
+                _log(db, u["username"], "bulkUpsert", table, "", "added %d rows" % added); save_db(db)
+                return self._send(200, {"ok": True, "added": added})
 
             table = req.get("table")
             if table == "activityLog":

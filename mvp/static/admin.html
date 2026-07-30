@@ -50,7 +50,7 @@ function ic(name){
     orders:"receipt_long", storageAreas:"inventory_2", shelves:"shelves", storageSlots:"grid_view", suppliers:"local_shipping",
     operators:"badge", qcMetrics:"verified", users:"person",
     roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
-    batches:"widgets", lots:"qr_code_2", weavers:"factory",
+    batches:"widgets", lots:"qr_code_2", weavers:"factory", recipes:"science",
     activity:"history", takaMaster:"tag"
   };
   return '<span class="material-symbols-rounded">'+(M[name]||"circle")+'</span>';
@@ -271,7 +271,7 @@ const SCHEMAS={
 const PAGES=[
   ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_order","New order","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Mass planning","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
-  ["shadeRecipes","Shade recipes","Admin"],["qualityRecipes","Quality recipes","Admin"],
+  ["shadeRecipes","Shade recipes","Admin"],["qualityRecipes","Quality recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
   ["customers","Customers","Admin"],["orders","Orders","Admin"],["storageAreas","Storage areas","Admin"],
   ["shelves","Shelves","Admin"],["storageSlots","Storage slots","Admin"],
@@ -283,7 +283,7 @@ const NAV=[
   {grp:null, items:[["dashboard","Dashboard"]]},
   {grp:"Production setup", items:[["machines","Machines"],["qualities","Qualities"]]},
   {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"],["takaMaster","Taka master"],["weavers","Weavers"]]},
-  {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"]]},
+  {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"],["recipes","Dye recipes"]]},
   {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"]]},
   {grp:"Store & stock", items:[["storageAreas","Storage areas"],["shelves","Shelves"],["storageSlots","Storage slots"],["suppliers","Suppliers"]]},
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
@@ -398,6 +398,7 @@ function render(){
   if(CUR==="plan") return renderPlan(c);
   if(CUR==="activity") return renderActivity(c);
   if(CUR==="takaMaster") return renderTakaMaster(c);
+  if(CUR==="recipes") return renderRecipes(c);
   const sc=SCHEMAS[CUR];
   const term=(SEARCH[CUR]||"").toLowerCase();
   const colKeys=sc.cols.map(x=>x[0]);
@@ -916,6 +917,130 @@ async function commitLotImport(){
   document.getElementById("importOverlay").remove();
   renderNav(); render();
   toast("Imported "+ok+" of "+plan.rows.length+" lots");
+}
+
+/* ================= Dye recipes (big on-demand table, searched via the server) ================= */
+let _recipeResults=[], _recDeb=null;
+function renderRecipes(c){
+  c.innerHTML=
+    '<div class="page-head"><h1>Dye recipes</h1><p>Chemical recipes imported from Excel (party · quality · shade). A big reference set, so it is searched on demand rather than loaded with everything else.</p></div>'
+   +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
+   +'<input id="recSearch" placeholder="Search party, quality, shade or recipe name…" oninput="recipeSearchDebounced()"></div>'
+   +(can("recipes")?'<button class="btn ghost" onclick="openRecipeImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>'
+     +'<button class="btn ghost" onclick="clearRecipes()"><span class="material-symbols-rounded">delete_sweep</span>Clear all</button>':'')
+   +'</div><div id="recCount" class="small muted" style="margin:6px 2px 10px"></div><div class="tbl-wrap" id="recTable"></div>';
+  recipeSearch("");
+}
+function recipeSearchDebounced(){ clearTimeout(_recDeb); _recDeb=setTimeout(()=>recipeSearch(document.getElementById("recSearch").value),250); }
+async function recipeSearch(q){
+  const res=await API._post({op:"recipesSearch", q:q, limit:300});
+  const t=document.getElementById("recTable"); if(!t) return;
+  if(res.error){ t.innerHTML='<div class="flag">'+esc(res.error)+'</div>'; return; }
+  _recipeResults=res.rows||[]; const total=res.total||0;
+  document.getElementById("recCount").textContent=total+" recipe(s) in the system"+(q?" · showing "+_recipeResults.length+" matches":(_recipeResults.length<total?" · showing first "+_recipeResults.length:""));
+  if(!_recipeResults.length){ t.innerHTML='<div class="empty"><span class="material-symbols-rounded">science</span><h3>'+(total?'No matches':'No recipes yet')+'</h3><p>'+(total?'Try a different search.':'Use Import from Excel to load your recipe sheet.')+'</p></div>'; return; }
+  t.innerHTML='<table><thead><tr><th>Recipe</th><th>Party</th><th>Quality</th><th>Shade</th><th>M/C</th><th>Items</th><th></th></tr></thead><tbody>'
+    +_recipeResults.map((r,i)=>'<tr><td class="tnum">'+esc(r.name)+'</td><td>'+esc(r.party||"")+'</td><td>'+esc(r.quality||"")+'</td><td>'+esc(r.shade||"")+'</td><td>'+esc(r.machine||"")+'</td><td class="tnum">'+((r.items||[]).length)+'</td><td><button class="btn ghost sm" onclick="viewRecipe('+i+')">View</button></td></tr>').join("")
+    +'</tbody></table>';
+}
+function viewRecipe(i){
+  const r=_recipeResults[i]; if(!r) return;
+  const items=(r.items||[]).slice().sort((a,b)=>(+a.seq||0)-(+b.seq||0));
+  const ex=document.getElementById("recViewOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="recViewOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:680px;max-width:94vw">'
+    +'<div class="m-h"><h3><span class="material-symbols-rounded">science</span>'+esc(r.name)+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b"><div class="small muted" style="margin-bottom:10px">'+esc(r.party||"")+' &middot; '+esc(r.quality||"")+' &middot; shade '+esc(r.shade||"")+' &middot; '+esc(r.machine||"")+'</div>'
+    +'<div class="tbl-wrap"><table><thead><tr><th>Seq</th><th>Sub-process</th><th>Item</th><th>Qty</th><th>Unit</th><th>%</th></tr></thead><tbody>'
+    +items.map(it=>'<tr><td class="tnum">'+esc(it.seq)+'</td><td>'+esc(it.subProcess||"")+'</td><td>'+esc(it.item||"")+'</td><td class="tnum">'+esc(it.qty)+'</td><td>'+esc(it.unit||"")+'</td><td class="tnum">'+esc(it.pct||0)+'</td></tr>').join("")
+    +'</tbody></table></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
+  document.body.appendChild(o);
+}
+async function clearRecipes(){
+  if(!confirm("Delete ALL imported recipes? (Parties and qualities you created stay.)")) return;
+  const res=await API._post({op:"recipesClear"}); if(res&&res.error){ toast(res.error); return; }
+  toast("Recipes cleared"); recipeSearch("");
+}
+function openRecipeImport(){
+  const ex=document.getElementById("recImpOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="recImpOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:640px;max-width:94vw">'
+    +'<div class="m-h"><h3>Import dye recipes from Excel</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<p class="small muted">Columns in order: MACHINE · PROCESS · RECIPE NAME · SUB-PROCESS · ITEM NAME · QUALITY · SEQ · QUANTITY · UNIT · TIME · SHADE. A trailing % column is read if present, else computed. Recipe name is read as PARTY-QUALITY-SHADE.</p>'
+    +'<input type="file" id="recImpFile" accept=".xlsx,.xls">'
+    +'<label style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="recReplace" checked> Replace all existing recipes (recommended for a full sheet)</label>'
+    +'<div id="recImpReport" style="margin-top:12px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" id="recImpBtn" style="display:none" onclick="commitRecipeImport()">Import</button></div></div>';
+  document.body.appendChild(o);
+  document.getElementById("recImpFile").addEventListener("change", handleRecipeFile);
+}
+function handleRecipeFile(e){
+  const file=e.target.files[0]; if(!file) return;
+  document.getElementById("recImpReport").innerHTML='<div class="small muted">Reading… a large sheet can take a few seconds.</div>';
+  const reader=new FileReader();
+  reader.onload=()=>{ try{
+      const wb=XLSX.read(reader.result,{type:"array",cellDates:false});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:""});
+      const p=parseRecipeWorkbook(rows); window._recPlan=p;
+      document.getElementById("recImpReport").innerHTML=
+        '<div class="lot-totals"><span class="material-symbols-rounded">science</span><b class="tnum">'+p.recipes.length+'</b> recipes from <b class="tnum">'+p.rowCount+'</b> lines</div>'
+       +'<div class="small muted" style="margin-top:6px">Will also add <b>'+p.newParties.length+'</b> new part'+(p.newParties.length===1?'y':'ies')+' (customers) and <b>'+p.newQualities.length+'</b> new qualit'+(p.newQualities.length===1?'y':'ies')+'.'
+       +(p.skipped?' Skipped '+p.skipped+' blank/unreadable rows.':'')+'</div>';
+      document.getElementById("recImpBtn").style.display="";
+    }catch(err){ document.getElementById("recImpReport").innerHTML='<div class="flag">Could not read this file: '+esc(err.message)+'</div>'; }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function _rval(row,i){ return i<row.length ? row[i] : ""; }
+function parseRecipeWorkbook(rows){
+  let start=0;
+  if(rows.length){ const first=String(_rval(rows[0],0)||"").toUpperCase(), third=String(_rval(rows[0],2)||"").toUpperCase();
+    if(first==="MACHINE" || third.indexOf("RECIPE")>=0 || first.indexOf("MACHINE")>=0) start=1; }
+  const byName={}; let rowCount=0, skipped=0;
+  for(let r=start;r<rows.length;r++){
+    const row=rows[r]||[];
+    const machine=String(_rval(row,0)||"").trim(), process=String(_rval(row,1)||"").trim(), name=String(_rval(row,2)||"").trim();
+    const sub=String(_rval(row,3)||"").trim(), item=String(_rval(row,4)||"").trim(), quality=String(_rval(row,5)||"").trim();
+    const seq=+_rval(row,6)||0, qty=+_rval(row,7)||0, unit=String(_rval(row,8)||"").trim().toUpperCase();
+    const time=String(_rval(row,9)||"").trim(), shade=String(_rval(row,10)||"").trim();
+    let pct=_rval(row,11); pct=(pct===""||pct==null)?(unit==="KG"?Math.round(qty*1e8)/1e6:0):(+pct||0);
+    if(!name || !item){ skipped++; continue; }
+    rowCount++;
+    if(!byName[name]){
+      let party=name; const suffix="-"+quality+"-"+shade;
+      if(quality && shade && name.toUpperCase().endsWith(suffix.toUpperCase())) party=name.slice(0, name.length-suffix.length);
+      else party=name.split("-")[0];
+      byName[name]={name, party, quality, shade, machine, process, items:[]};
+    }
+    byName[name].items.push({subProcess:sub, item, seq, qty, unit, pct, time});
+  }
+  const recipes=Object.keys(byName).map(k=>{ const rc=byName[k]; rc.items.sort((a,b)=>(+a.seq||0)-(+b.seq||0)); return rc; });
+  const existC=new Set((DB.customers||[]).map(c=>String(c.name).toUpperCase()));
+  const existQ=new Set((DB.qualities||[]).map(q=>String(q.name).toUpperCase()));
+  const newParties=[...new Set(recipes.map(r=>r.party).filter(Boolean))].filter(p=>!existC.has(p.toUpperCase()));
+  const newQualities=[...new Set(recipes.map(r=>r.quality).filter(Boolean))].filter(q=>!existQ.has(q.toUpperCase()));
+  return {recipes, rowCount, skipped, newParties, newQualities};
+}
+async function commitRecipeImport(){
+  const p=window._recPlan; if(!p||!p.recipes.length) return;
+  const btn=document.getElementById("recImpBtn"); btn.disabled=true; btn.textContent="Importing…";
+  try{
+    if(document.getElementById("recReplace").checked) await API._post({op:"recipesClear"});
+    if(p.newParties.length) await API._post({op:"bulkUpsert", table:"customers", rows:p.newParties.map(name=>({name}))});
+    if(p.newQualities.length) await API._post({op:"bulkUpsert", table:"qualities", rows:p.newQualities.map(name=>({name, gsm:100, width:(cfg().widthDefault||56), maxBatch:300}))});
+    for(let i=0;i<p.recipes.length;i+=300){
+      const res=await API._post({op:"recipesBulkAdd", rows:p.recipes.slice(i,i+300)});
+      if(res&&res.error){ toast(res.error); break; }
+      btn.textContent="Importing… "+Math.min(i+300,p.recipes.length)+"/"+p.recipes.length;
+    }
+    await API.db();
+    document.getElementById("recImpOverlay").remove();
+    renderNav(); render();
+    toast("Imported "+p.recipes.length+" recipes"+(p.newParties.length?" · +"+p.newParties.length+" parties":"")+(p.newQualities.length?" · +"+p.newQualities.length+" qualities":""));
+  }catch(err){ toast("Import failed: "+esc(err.message)); btn.disabled=false; btn.textContent="Import"; }
 }
 const BULK_ADD_TABLES=["machines","customers","suppliers","operators","qcMetrics","shadeRecipes","qualityRecipes","weavers"];
 const BULK_ADD_SKIP_TYPES=new Set(["readonly","perms","aux","takas","lotTotal","lotqty","batchTotal","lotsel","password"]);
