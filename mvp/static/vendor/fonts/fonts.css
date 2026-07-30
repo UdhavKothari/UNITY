@@ -1,0 +1,40 @@
+/* Self-hosted fonts so the ERP runs fully offline — no Google Fonts, no internet needed. */
+
+/* Inter — variable weight (covers 400–800 used across the UI) */
+@font-face{
+  font-family:'Inter';
+  font-style:normal;
+  font-weight:100 900;
+  font-display:swap;
+  src:url('inter-var.woff2') format('woff2');
+}
+
+/* IBM Plex Mono — numbers, IDs, times, uppercase micro-labels */
+@font-face{ font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url('ibm-plex-mono-400.woff2') format('woff2'); }
+@font-face{ font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url('ibm-plex-mono-500.woff2') format('woff2'); }
+@font-face{ font-family:'IBM Plex Mono';font-style:normal;font-weight:600;font-display:swap;src:url('ibm-plex-mono-600.woff2') format('woff2'); }
+
+/* Material Symbols Rounded — the one icon family used everywhere */
+@font-face{
+  font-family:'Material Symbols Rounded';
+  font-style:normal;
+  font-weight:100 700;
+  font-display:block;
+  src:url('material-symbols-rounded.woff2') format('woff2');
+}
+/* icon glyph rendering (name → glyph via ligatures). style.css adds size + variation axes. */
+.material-symbols-rounded{
+  font-family:'Material Symbols Rounded';
+  font-weight:normal;
+  font-style:normal;
+  line-height:1;
+  letter-spacing:normal;
+  text-transform:none;
+  display:inline-block;
+  white-space:nowrap;
+  word-wrap:normal;
+  direction:ltr;
+  -webkit-font-feature-settings:'liga';
+  font-feature-settings:'liga';
+  -webkit-font-smoothing:antialiased;
+}

@@ -270,7 +270,8 @@ def _load_raw():
 
 # ---------------------------------------------------------------- HTTP
 CT = {".html":"text/html",".js":"application/javascript",".css":"text/css",
-      ".json":"application/json",".svg":"image/svg+xml",".ico":"image/x-icon"}
+      ".json":"application/json",".svg":"image/svg+xml",".ico":"image/x-icon",
+      ".woff2":"font/woff2",".woff":"font/woff"}
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json", cookies=None):
