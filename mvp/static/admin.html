@@ -926,8 +926,9 @@ function renderRecipes(c){
     '<div class="page-head"><h1>Dye recipes</h1><p>Chemical recipes imported from Excel (party · quality · shade). A big reference set, so it is searched on demand rather than loaded with everything else.</p></div>'
    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
    +'<input id="recSearch" placeholder="Search party, quality, shade or recipe name…" oninput="recipeSearchDebounced()"></div>'
-   +(can("recipes")?'<button class="btn ghost" onclick="openRecipeImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>'
-     +'<button class="btn ghost" onclick="clearRecipes()"><span class="material-symbols-rounded">delete_sweep</span>Clear all</button>':'')
+   +(can("recipes")?'<button class="btn ghost" onclick="openRecipeImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>':'')
+   +(can("shadeRecipes")?'<button class="btn ghost" onclick="syncShadesFromRecipes()"><span class="material-symbols-rounded">palette</span>Add shades to qualities</button>':'')
+   +(can("recipes")?'<button class="btn ghost" onclick="clearRecipes()"><span class="material-symbols-rounded">delete_sweep</span>Clear all</button>':'')
    +'</div><div id="recCount" class="small muted" style="margin:6px 2px 10px"></div><div class="tbl-wrap" id="recTable"></div>';
   recipeSearch("");
 }
@@ -961,6 +962,28 @@ async function clearRecipes(){
   if(!confirm("Delete ALL imported recipes? (Parties and qualities you created stay.)")) return;
   const res=await API._post({op:"recipesClear"}); if(res&&res.error){ toast(res.error); return; }
   toast("Recipes cleared"); recipeSearch("");
+}
+/* one click: make every quality-shade seen in the recipes exist in the shade list, so shades are selectable */
+async function syncShadesFromRecipes(){
+  const res=await API._post({op:"recipesShades"});
+  if(res&&res.error){ toast(res.error); return; }
+  const pairs=res.pairs||[];
+  if(!pairs.length){ toast("No recipe shades found — import recipes first"); return; }
+  const key=(q,s)=>String(q).toUpperCase()+"\0"+String(s).toUpperCase();
+  const have=new Set((DB.shadeRecipes||[]).map(s=>key(s.quality,s.shade)));
+  const toAdd=pairs.filter(p=>!have.has(key(p.quality,p.shade)))
+    .map(p=>({quality:p.quality, shade:p.shade, family:"Neutral", tone:0, program:"from dye recipe"}));
+  if(!toAdd.length){ toast("All "+pairs.length+" recipe shades are already in the shade list"); return; }
+  const quals=new Set(toAdd.map(x=>x.quality));
+  if(!confirm("Add "+toAdd.length+" shade(s) across "+quals.size+" qualit"+(quals.size===1?"y":"ies")+" to the shade list?\n\n(They're added as neutral placeholders — you can set family/tone later. Existing shades are left untouched.)")) return;
+  let done=0;
+  for(let i=0;i<toAdd.length;i+=1000){
+    const r=await API._post({op:"bulkUpsert", table:"shadeRecipes", rows:toAdd.slice(i,i+1000)});
+    if(r&&r.error){ toast(r.error); break; }
+    done+=Math.min(1000,toAdd.length-i);
+  }
+  await API.db(); renderNav(); render();
+  toast("Added "+done+" shades across "+quals.size+" qualities");
 }
 function openRecipeImport(){
   const ex=document.getElementById("recImpOverlay"); if(ex) ex.remove();

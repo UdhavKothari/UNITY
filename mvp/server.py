@@ -318,6 +318,15 @@ def recipes_count():
     finally:
         c.close()
 
+def recipes_distinct_shades():
+    c = _connect()
+    try:
+        _ensure_recipes(c)
+        return [{"quality": q, "shade": s} for (q, s) in c.execute(
+            "SELECT DISTINCT quality, shade FROM recipes WHERE quality<>'' AND shade<>'' ORDER BY quality, shade")]
+    finally:
+        c.close()
+
 def recipes_clear():
     c = _connect()
     try:
@@ -496,6 +505,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(403, {"error": "forbidden"})
                 return self._send(200, {"rows": recipes_search(req.get("q"), int(req.get("limit") or 200)),
                                         "total": recipes_count()})
+
+            if op == "recipesShades":
+                if "recipes" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                return self._send(200, {"pairs": recipes_distinct_shades()})
 
             # ---- fast bulk insert into a normal table (client has already de-duped) ----
             if op == "bulkUpsert":
