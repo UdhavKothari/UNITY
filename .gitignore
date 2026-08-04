@@ -19,3 +19,6 @@ mvp/backups/
 # Secrets — user-owned, NEVER committed, NEVER read by the assistant
 mvp/secrets.local.json
 **/secrets.local.*
+
+# Inbox drop folder (runtime CSVs from the .bat, processed files, logs)
+mvp/inbox/

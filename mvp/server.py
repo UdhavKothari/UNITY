@@ -12,7 +12,7 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, csv as _csv
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -629,16 +629,137 @@ def _watch_and_reload(interval=1.0):
                 print("auto-reload failed, please restart manually:", e, flush=True)
                 return
 
+# ---------------------------------------------------------------- inbox: auto-import lots from CSV
+# Your .bat drops a CSV into mvp/inbox/ ; this watcher reads it, turns each row into a lot
+# (keyed by the source lot number, which becomes the lot id), then moves the file to
+# inbox/done or inbox/error with a .log. Columns are matched by header NAME (order-independent).
+# If your headers differ, just adjust LOT_COL_ALIASES below.
+INBOX_DIR  = os.path.join(HERE, "inbox")
+INBOX_DONE = os.path.join(INBOX_DIR, "done")
+INBOX_ERR  = os.path.join(INBOX_DIR, "error")
+INBOX_POLL_SECS = 45
+
+LOT_COL_ALIASES = {
+    "lotNo":     ["LOT NO", "LOT NO.", "LOTNO", "LOT NUMBER", "LOT_NO", "LOT ID", "LOT"],
+    "srcLotNo":  ["WEAVER LOT NO", "SRC LOT NO", "PARTY LOT NO", "WV LOT"],
+    "quality":   ["QUALITY", "QUALITY NAME", "ITEM NAME", "ITEM", "DESIGN"],
+    "customer":  ["PARTY", "PARTY NAME", "PARTY GROUP", "CUSTOMER"],
+    "weaver":    ["WEAVER", "WEAVER NAME"],
+    "master":    ["MASTER"],
+    "challanNo": ["CHALLAN", "CHALLAN NO", "CHALLAN NUMBER", "PTY CH", "CH NO", "INWARD CHALLAN"],
+    "empireRef": ["EMPIRE", "EMPIRE REF", "EXCISE"],
+    "inDate":    ["INW DATE", "IN DATE", "INWARD DATE", "ENTRY DATE", "DATE"],
+    "pcs":       ["BAL PC", "BAL PCS", "PCS", "PIECES", "NO OF TAKA", "TAKA", "TAKAS", "BALANCE PCS"],
+    "meters":    ["BAL MTS", "BAL MTS.", "METERS", "METER", "MTS", "MTR", "MTRS", "BALANCE MTS", "TOTAL MTS"],
+}
+
+def _norm_hdr(h): return re.sub(r"[^A-Z0-9]", "", str(h).upper())
+
+def _num(x):
+    try: return float(str(x).replace(",", "").strip() or 0)
+    except (ValueError, TypeError): return 0.0
+
+def _synth_takas(total_m, pcs):
+    n = max(1, int(round(pcs or 0)) or 1)
+    avg = round((total_m / n) * 2) / 2.0
+    out = [avg] * (n - 1)
+    out.append(max(0.5, round((total_m - avg * (n - 1)) * 2) / 2.0))
+    return out
+
+def _colmap(headers):
+    norm = [_norm_hdr(h) for h in headers]; m = {}
+    for field, aliases in LOT_COL_ALIASES.items():
+        for a in aliases:
+            na = _norm_hdr(a)
+            if na in norm:
+                m[field] = norm.index(na); break
+    return m
+
+def _csv_to_lots(headers, rows):
+    cm = _colmap(headers)
+    if "lotNo" not in cm:
+        raise ValueError("no lot-number column found (looked for %s); headers were %s"
+                         % (LOT_COL_ALIASES["lotNo"], headers))
+    out = []
+    for r in rows:
+        get = lambda f: (r[cm[f]] if (f in cm and cm[f] < len(r)) else "")
+        lotno = str(get("lotNo")).strip()
+        if not lotno:
+            continue
+        lot = {"id": lotno, "status": "in stock"}
+        for f in ("srcLotNo", "quality", "customer", "weaver", "master", "challanNo", "empireRef", "inDate"):
+            v = str(get(f)).strip()
+            if v: lot[f] = v
+        pcs, meters = _num(get("pcs")), _num(get("meters"))
+        if pcs and meters:
+            lot["takas"] = _synth_takas(meters, pcs)
+            lot["takaNos"] = list(range(1, len(lot["takas"]) + 1))
+        out.append(lot)
+    return out
+
+def _apply_lots(lots):
+    with LOCK:
+        db = load_db()
+        by_id = {l.get("id"): l for l in db.get("lots", [])}
+        added = updated = 0
+        for lot in lots:
+            if lot["id"] in by_id:
+                by_id[lot["id"]].update(lot); updated += 1
+            else:
+                db.setdefault("lots", []).append(lot); by_id[lot["id"]] = lot; added += 1
+        _log(db, "inbox", "lotImport", "lots", "", "imported %d lots (%d new, %d updated)" % (len(lots), added, updated))
+        save_db(db)
+    return added, updated
+
+def _process_inbox(path):
+    if path.lower().endswith((".xlsx", ".xls")):
+        raise ValueError("Excel received — please export CSV, not Excel (the server reads CSV).")
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = [r for r in _csv.reader(f) if any(str(x).strip() for x in r)]
+    if not rows:
+        raise ValueError("empty file")
+    added, updated = _apply_lots(_csv_to_lots(rows[0], rows[1:]))
+    return "%d rows -> %d new, %d updated lots" % (len(rows) - 1, added, updated)
+
+def _inbox_watcher():
+    for d in (INBOX_DIR, INBOX_DONE, INBOX_ERR):
+        try: os.makedirs(d, exist_ok=True)
+        except OSError: pass
+    while True:
+        try:
+            for name in sorted(os.listdir(INBOX_DIR)):
+                p = os.path.join(INBOX_DIR, name)
+                if not os.path.isfile(p) or name.startswith(".") or not name.lower().endswith((".csv", ".txt", ".xlsx", ".xls")):
+                    continue
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                try:
+                    summary = _process_inbox(p)
+                    dest = os.path.join(INBOX_DONE, stamp + "-" + name); os.replace(p, dest)
+                    with open(dest + ".log", "w", encoding="utf-8") as lf: lf.write("OK: " + summary + "\n")
+                    print("[inbox]", name, "->", summary, flush=True)
+                except Exception as e:
+                    try: dest = os.path.join(INBOX_ERR, stamp + "-" + name); os.replace(p, dest)
+                    except OSError: dest = p
+                    try:
+                        with open(dest + ".log", "w", encoding="utf-8") as lf: lf.write("ERROR: " + str(e) + "\n")
+                    except OSError: pass
+                    print("[inbox] ERROR", name, ":", e, flush=True)
+        except Exception as e:
+            print("[inbox] watcher error:", e, flush=True)
+        time.sleep(INBOX_POLL_SECS)
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    load_db()  # ensure data.json exists
+    load_db()  # ensure the database exists
     threading.Thread(target=_watch_and_reload, daemon=True).start()
+    threading.Thread(target=_inbox_watcher, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"REL Dyeing ERP MVP running:")
     print(f"   local:   http://localhost:{port}/")
     print(f"   LAN:     http://<this-machine-ip>:{port}/   (share with floor terminals)")
     print(f"   admin:   http://localhost:{port}/admin.html")
     print(f"Data file: {DB_PATH}")
+    print(f"Inbox:     drop CSVs in {INBOX_DIR} — auto-imported as lots every {INBOX_POLL_SECS}s")
     print("Auto-reload is ON (server.py edits restart it) · pages are never cached")
     try:
         srv.serve_forever()
