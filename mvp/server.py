@@ -567,14 +567,22 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(403, {"error": "Only a Master can flag a batch urgent"})
                     if bool(row.get("urgent")) and not was:
                         row["urgentBy"] = u["username"]; row["urgentAt"] = time.strftime("%Y-%m-%d %H:%M")
+                lotno = ""
                 if table == "lots":
                     tk = row.get("takas") or []
                     row["takaNos"] = list(range(1, len(tk) + 1))   # stable positional taka numbers
-                SYSTEM_IDS = ("lots", "batches", "orders")
-                if table in SYSTEM_IDS and not existing:
-                    # system-numbered tables: the id is ALWAYS generated here, never taken
-                    # from the client, and an existing record can never have its id changed
-                    row["id"] = _next_seq_id(db, table)
+                    lotno = str(row.pop("lotNo", "") or row.get("id") or "").strip()   # the number IS the lot's identity
+                SYSTEM_IDS = ("batches", "orders")                 # lots are no longer auto-numbered (point 3)
+                if table == "lots" and not existing:
+                    # the lot number comes from the source system (Livewire/EMPIRE), never allocated here
+                    if not lotno:
+                        return self._send(400, {"error": "A lot number is required — this system no longer allocates lot numbers."})
+                    if any(r.get("id") == lotno for r in db["lots"]):
+                        return self._send(400, {"error": "Lot number '%s' already exists." % lotno})
+                    row["id"] = lotno
+                    db["lots"].append(row)
+                elif table in SYSTEM_IDS and not existing:
+                    row["id"] = _next_seq_id(db, table)            # batches / orders are still system-numbered
                     db[table].append(row)
                 elif not row.get("id"):
                     row["id"] = table[:2].upper() + "-" + uuid.uuid4().hex[:6]
