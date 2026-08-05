@@ -639,18 +639,17 @@ INBOX_DONE = os.path.join(INBOX_DIR, "done")
 INBOX_ERR  = os.path.join(INBOX_DIR, "error")
 INBOX_POLL_SECS = 45
 
+# Header names matched (order-independent). Each CSV row is ONE taka; rows are grouped by LOT.
+# TAKA length uses TakaPendingMts (falls back to Despatch, then Received). Adjust here if needed.
 LOT_COL_ALIASES = {
-    "lotNo":     ["LOT NO", "LOT NO.", "LOTNO", "LOT NUMBER", "LOT_NO", "LOT ID", "LOT"],
-    "srcLotNo":  ["WEAVER LOT NO", "SRC LOT NO", "PARTY LOT NO", "WV LOT"],
-    "quality":   ["QUALITY", "QUALITY NAME", "ITEM NAME", "ITEM", "DESIGN"],
-    "customer":  ["PARTY", "PARTY NAME", "PARTY GROUP", "CUSTOMER"],
-    "weaver":    ["WEAVER", "WEAVER NAME"],
-    "master":    ["MASTER"],
-    "challanNo": ["CHALLAN", "CHALLAN NO", "CHALLAN NUMBER", "PTY CH", "CH NO", "INWARD CHALLAN"],
-    "empireRef": ["EMPIRE", "EMPIRE REF", "EXCISE"],
-    "inDate":    ["INW DATE", "IN DATE", "INWARD DATE", "ENTRY DATE", "DATE"],
-    "pcs":       ["BAL PC", "BAL PCS", "PCS", "PIECES", "NO OF TAKA", "TAKA", "TAKAS", "BALANCE PCS"],
-    "meters":    ["BAL MTS", "BAL MTS.", "METERS", "METER", "MTS", "MTR", "MTRS", "BALANCE MTS", "TOTAL MTS"],
+    "lotNo":   ["LOT", "LOT NO", "LOTNO", "LOT NUMBER"],
+    "quality": ["GREYQUAL", "GREY QUALITY", "GREYQUALITY", "GREY QUAL", "QUALITY", "ITEM NAME"],
+    "cardNo":  ["CARDNO", "CARD NO", "CARD"],
+    "inDate":  ["LOTCREATETIME", "LOT CREATE TIME", "INW DATE", "IN DATE", "DATE"],
+    "takaSr":  ["TAKASRNO", "TAKA SR NO", "TAKA SRNO", "SR NO", "SRNO", "TAKA NO"],
+    "takaMts": ["TAKAPENDINGMTS", "TAKA PENDING MTS", "TAKADESPATCHMTS", "TAKA DESPATCH MTS",
+                "TAKARECEIVEDMTS", "PENDING MTS", "METERS", "MTS", "MTR"],
+    "takaWt":  ["TAKA_WT", "TAKAWT", "TAKA WT", "WEIGHT", "WT"],
 }
 
 def _norm_hdr(h): return re.sub(r"[^A-Z0-9]", "", str(h).upper())
@@ -658,13 +657,6 @@ def _norm_hdr(h): return re.sub(r"[^A-Z0-9]", "", str(h).upper())
 def _num(x):
     try: return float(str(x).replace(",", "").strip() or 0)
     except (ValueError, TypeError): return 0.0
-
-def _synth_takas(total_m, pcs):
-    n = max(1, int(round(pcs or 0)) or 1)
-    avg = round((total_m / n) * 2) / 2.0
-    out = [avg] * (n - 1)
-    out.append(max(0.5, round((total_m - avg * (n - 1)) * 2) / 2.0))
-    return out
 
 def _colmap(headers):
     norm = [_norm_hdr(h) for h in headers]; m = {}
@@ -675,27 +667,71 @@ def _colmap(headers):
                 m[field] = norm.index(na); break
     return m
 
-def _csv_to_lots(headers, rows):
-    cm = _colmap(headers)
+def _find_header(rows):
+    # skip SQL-dump noise ("Changed database context...", a dashes row); the header row has LOT + a taka/quality column
+    for i, r in enumerate(rows):
+        norm = [_norm_hdr(x) for x in r]
+        if "LOT" in norm and any(h in norm for h in ("TAKASRNO", "GREYQUAL", "GREYQUALITY")):
+            return i
+    return 0
+
+def _csv_to_lots(rows):
+    if not rows:
+        return []
+    hi = _find_header(rows)
+    cm = _colmap(rows[hi])
     if "lotNo" not in cm:
-        raise ValueError("no lot-number column found (looked for %s); headers were %s"
-                         % (LOT_COL_ALIASES["lotNo"], headers))
-    out = []
-    for r in rows:
+        raise ValueError("no lot column found (looked for %s); header row was %s"
+                         % (LOT_COL_ALIASES["lotNo"], rows[hi]))
+    lots = {}
+    for r in rows[hi + 1:]:
+        if not any(str(x).strip() for x in r):
+            continue
         get = lambda f: (r[cm[f]] if (f in cm and cm[f] < len(r)) else "")
         lotno = str(get("lotNo")).strip()
-        if not lotno:
+        if not lotno or set(lotno) <= set("- ") or "(" in lotno:   # skip dashes + SQL footers like "(445 rows affected)"
             continue
-        lot = {"id": lotno, "status": "in stock"}
-        for f in ("srcLotNo", "quality", "customer", "weaver", "master", "challanNo", "empireRef", "inDate"):
-            v = str(get(f)).strip()
-            if v: lot[f] = v
-        pcs, meters = _num(get("pcs")), _num(get("meters"))
-        if pcs and meters:
-            lot["takas"] = _synth_takas(meters, pcs)
-            lot["takaNos"] = list(range(1, len(lot["takas"]) + 1))
+        lot = lots.get(lotno)
+        if lot is None:
+            lot = {"id": lotno, "status": "in stock", "takas": [], "takaNos": [], "_wts": []}
+            q = str(get("quality")).strip()
+            if q: lot["quality"] = q
+            card = str(get("cardNo")).strip()
+            if card: lot["challanNo"] = card; lot["cardNo"] = card
+            dt = str(get("inDate")).strip()
+            if dt:
+                lot["inDate"] = dt[:10]
+                if len(dt) >= 16: lot["inTime"] = dt[11:16]
+            lots[lotno] = lot
+        mts = _num(get("takaMts"))
+        if mts <= 0:
+            continue                                  # a fully-processed / zero-length taka isn't stock
+        try: sr = int(float(get("takaSr")))
+        except (ValueError, TypeError): sr = len(lot["takas"]) + 1
+        lot["takas"].append(mts); lot["takaNos"].append(sr); lot["_wts"].append(_num(get("takaWt")))
+    out = []
+    for lot in lots.values():
+        if not lot["takas"]:
+            continue                                   # drop any lot that ended up with no real takas (noise)
+        order = sorted(range(len(lot["takaNos"])), key=lambda i: lot["takaNos"][i])   # by taka SR no.
+        lot["takas"]   = [lot["takas"][i] for i in order]
+        lot["takaNos"] = [lot["takaNos"][i] for i in order]
+        wts = [lot["_wts"][i] for i in order]; lot.pop("_wts", None)
+        lot["pcs"] = len(lot["takas"]); lot["meters"] = round(sum(lot["takas"]))
+        if sum(wts) > 0:
+            lot["weight"] = round(sum(wts) * 10) / 10; lot["takaWts"] = wts
         out.append(lot)
     return out
+
+def _prune_dir(d, keep=30):
+    try:
+        files = sorted(f for f in os.listdir(d) if f.lower().endswith((".csv", ".txt")))
+    except OSError:
+        return
+    for old in files[:-keep]:                          # keep the newest `keep`, delete the rest (+ their .log)
+        for path in (os.path.join(d, old), os.path.join(d, old + ".log")):
+            try: os.remove(path)
+            except OSError: pass
 
 def _apply_lots(lots):
     with LOCK:
@@ -715,11 +751,12 @@ def _process_inbox(path):
     if path.lower().endswith((".xlsx", ".xls")):
         raise ValueError("Excel received — please export CSV, not Excel (the server reads CSV).")
     with open(path, newline="", encoding="utf-8-sig") as f:
-        rows = [r for r in _csv.reader(f) if any(str(x).strip() for x in r)]
-    if not rows:
-        raise ValueError("empty file")
-    added, updated = _apply_lots(_csv_to_lots(rows[0], rows[1:]))
-    return "%d rows -> %d new, %d updated lots" % (len(rows) - 1, added, updated)
+        rows = list(_csv.reader(f))
+    lots = _csv_to_lots(rows)
+    if not lots:
+        raise ValueError("no lots found in file")
+    added, updated = _apply_lots(lots)
+    return "%d lots (%d new, %d updated) from %d rows" % (len(lots), added, updated, len(rows))
 
 def _inbox_watcher():
     for d in (INBOX_DIR, INBOX_DONE, INBOX_ERR):
@@ -744,6 +781,7 @@ def _inbox_watcher():
                         with open(dest + ".log", "w", encoding="utf-8") as lf: lf.write("ERROR: " + str(e) + "\n")
                     except OSError: pass
                     print("[inbox] ERROR", name, ":", e, flush=True)
+            _prune_dir(INBOX_DONE); _prune_dir(INBOX_ERR)   # retain only the newest 30 processed files
         except Exception as e:
             print("[inbox] watcher error:", e, flush=True)
         time.sleep(INBOX_POLL_SECS)
