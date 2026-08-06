@@ -477,13 +477,6 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], "changePassword", "users", u.get("id", ""), "changed password"); save_db(db)
                 return self._send(200, {"ok": True})
 
-            if op == "reset":
-                if "settings" not in perms:
-                    return self._send(403, {"error": "forbidden"})
-                who = u["username"]
-                db = seed(); _log(db, who, "reset", "", "", "reset to seed data"); save_db(db)
-                return self._send(200, {"ok": True})
-
             if op == "batchStatus":
                 if not any(p in perms for p in ("batches", "op_batch")):
                     return self._send(403, {"error": "forbidden"})

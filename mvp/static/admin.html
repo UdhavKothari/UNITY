@@ -13,7 +13,6 @@
   <nav><a href="index.html">Operations</a><a href="admin.html" class="on">Admin</a></nav>
   <div class="right">
     <span id="userbox" style="display:flex;align-items:center;gap:8px"></span>
-    <button id="resetBtn" class="btn ghost sm" onclick="resetData()">Reset sample data</button>
     <span class="envtag">Admin console</span>
   </div>
 </header>
@@ -1213,7 +1212,6 @@ async function commitQualityQuickAdd(){
   toast("Saved "+rows.length+" quality(ies)");
 }
 async function delRow(table,id){ if(!confirm("Delete this record?"))return; await API.del(table,id); await API.db(); renderNav(); render(); toast("Deleted"); }
-async function resetData(){ if(!confirm("Reset ALL data to the sample seed? This cannot be undone."))return; await API.reset(); await API.db(); renderNav(); render(); toast("Data reset"); }
 
 /* ---- settings ---- */
 function renderSettings(c){

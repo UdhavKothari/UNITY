@@ -6,8 +6,7 @@ const API = {
   async _post(body){ const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); return r.json(); },
   save(table,row){ return this._post({op:"upsert",table,row}); },
   del(table,id){ return this._post({op:"delete",table,id}); },
-  batchStatus(id,to){ return this._post({op:"batchStatus",id,to}); },
-  reset(){ return this._post({op:"reset"}); }
+  batchStatus(id,to){ return this._post({op:"batchStatus",id,to}); }
 };
 
 /* ---------- lookups ---------- */
