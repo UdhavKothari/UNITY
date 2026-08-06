@@ -37,7 +37,7 @@ SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-mem
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
-             "dashboard","machines","qualities","shadeRecipes","qualityRecipes","recipes",
+             "dashboard","machines","qualities","shadeRecipes","recipes",
              "batches","lots","weavers","takaMaster",
              "customers","orders","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]

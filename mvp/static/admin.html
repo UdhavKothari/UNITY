@@ -45,7 +45,7 @@ const MAX_TAKAS=50;
 function ic(name){
   const M={
     dashboard:"grid_view", machines:"precision_manufacturing", qualities:"layers",
-    shadeRecipes:"palette", qualityRecipes:"science", customers:"groups",
+    shadeRecipes:"palette", customers:"groups",
     orders:"receipt_long", storageAreas:"inventory_2", shelves:"shelves", storageSlots:"grid_view", suppliers:"local_shipping",
     operators:"badge", qcMetrics:"verified", users:"person",
     roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
@@ -113,13 +113,6 @@ const SCHEMAS={
       {k:"speca",l:"Standard a*",sec:"Spectrophotometer standard (checked at QC)",t:"number",step:0.1},
       {k:"specb",l:"Standard b*",sec:"Spectrophotometer standard (checked at QC)",t:"number",step:0.1},
       {k:"dETol",l:"Allowed dE",sec:"Spectrophotometer standard (checked at QC)",t:"number",min:0,step:0.1,help:"Max colour difference vs standard for a pass"}]},
-  qualityRecipes:{label:"Quality recipes",single:"quality recipe",
-    cols:[["quality","Quality"],["auxSummary","Auxiliary chemicals"],["notes","Notes"]],
-    search:["quality","notes"],
-    fields:[
-      {k:"quality",l:"Quality",sec:"Quality",t:"qsel",req:true},
-      {k:"aux",l:"Auxiliary chemicals",sec:"Auxiliary chemicals (up to 20)",t:"aux"},
-      {k:"notes",l:"Process notes",sec:"Notes",t:"textarea"}]},
   customers:{label:"Customers",single:"customer",
     cols:[["name","Name"],["gstNo","GST No."],["contactNo","Contact no."],["contactName","Contact"],["email","Email"],["officeAddress","Office address"]],
     search:["name","contactName","gstNo","email","officeAddress"],
@@ -272,7 +265,7 @@ const SCHEMAS={
 const PAGES=[
   ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_order","New order","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Mass planning","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
-  ["shadeRecipes","Shade recipes","Admin"],["qualityRecipes","Quality recipes","Admin"],["recipes","Dye recipes","Admin"],
+  ["shadeRecipes","Shade recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
   ["customers","Customers","Admin"],["orders","Orders","Admin"],["storageAreas","Storage areas","Admin"],
   ["shelves","Shelves","Admin"],["storageSlots","Storage slots","Admin"],
@@ -284,7 +277,7 @@ const NAV=[
   {grp:null, items:[["dashboard","Dashboard"]]},
   {grp:"Production setup", items:[["machines","Machines"],["qualities","Qualities"]]},
   {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"],["takaMaster","Taka master"],["weavers","Weavers"]]},
-  {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"],["recipes","Dye recipes"]]},
+  {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["recipes","Dye recipes"]]},
   {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"]]},
   {grp:"Store & stock", items:[["storageAreas","Storage areas"],["shelves","Shelves"],["storageSlots","Storage slots"],["suppliers","Suppliers"]]},
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
@@ -534,17 +527,26 @@ function openInfoModal(title, bodyHtml){
 
 /* ---- dashboard ---- */
 function renderDashboard(c){
-  const cards=[["machines","Machines"],["qualities","Qualities"],["shadeRecipes","Shade recipes"],["qualityRecipes","Quality recipes"],
+  const cards=[["machines","Machines"],["qualities","Qualities"],["shadeRecipes","Shade recipes"],
     ["customers","Customers"],["orders","Open orders"],["storageAreas","Storage areas"],["suppliers","Suppliers"],["operators","Operators"]];
   let S=null; try{ S=computeSchedule(); }catch(e){}
+  // factory stock totals across every lot (meters = real taka lengths, else the lot's meters)
+  const lots=DB.lots||[]; let totM=0, totPcs=0, totKg=0;
+  lots.forEach(l=>{ const t=(l.takas&&l.takas.length)?l.takas:null;
+    totM  += t ? t.reduce((a,b)=>a+(+b||0),0) : (+l.meters||0);
+    totPcs+= t ? t.length : (+l.pcs||0);
+    totKg += +l.weight||0; });
+  totM=Math.round(totM); totKg=Math.round(totKg);
   const kpi=(icn,val,lbl,d)=>'<div class="kpi rise" style="animation-delay:'+d+'ms"><div class="ic-wrap"><span class="material-symbols-rounded">'+icn+'</span></div><b>'+val+'</b><small>'+lbl+'</small></div>';
-  c.innerHTML='<div class="page-head"><h1>Dashboard</h1><p>Overview of your master data. Click any card to manage it.</p></div>'
+  c.innerHTML='<div class="page-head"><h1>Dashboard</h1><p>Live stock and planning overview. Click any card below to manage that data.</p></div>'
     +'<div class="kpis">'
-    +kpi('receipt_long',DB.orders.length,'Open orders',0)
-    +kpi('layers',(S?S.batchCount:"-"),'Batches planned',40)
-    +kpi('wash',(S?S.washCount:"-"),'Washes',80)
-    +kpi('precision_manufacturing',DB.machines.length,'Machines',120)
-    +kpi('palette',DB.shadeRecipes.length,'Shade recipes',160)+'</div>'
+    +kpi('straighten', totM.toLocaleString(), 'Meters in factory', 0)
+    +kpi('inventory_2', lots.length.toLocaleString(), 'Lots in stock', 40)
+    +kpi('tag', totPcs.toLocaleString(), 'Takas (pieces)', 80)
+    +(totKg ? kpi('scale', totKg.toLocaleString()+' kg', 'Greige weight', 120) : '')
+    +kpi('receipt_long', DB.orders.length, 'Open orders', 160)
+    +kpi('layers', (S?S.batchCount:'—'), 'Batches planned', 200)
+    +'</div>'
     +'<div class="dash">'+cards.filter(x=>can(x[0])).map((x,i)=>'<button class="dcard rise" style="animation-delay:'+(i*30)+'ms" onclick="CUR=\''+x[0]+'\';renderNav();render()"><div class="ic-wrap">'+ic(x[0])+'</div><b>'+(DB[x[0]]||[]).length+'</b><small>'+x[1]+'</small></button>').join("")+'</div>';
 }
 
@@ -1068,7 +1070,7 @@ async function commitRecipeImport(){
     toast("Imported "+p.recipes.length+" recipes"+(p.newParties.length?" · +"+p.newParties.length+" parties":"")+(p.newQualities.length?" · +"+p.newQualities.length+" qualities":""));
   }catch(err){ toast("Import failed: "+esc(err.message)); btn.disabled=false; btn.textContent="Import"; }
 }
-const BULK_ADD_TABLES=["machines","customers","suppliers","operators","qcMetrics","shadeRecipes","qualityRecipes","weavers"];
+const BULK_ADD_TABLES=["machines","customers","suppliers","operators","qcMetrics","shadeRecipes","weavers"];
 const BULK_ADD_SKIP_TYPES=new Set(["readonly","perms","aux","takas","lotTotal","lotqty","batchTotal","lotsel","password"]);
 const BULK_ADD_KEY_FIELDS={shadeRecipes:["quality","shade"]};   // override when the first column alone isn't a unique key
 function bulkAddFields(table){
