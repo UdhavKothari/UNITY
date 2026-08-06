@@ -290,15 +290,26 @@ function wireLotPicker(root, opts){
   function items(){ return [...menu.querySelectorAll(".lotpick-opt:not(.disabled)")]; }
   function setHi(i){ const list=items(); list.forEach(x=>x.classList.remove("hi"));
     hi=Math.max(0,Math.min(list.length-1,i)); if(list[hi]){ list[hi].classList.add("hi"); list[hi].scrollIntoView({block:"nearest"}); } }
+  // float the dropdown as fixed under the input so parent overflow (table wrapper) can't clip it,
+  // and give it room to show many lots at once
+  function place(){
+    if(!menu.classList.contains("on")) return;
+    const r=inp.getBoundingClientRect();
+    menu.style.position="fixed"; menu.style.left=r.left+"px"; menu.style.top=(r.bottom+4)+"px";
+    menu.style.width=r.width+"px"; menu.style.right="auto";
+    menu.style.maxHeight=Math.max(220, Math.min(440, window.innerHeight-r.bottom-16))+"px";
+  }
+  window.addEventListener("scroll", place, true);
+  window.addEventListener("resize", place);
   function paint(){
     const ids=lotPickerMatches(root, opts.filterFn);
-    if(!ids.length){ menu.innerHTML='<div class="lotpick-empty">No matching lots</div>'; menu.classList.add("on"); hi=-1; return; }
+    if(!ids.length){ menu.innerHTML='<div class="lotpick-empty">No matching lots</div>'; menu.classList.add("on"); place(); hi=-1; return; }
     menu.innerHTML=ids.map(id=>{
       const a=lotAllocation(id), blocked=a.blocked && id!==root.dataset.val;
       return '<div class="lotpick-opt'+(blocked?' disabled':'')+'" data-id="'+esc(id)+'">'+esc(lotLabel(id))
         +(a.blocked?' <span class="flag">fully used</span>':a.used?' <span class="muted">part used</span>':'')+'</div>';
     }).join("");
-    menu.classList.add("on"); hi=-1;
+    menu.classList.add("on"); place(); hi=-1;
   }
   function pick(id){
     root.dataset.val=id; inp.value=lotLabel(id); close();

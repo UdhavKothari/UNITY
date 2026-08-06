@@ -61,6 +61,25 @@ def _next_seq_id(db, table):
     seq[table] = n
     return "%s-%04d" % (prefix, n)
 
+def _op_username(name):
+    parts = [p for p in re.sub(r"[^A-Za-z ]", " ", str(name or "")).split() if p]
+    if not parts:
+        return "operator"
+    return parts[0].capitalize() + (parts[-1].capitalize() if len(parts) > 1 else "")
+
+def _ensure_operator_creds(db, op):
+    """auto-generate login credentials for the operator mobile app: username FirstnameLastname + a 6-digit PIN"""
+    ops = db.get("operators", [])
+    if not op.get("username"):
+        base = _op_username(op.get("name"))
+        taken = {o.get("username") for o in ops if o.get("id") != op.get("id")}
+        u, k = base, 2
+        while u in taken:
+            u = base + str(k); k += 1
+        op["username"] = u
+    if not op.get("pin"):
+        op["pin"] = "%06d" % secrets.randbelow(1000000)
+
 def _new_salt():
     return secrets.token_hex(16)
 
@@ -158,6 +177,9 @@ def _migrate(db):
             key = (b.get("machine",""), b.get("planDay",""))
             seq_by[key] = seq_by.get(key, 0) + 1
             b["seq"] = seq_by[key]; changed = True
+    for o in db.get("operators", []):                  # every operator gets mobile-app credentials
+        if not o.get("username") or not o.get("pin"):
+            _ensure_operator_creds(db, o); changed = True
     db.setdefault("activityLog", [])
     db.setdefault("settings", {}).setdefault("completionMode", "manual")
     return changed
@@ -572,6 +594,8 @@ class Handler(BaseHTTPRequestHandler):
                     tk = row.get("takas") or []
                     row["takaNos"] = list(range(1, len(tk) + 1))   # stable positional taka numbers
                     lotno = str(row.pop("lotNo", "") or row.get("id") or "").strip()   # the number IS the lot's identity
+                if table == "operators":
+                    _ensure_operator_creds(db, row)   # auto username + PIN for the mobile app
                 SYSTEM_IDS = ("batches", "orders")                 # lots are no longer auto-numbered (point 3)
                 if table == "lots" and not existing:
                     # the lot number comes from the source system (Livewire/EMPIRE), never allocated here
