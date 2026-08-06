@@ -106,6 +106,7 @@ const SCHEMAS={
       {k:"family",l:"Shade family",sec:"Shade (quality-specific)",t:"select",o:FAMILIES,req:true,help:"Groups shades for campaign sequencing"},
       {k:"tone",l:"Tone",sec:"Shade (quality-specific)",t:"number",req:true,min:0,max:10,help:"0 = lightest, 10 = darkest (drives light-to-dark order)"},
       {k:"program",l:"Program name",sec:"Shade (quality-specific)"},
+      {k:"hex",l:"Custom colour (hex)",sec:"Shade (quality-specific)",help:"e.g. #a13b2f — overrides the L*a*b*/family colour. Leave blank to use those. Tip: click the swatch in the list to pick visually."},
       {k:"dye1",l:"Dye 1",sec:"Colour recipe (dyes)"},{k:"pct1",l:"Dye 1 %",sec:"Colour recipe (dyes)",t:"number",min:0,step:0.01},
       {k:"dye2",l:"Dye 2",sec:"Colour recipe (dyes)"},{k:"pct2",l:"Dye 2 %",sec:"Colour recipe (dyes)",t:"number",min:0,step:0.01},
       {k:"dye3",l:"Dye 3",sec:"Colour recipe (dyes)"},{k:"pct3",l:"Dye 3 %",sec:"Colour recipe (dyes)",t:"number",min:0,step:0.01},
@@ -314,7 +315,7 @@ document.getElementById("nav").addEventListener("click",e=>{
 });
 
 function cellVal(table,r,k){
-  if(k==="sw") return '<span class="swatch" style="background:'+colorFT(r.family,r.tone)+'"></span>';
+  if(k==="sw") return '<input type="color" class="sw-pick" value="'+shadeColorHex(r)+'" title="Click to pick a custom colour for this shade" onclick="event.stopPropagation()" onchange="setShadeHex('+JSON.stringify(r.id)+',this.value)">';
   if(k==="shades") return (r.lines||[]).map(l=>esc(l.shade)+" ("+l.m+"m)").join(", ");
   if(k==="plc") return r.plc?"Yes":"";
   if(k==="active") return r.active?'<span class="pill run">Active</span>':'<span class="pill free">Disabled</span>';
@@ -728,7 +729,7 @@ function openModal(table,id){
     const root=document.querySelector('#mBody [data-k="lotId"]');
     if(root) wireLotPicker(root, {});
   }
-  if(table==="shadeRecipes"){ ["family","tone","shade","quality"].forEach(k=>{const el=document.querySelector('#mBody [data-k="'+k+'"]'); if(el){el.addEventListener("input",updateShadePreview);el.addEventListener("change",updateShadePreview);}}); updateShadePreview(); }
+  if(table==="shadeRecipes"){ ["family","tone","shade","quality","specL","speca","specb","hex"].forEach(k=>{const el=document.querySelector('#mBody [data-k="'+k+'"]'); if(el){el.addEventListener("input",updateShadePreview);el.addEventListener("change",updateShadePreview);}}); updateShadePreview(); }
   if(table==="lots"){ const el=document.querySelector('#mBody [data-k="lotNo"]');   // lot number is the identity: editable on create, locked on edit
     if(el && id!=null){ el.value=editRow.id||""; el.readOnly=true; el.style.background="var(--surface-2)"; el.style.color="var(--ink-2)"; } }
   updateTakaCount(); updateLotCount(); updateAuxCount(); wireLotRows(); syncLotTotals();
@@ -750,8 +751,15 @@ function updateShadePreview(){
   const g=k=>{const el=document.querySelector('#mBody [data-k="'+k+'"]');return el?el.value:"";};
   const sw=document.getElementById("pvSw"), meta=document.getElementById("pvMeta");
   if(!sw)return;
-  sw.style.background=colorFT(g("family"),g("tone"));
-  meta.innerHTML='<b>'+(esc(g("shade"))||"(shade)")+'</b> in '+(esc(g("quality"))||"(quality)")+'<br>family '+esc(g("family"))+', tone '+esc(g("tone"))+' &nbsp; L* '+esc(g("specL"))+' a* '+esc(g("speca"))+' b* '+esc(g("specb"));
+  const rec={family:g("family"),tone:g("tone"),specL:g("specL"),speca:g("speca"),specb:g("specb"),hex:g("hex")};
+  sw.style.background=shadeColorOf(rec);
+  const src=rec.hex?"custom hex":((rec.specL!==""&&(+rec.specL||+rec.speca||+rec.specb))?"from L*a*b*":"family + tone");
+  meta.innerHTML='<b>'+(esc(g("shade"))||"(shade)")+'</b> in '+(esc(g("quality"))||"(quality)")+' <span class="muted">('+src+')</span><br>family '+esc(g("family"))+', tone '+esc(g("tone"))+' &nbsp; L* '+esc(g("specL"))+' a* '+esc(g("speca"))+' b* '+esc(g("specb"));
+}
+async function setShadeHex(id,hex){                 // click a swatch in the shade list -> pick a custom colour
+  const s=(DB.shadeRecipes||[]).find(x=>x.id===id); if(!s) return;
+  await API.save("shadeRecipes", Object.assign({}, s, {hex:hex}));
+  await API.db(); render(); toast("Shade colour set");
 }
 /* ---- every quality gets a shade "0" recipe by default — a real dye step (white/near-colourless)
    that produces RFP (Ready for Print) fabric, ready to go to the printer ---- */
@@ -968,27 +976,14 @@ async function clearRecipes(){
   const res=await API._post({op:"recipesClear"}); if(res&&res.error){ toast(res.error); return; }
   toast("Recipes cleared"); recipeSearch("");
 }
-/* one click: make every quality-shade seen in the recipes exist in the shade list, so shades are selectable */
+/* one click: every quality-shade in the recipes exists in the shade list, and each shade's
+   Program is set to its recipe name (done server-side in one pass) */
 async function syncShadesFromRecipes(){
-  const res=await API._post({op:"recipesShades"});
+  if(!confirm("Add any missing shades from the dye recipes, and set each shade's Program to its recipe name?\n\n(New shades are added as neutral placeholders — set family/tone/colour later. Existing shades are left untouched except the program.)")) return;
+  const res=await API._post({op:"recipesShadeSync"});
   if(res&&res.error){ toast(res.error); return; }
-  const pairs=res.pairs||[];
-  if(!pairs.length){ toast("No recipe shades found — import recipes first"); return; }
-  const key=(q,s)=>String(q).toUpperCase()+"\0"+String(s).toUpperCase();
-  const have=new Set((DB.shadeRecipes||[]).map(s=>key(s.quality,s.shade)));
-  const toAdd=pairs.filter(p=>!have.has(key(p.quality,p.shade)))
-    .map(p=>({quality:p.quality, shade:p.shade, family:"Neutral", tone:0, program:"from dye recipe"}));
-  if(!toAdd.length){ toast("All "+pairs.length+" recipe shades are already in the shade list"); return; }
-  const quals=new Set(toAdd.map(x=>x.quality));
-  if(!confirm("Add "+toAdd.length+" shade(s) across "+quals.size+" qualit"+(quals.size===1?"y":"ies")+" to the shade list?\n\n(They're added as neutral placeholders — you can set family/tone later. Existing shades are left untouched.)")) return;
-  let done=0;
-  for(let i=0;i<toAdd.length;i+=1000){
-    const r=await API._post({op:"bulkUpsert", table:"shadeRecipes", rows:toAdd.slice(i,i+1000)});
-    if(r&&r.error){ toast(r.error); break; }
-    done+=Math.min(1000,toAdd.length-i);
-  }
   await API.db(); renderNav(); render();
-  toast("Added "+done+" shades across "+quals.size+" qualities");
+  toast("Added "+(res.added||0)+" shades · set program on "+(res.fixed||0));
 }
 function openRecipeImport(){
   const ex=document.getElementById("recImpOverlay"); if(ex) ex.remove();

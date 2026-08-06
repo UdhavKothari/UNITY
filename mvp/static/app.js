@@ -49,15 +49,30 @@ const shadesForQuality = q => {
 const cfg = ()=> DB.settings;
 const kgOf = (meters,gsm,widthIn)=> meters*((widthIn||cfg().widthDefault||56)*0.0254)*gsm/1000;
 
-function shadeColor(shadeName,quality,alpha){
-  if(alpha===undefined) alpha=1;
-  const s=SH(shadeName,quality); if(!s) return "hsla(220,6%,70%,"+alpha+")";
-  const map={Blue:212,Red:2,Yellow:44,Neutral:222,Green:140,Purple:280};
-  const hue=(map[s.family]!==undefined)?map[s.family]:222;
-  const sat= s.family==="Neutral" ? 6 : 62;
-  const light= 86 - (s.tone||0)*5.4;
-  return "hsla("+hue+","+sat+"%,"+light+"%,"+alpha+")";
+/* a shade's on-screen colour comes from, in order: a custom hex the user set, else the
+   spectrophotometer L*a*b* standard converted to RGB, else the family+tone fallback. */
+function _labToRgb(L,a,b){
+  let y=(+L+16)/116, x=(+a)/500+y, z=y-(+b)/200;
+  const f=t=>{const c=t*t*t; return c>0.008856?c:(t-16/116)/7.787;};
+  x=0.95047*f(x); y=f(y); z=1.08883*f(z);
+  const r=x*3.2406-y*1.5372-z*0.4986, g=-x*0.9689+y*1.8758+z*0.0415, bl=x*0.0557-y*0.2040+z*1.0570;
+  const s=c=>{c=c<=0.0031308?12.92*c:1.055*Math.pow(c,1/2.4)-0.055; return Math.max(0,Math.min(255,Math.round(c*255)));};
+  return [s(r),s(g),s(bl)];
 }
+function _hexToRgb(hex){ hex=String(hex||"").replace("#",""); if(hex.length===3) hex=hex.split("").map(c=>c+c).join(""); const n=parseInt(hex,16); return isNaN(n)||hex.length!==6?null:[(n>>16)&255,(n>>8)&255,n&255]; }
+function _shadeRgb(s){
+  if(!s) return null;
+  if(s.hex){ const c=_hexToRgb(s.hex); if(c) return c; }
+  if(s.specL!=null && s.specL!=="" && (+s.specL||+s.speca||+s.specb)) return _labToRgb(s.specL, s.speca||0, s.specb||0);
+  const map={Blue:212,Red:2,Yellow:44,Neutral:222,Green:140,Purple:280};
+  const hue=(map[s.family]!==undefined?map[s.family]:222)/360, sat=(s.family==="Neutral"?6:62)/100, light=(86-(+s.tone||0)*5.4)/100;
+  const q=light<0.5?light*(1+sat):light+sat-light*sat, p=2*light-q;
+  const h2=(p,q,t)=>{ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6)return p+(q-p)*6*t; if(t<1/2)return q; if(t<2/3)return p+(q-p)*(2/3-t)*6; return p; };
+  return [Math.round(h2(p,q,hue+1/3)*255), Math.round(h2(p,q,hue)*255), Math.round(h2(p,q,hue-1/3)*255)];
+}
+function shadeColorOf(s,alpha){ if(alpha===undefined)alpha=1; const c=_shadeRgb(s); return c?"rgba("+c[0]+","+c[1]+","+c[2]+","+alpha+")":"hsla(220,6%,70%,"+alpha+")"; }
+function shadeColorHex(s){ const c=_shadeRgb(s)||[200,205,212]; return "#"+c.map(x=>("0"+x.toString(16)).slice(-2)).join(""); }
+function shadeColor(shadeName,quality,alpha){ return shadeColorOf(SH(shadeName,quality), alpha); }
 
 /* ---------- batch split (multi-shade, kg + min-meters) ---------- */
 function splitOrder(o){

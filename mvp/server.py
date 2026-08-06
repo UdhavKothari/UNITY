@@ -344,8 +344,9 @@ def recipes_distinct_shades():
     c = _connect()
     try:
         _ensure_recipes(c)
-        return [{"quality": q, "shade": s} for (q, s) in c.execute(
-            "SELECT DISTINCT quality, shade FROM recipes WHERE quality<>'' AND shade<>'' ORDER BY quality, shade")]
+        return [{"quality": q, "shade": s, "name": n} for (q, s, n) in c.execute(
+            "SELECT quality, shade, MIN(name) FROM recipes WHERE quality<>'' AND shade<>'' "
+            "GROUP BY quality, shade ORDER BY quality, shade")]
     finally:
         c.close()
 
@@ -525,6 +526,28 @@ class Handler(BaseHTTPRequestHandler):
                 if "recipes" not in perms:
                     return self._send(403, {"error": "forbidden"})
                 return self._send(200, {"pairs": recipes_distinct_shades()})
+
+            if op == "recipesShadeSync":
+                # create a shade entry for every quality-shade in the recipes, and set each shade's
+                # program to its recipe name (fixing the old "from dye recipe" placeholder)
+                if "shadeRecipes" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                existing = {}
+                for s in db.get("shadeRecipes", []):
+                    existing[(str(s.get("quality", "")).upper(), str(s.get("shade", "")).upper())] = s
+                added = fixed = 0
+                for p in recipes_distinct_shades():
+                    key = (str(p["quality"]).upper(), str(p["shade"]).upper())
+                    s = existing.get(key)
+                    if not s:
+                        row = {"id": "SH-" + uuid.uuid4().hex[:6], "quality": p["quality"], "shade": p["shade"],
+                               "family": "Neutral", "tone": 0, "program": p.get("name") or ""}
+                        db.setdefault("shadeRecipes", []).append(row); existing[key] = row; added += 1
+                    elif (not s.get("program")) or s.get("program") == "from dye recipe":
+                        s["program"] = p.get("name") or ""; fixed += 1
+                _log(db, u["username"], "recipesShadeSync", "shadeRecipes", "", "added %d, program-fixed %d" % (added, fixed))
+                save_db(db)
+                return self._send(200, {"ok": True, "added": added, "fixed": fixed})
 
             # ---- fast bulk insert into a normal table (client has already de-duped) ----
             if op == "bulkUpsert":
