@@ -300,19 +300,32 @@ function wireLotPicker(root, opts){
   opts=opts||{};
   const inp=root.querySelector(".lotpick-in"), menu=root.querySelector(".lotpick-menu");
   let hi=-1;
-  function close(){ menu.classList.remove("on"); menu.innerHTML=""; hi=-1; }
+  function close(){ menu.classList.remove("on"); menu.innerHTML=""; hi=-1; unplace(); }
   function items(){ return [...menu.querySelectorAll(".lotpick-opt:not(.disabled)")]; }
   function setHi(i){ const list=items(); list.forEach(x=>x.classList.remove("hi"));
     hi=Math.max(0,Math.min(list.length-1,i)); if(list[hi]){ list[hi].classList.add("hi"); list[hi].scrollIntoView({block:"nearest"}); } }
-  // float the dropdown as fixed under the input so parent overflow (table wrapper) can't clip it,
-  // and give it room to show many lots at once
+  // The dropdown is PORTALED to <body> while open so nothing can clip or mis-place it:
+  // the table wrapper's overflow:auto used to cut it to ~2 rows, and a plain position:fixed
+  // breaks whenever an ancestor has a transform (several planner rows animate with transform,
+  // which would make "fixed" resolve against that ancestor and land the menu off-screen).
+  // As a direct child of <body> it is always viewport-relative and never clipped.
   function place(){
     if(!menu.classList.contains("on")) return;
+    if(menu.parentNode!==document.body) document.body.appendChild(menu);
     const r=inp.getBoundingClientRect();
-    menu.style.position="fixed"; menu.style.left=r.left+"px"; menu.style.top=(r.bottom+4)+"px";
-    menu.style.width=r.width+"px"; menu.style.right="auto";
-    menu.style.maxHeight=Math.max(220, Math.min(440, window.innerHeight-r.bottom-16))+"px";
+    const openUp = (window.innerHeight - r.bottom) < 240 && r.top > (window.innerHeight - r.bottom);
+    menu.style.position="fixed"; menu.style.left=r.left+"px"; menu.style.width=r.width+"px";
+    menu.style.right="auto"; menu.style.zIndex="90";                 // above modals (60) and header (40)
+    if(openUp){                                                      // near the bottom of the screen → open upward
+      menu.style.top="auto"; menu.style.bottom=(window.innerHeight - r.top + 4)+"px";
+      menu.style.maxHeight=Math.max(220, Math.min(440, r.top-16))+"px";
+    }else{
+      menu.style.bottom="auto"; menu.style.top=(r.bottom+4)+"px";
+      menu.style.maxHeight=Math.max(220, Math.min(440, window.innerHeight-r.bottom-16))+"px";
+    }
   }
+  // when the menu is closed, move it back inside the picker so it's torn down with the row
+  function unplace(){ if(menu.parentNode===document.body) root.appendChild(menu); }
   window.addEventListener("scroll", place, true);
   window.addEventListener("resize", place);
   function paint(){
