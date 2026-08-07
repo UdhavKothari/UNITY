@@ -190,12 +190,11 @@ const SCHEMAS={
       {k:"shift",l:"Shift",sec:"Process",t:"select",o:["","Day","Night"]},
       {k:"notes",l:"Notes",sec:"Notes",t:"textarea",help:"Batch-specific instructions — important for jet dyeing"}]},
   lots:{label:"Lot master",single:"lot",
-    cols:[["id","Lot No."],["srcLotNo","Weaver lot no."],["customer","Customer"],["quality","Quality"],["weaver","Weaver"],["takaCount","Pcs"],["lotMeters","Meters"],["inDate","In date"],["location","Location"],["allocation","Allocated to"]],
-    search:["id","srcLotNo","customer","quality","weaver","location","status","challanNo"],
+    cols:[["id","Lot No."],["customer","Customer"],["quality","Quality"],["weaver","Weaver"],["takaCount","Pcs"],["lotMeters","Meters"],["inDate","In date"],["location","Location"],["allocation","Allocated to"]],
+    search:["id","customer","quality","weaver","location","status","challanNo"],
     rowClass:r=>lotAllocation(r.id).blocked?"blocked":"",
     fields:[
       {k:"lotNo",l:"Lot No.",sec:"Lot",req:true,help:"The lot number from your source system (Livewire/EMPIRE). It becomes the lot's identity and cannot be changed later."},
-      {k:"srcLotNo",l:"Weaver lot no.",sec:"Lot",help:"The weaver's own lot/roll number, for matching the physical fabric"},   // NEW
       {k:"customer",l:"Customer name",sec:"Lot",t:"csel",help:"Whose fabric this lot belongs to"},
       {k:"quality",l:"Quality",sec:"Lot",t:"qsel"},
       {k:"weaver",l:"Weaver",sec:"Lot",t:"wsel",help:"Which weaving unit produced this fabric"},   // NEW
@@ -343,7 +342,7 @@ function cellVal(table,r,k){
     return '<span class="pill pre">part used</span> <span class="tnum">'+a.remaining+'</span> <span class="muted">m left of '+a.total+'</span>';
   }
   if(k==="urgent") return r.urgent?'<span class="pill maint">urgent</span>':'';
-  if(k==="permsCount") return (r.perms||[]).length+" pages";
+  if(k==="permsCount") return (r.perms||[]).length+" view · "+(Array.isArray(r.edit)?r.edit.length:(r.perms||[]).length)+" edit";
   if(k==="shadeFamilies") return (r.shadeFamilies||[]).length ? (r.shadeFamilies||[]).map(f=>'<span class="chip">'+esc(f)+'</span>').join("") : '<span class="muted">&mdash;</span>';
   if(k==="takaCount") return '<span class="tnum">'+((r.takas||[]).length)+'</span>';
   if(k==="lotCount") return '<span class="tnum">'+((DB.lots||[]).filter(l=>l.weaver===r.name).length)+'</span>';
@@ -409,25 +408,47 @@ function render(){
       return st.dir==="desc" ? -c : c;
     });
   }
-  c.innerHTML='<div class="page-head"><h1>'+sc.label+'</h1><p>'+(DB[CUR]||[]).length+' record(s). Click Edit to change, or Add to create a new one.</p></div>'
+  const mayEdit=canEdit(CUR);
+  const first=Math.min(rows.length, BIG_CHUNK);
+  BIG={cur:CUR, rows:rows, shown:first, sc:sc, mayEdit:mayEdit};
+  c.innerHTML='<div class="page-head"><h1>'+sc.label+'</h1><p>'+(DB[CUR]||[]).length+' record(s). '+(mayEdit?'Click Edit to change, or Add to create a new one.':'You have view-only access to this page.')+'</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="onSearchInput(this)"></div>'
     +'<div class="spacer"></div>'
-    +(CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
-    +(CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
-    +(BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
-    +'<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>'
+    +((CUR==="lots" && (canEdit("qualities")||canEdit("shadeRecipes"))) ? '<button class="btn ghost" onclick="syncCatalog()"><span class="material-symbols-rounded">sync</span>Sync qualities &amp; shades</button>' : '')
+    +(mayEdit&&CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
+    +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
+    +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
+    +(mayEdit ? '<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>' : '')
     +'<button class="btn ghost" onclick="exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export</button></div>'
-    +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
-      +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
-    +(rows.length?rows.map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(CUR,r,x[0])+'</td>').join("")
-      +'<td><div class="rowbtns">'
-      +(CUR==="batches"?'<button class="btn ghost sm" onclick=\'showBatchHistory('+JSON.stringify(r.id)+')\'>History</button>':'')
-      +'<button class="btn ghost sm" onclick=\'openModal("'+CUR+'",'+JSON.stringify(r.id)+')\'>Edit</button>'
-      +'<button class="btn danger sm" onclick=\'delRow("'+CUR+'",'+JSON.stringify(r.id)+')\'>Delete</button></div></td></tr>').join("")
+    +'<div class="card"><div class="tbl-wrap big-scroll" id="bigScroll" onscroll="bigOnScroll(event)"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
+      +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody id="bigBody">'
+    +(rows.length?bigRowsHTML(0,first)
       :'<tr><td colspan="'+(sc.cols.length+1)+'" style="text-align:center;color:var(--muted);padding:26px">No records'+(term?' match your search':'')+'.</td></tr>')
-    +'</tbody></table></div></div>';
+    +'</tbody></table></div><div class="big-foot" id="bigFoot">'+(rows.length?(first+' of '+rows.length+' shown'):'')+'</div></div>';
 }
+/* infinite scroll: render large tables in chunks so 5,000+ rows never freeze the page */
+const BIG_CHUNK=200;
+let BIG={cur:null,rows:[],shown:0,sc:null,mayEdit:false};
+function bigRowsHTML(from,to){
+  const sc=BIG.sc, cur=BIG.cur;
+  return BIG.rows.slice(from,to).map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(cur,r,x[0])+'</td>').join("")
+    +'<td><div class="rowbtns">'
+    +(cur==="batches"?'<button class="btn ghost sm" onclick=\'showBatchHistory('+JSON.stringify(r.id)+')\'>History</button>':'')
+    +(BIG.mayEdit?'<button class="btn ghost sm" onclick=\'openModal("'+cur+'",'+JSON.stringify(r.id)+')\'>Edit</button>':'')
+    +(BIG.mayEdit?'<button class="btn danger sm" onclick=\'delRow("'+cur+'",'+JSON.stringify(r.id)+')\'>Delete</button>':'')
+    +(BIG.mayEdit?'':'<span class="muted small">view only</span>')
+    +'</div></td></tr>').join("");
+}
+function bigMore(){
+  if(BIG.shown>=BIG.rows.length) return;
+  const tb=document.getElementById("bigBody"); if(!tb) return;
+  const to=Math.min(BIG.rows.length, BIG.shown+BIG_CHUNK);
+  tb.insertAdjacentHTML("beforeend", bigRowsHTML(BIG.shown,to));
+  BIG.shown=to;
+  const f=document.getElementById("bigFoot"); if(f) f.textContent=BIG.shown+' of '+BIG.rows.length+' shown';
+}
+function bigOnScroll(e){ const el=e.target; if(el.scrollTop+el.clientHeight >= el.scrollHeight-320) bigMore(); }
 
 /* ---- activity log (console history): every event, newest first, searchable ---- */
 const ACTION_LABEL={login:"signed in",logout:"signed out",create:"created",update:"updated",
@@ -639,6 +660,26 @@ function addLotRow(){
   wireLotRows(); updateLotCount(); syncLotTotals();
 }
 
+/* Lots page: one click ensures every quality + a shade for it (and recipe shades) exist — used
+   during setup so planners can pick fabrics/shades even before the catalog is fully entered */
+async function syncCatalog(){
+  if(!confirm("Add any missing qualities (from lots + recipes) with a shade '0', and set shade programs from the dye recipes?\n\nExisting records are left as they are.")) return;
+  const res=await API._post({op:"catalogSync"});
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); renderNav(); render();
+  toast("Added "+(res.qualities||0)+" qualities · "+(res.shades||0)+" shades · fixed "+(res.fixed||0)+" programs");
+}
+
+/* keep the View/Edit permission pair consistent: Edit implies View; removing View removes Edit */
+function permSync(el){
+  const page=el.dataset.edit||el.dataset.perm;
+  const v=document.querySelector('#mBody [data-perm="'+page+'"]');
+  const e=document.querySelector('#mBody [data-edit="'+page+'"]');
+  if(!v||!e) return;
+  if(el.dataset.edit && e.checked) v.checked=true;      // ticking Edit auto-ticks View
+  if(el.dataset.perm && !v.checked) e.checked=false;    // unticking View drops Edit
+}
+
 /* ---- form ---- */
 function fieldInput(f,val){
   if(f.t==="bool") return '<input type="checkbox" '+(val?"checked":"")+' data-k="'+f.k+'" style="width:auto;margin-top:8px">';
@@ -647,11 +688,19 @@ function fieldInput(f,val){
   if(f.t==="date") return '<input type="date" value="'+(val||"")+'" data-k="'+f.k+'">';
   if(f.t==="password") return '<input type="password" autocomplete="new-password" placeholder="'+(editRow.id?"(leave blank to keep current)":"")+'" data-k="'+f.k+'">';
   if(f.t==="perms"){
-    const sel=Array.isArray(val)?val:[]; const groups={};
+    const view=Array.isArray(val)?val:[]; const ed=Array.isArray(editRow.edit)?editRow.edit:null;
+    const groups={};
     PAGES.forEach(p=>{(groups[p[2]]=groups[p[2]]||[]).push(p);});
-    return Object.keys(groups).map(g=>'<div style="margin-bottom:10px"><div class="small faint" style="margin-bottom:5px">'+g+'</div><div style="display:flex;flex-wrap:wrap;gap:6px 16px">'
-      +groups[g].map(p=>'<label style="display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink);margin:0"><input type="checkbox" data-perm="'+p[0]+'" '+(sel.indexOf(p[0])>=0?"checked":"")+' style="width:auto;margin:0">'+esc(p[1])+'</label>').join("")
-      +'</div></div>').join("");
+    return '<div class="small muted" style="margin-bottom:8px">Tick <b>View</b> to let this role open a page, and <b>Edit</b> to let it change data there. Edit implies View — a View-only role (e.g. a floor planner) can see the planned programs but cannot modify anything.</div>'
+      +Object.keys(groups).map(g=>'<div style="margin-bottom:12px"><div class="small faint" style="margin-bottom:4px">'+g+'</div>'
+        +groups[g].map(p=>{
+          const vk=view.indexOf(p[0])>=0, ek=(ed===null?vk:ed.indexOf(p[0])>=0);   // legacy role: edit==view
+          return '<div style="display:flex;align-items:center;gap:14px;padding:3px 2px;border-bottom:1px solid var(--line)">'
+            +'<span style="flex:1;color:var(--ink)">'+esc(p[1])+'</span>'
+            +'<label style="display:inline-flex;align-items:center;gap:5px;margin:0;font-weight:500;color:var(--ink-2)"><input type="checkbox" data-perm="'+p[0]+'" '+(vk?"checked":"")+' onchange="permSync(this)" style="width:auto;margin:0">View</label>'
+            +'<label style="display:inline-flex;align-items:center;gap:5px;margin:0;font-weight:600;color:var(--accent)"><input type="checkbox" data-edit="'+p[0]+'" '+(ek?"checked":"")+' onchange="permSync(this)" style="width:auto;margin:0">Edit</label></div>';
+        }).join("")
+      +'</div>').join("");
   }
   if(f.t==="famsel"){
     const sel=Array.isArray(val)?val:[];
@@ -773,7 +822,12 @@ async function saveModal(){
   const sc=SCHEMAS[editTable]; const row=Object.assign({},editRow); let ok=true;
   document.querySelectorAll("#mBody .fld").forEach(l=>l.classList.remove("invalid"));
   sc.fields.forEach(f=>{
-    if(f.t==="perms"){ row.perms=[...document.querySelectorAll('#mBody [data-perm]')].filter(x=>x.checked).map(x=>x.dataset.perm); return; }
+    if(f.t==="perms"){
+      row.perms=[...document.querySelectorAll('#mBody [data-perm]')].filter(x=>x.checked).map(x=>x.dataset.perm);
+      const ed=[...document.querySelectorAll('#mBody [data-edit]')].filter(x=>x.checked).map(x=>x.dataset.edit);
+      row.edit=ed.filter(p=>row.perms.indexOf(p)>=0);   // edit is always a subset of view
+      return;
+    }
     if(f.t==="famsel"){ row.shadeFamilies=[...document.querySelectorAll('#mBody [data-fam]')].filter(x=>x.checked).map(x=>x.dataset.fam); return; }
     if(f.t==="readonly") return;                       // system id — never submitted
     if(f.t==="aux"){ const b=document.getElementById("auxBox");
@@ -939,9 +993,10 @@ function renderRecipes(c){
     '<div class="page-head"><h1>Dye recipes</h1><p>Chemical recipes imported from Excel (party · quality · shade). A big reference set, so it is searched on demand rather than loaded with everything else.</p></div>'
    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
    +'<input id="recSearch" placeholder="Search party, quality, shade or recipe name…" oninput="recipeSearchDebounced()"></div>'
-   +(can("recipes")?'<button class="btn ghost" onclick="openRecipeImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>':'')
-   +(can("shadeRecipes")?'<button class="btn ghost" onclick="syncShadesFromRecipes()"><span class="material-symbols-rounded">palette</span>Add shades to qualities</button>':'')
-   +(can("recipes")?'<button class="btn ghost" onclick="clearRecipes()"><span class="material-symbols-rounded">delete_sweep</span>Clear all</button>':'')
+   +(canEdit("recipes")?'<button class="btn" onclick="openRecipeCreate()"><span class="material-symbols-rounded">add</span>Create dye recipe</button>':'')
+   +(canEdit("recipes")?'<button class="btn ghost" onclick="openRecipeImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>':'')
+   +(canEdit("shadeRecipes")?'<button class="btn ghost" onclick="syncShadesFromRecipes()"><span class="material-symbols-rounded">palette</span>Add shades to qualities</button>':'')
+   +(canEdit("recipes")?'<button class="btn ghost" onclick="clearRecipes()"><span class="material-symbols-rounded">delete_sweep</span>Clear all</button>':'')
    +'</div><div id="recCount" class="small muted" style="margin:6px 2px 10px"></div><div class="tbl-wrap" id="recTable"></div>';
   recipeSearch("");
 }
@@ -956,6 +1011,51 @@ async function recipeSearch(q){
   t.innerHTML='<table><thead><tr><th>Recipe</th><th>Party</th><th>Quality</th><th>Shade</th><th>M/C</th><th>Items</th><th></th></tr></thead><tbody>'
     +_recipeResults.map((r,i)=>'<tr><td class="tnum">'+esc(r.name)+'</td><td>'+esc(r.party||"")+'</td><td>'+esc(r.quality||"")+'</td><td>'+esc(r.shade||"")+'</td><td>'+esc(r.machine||"")+'</td><td class="tnum">'+((r.items||[]).length)+'</td><td><button class="btn ghost sm" onclick="viewRecipe('+i+')">View</button></td></tr>').join("")
     +'</tbody></table>';
+}
+/* ---- manually create ONE dye recipe (party · quality · shade + chemical lines) ---- */
+function openRecipeCreate(){
+  const quals=[...new Set((DB.qualities||[]).map(q=>q.name))].map(q=>'<option value="'+esc(q)+'">').join("");
+  const parties=[...new Set((DB.customers||[]).map(c=>c.name))].map(p=>'<option value="'+esc(p)+'">').join("");
+  const ex=document.getElementById("recCreateOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="recCreateOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:640px;max-width:94vw">'
+    +'<div class="m-h"><h3><span class="material-symbols-rounded">science</span>Create dye recipe</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<datalist id="rcQuals">'+quals+'</datalist><datalist id="rcParties">'+parties+'</datalist>'
+    +'<div class="row"><label class="fld" style="flex:1">Party<input id="rcParty" list="rcParties" placeholder="e.g. AADINATH"></label>'
+    +'<label class="fld" style="flex:1">Quality<input id="rcQual" list="rcQuals" placeholder="e.g. CANYON"></label>'
+    +'<label class="fld" style="width:110px">Shade<input id="rcShade" placeholder="e.g. 08"></label></div>'
+    +'<div class="row" style="margin-top:10px"><label class="fld" style="flex:2">Recipe name <span class="muted small">(blank = PARTY-QUALITY-SHADE)</span><input id="rcName" placeholder="auto"></label>'
+    +'<label class="fld" style="width:120px">Unit<select id="rcUnit"><option>KG</option><option>BATCH</option></select></label></div>'
+    +'<div class="fldlabel" style="margin-top:14px">Chemicals</div><div id="rcItems"></div>'
+    +'<button type="button" class="btn ghost sm" style="margin-top:8px" onclick="rcAddItem()"><span class="material-symbols-rounded">add</span>Add chemical</button>'
+    +'<div id="rcErr" class="flag" style="display:none;margin-top:10px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" onclick="saveRecipeCreate()"><span class="material-symbols-rounded">check</span>Create recipe</button></div></div>';
+  document.body.appendChild(o); rcAddItem();
+}
+function rcAddItem(){
+  const box=document.getElementById("rcItems"); if(!box) return;
+  const d=document.createElement("div"); d.style.cssText="display:flex;gap:8px;margin-bottom:6px;align-items:center";
+  d.innerHTML='<input class="rc-in" placeholder="Chemical / dye" style="flex:2">'
+    +'<input class="rc-qty" type="number" step="0.001" placeholder="qty" style="flex:1">'
+    +'<input class="rc-unit" placeholder="%/gpl" style="width:90px" value="%">'
+    +'<button type="button" class="rm" title="remove" onclick="this.parentNode.remove()">&times;</button>';
+  box.appendChild(d);
+}
+async function saveRecipeCreate(){
+  const g=id=>document.getElementById(id).value.trim();
+  const quality=g("rcQual"), shade=g("rcShade"), err=document.getElementById("rcErr");
+  if(!quality||!shade){ err.style.display="block"; err.textContent="Quality and Shade are required."; return; }
+  const items=[...document.querySelectorAll("#rcItems > div")].map(r=>({
+      name:(r.querySelector(".rc-in").value||"").trim(),
+      qty:r.querySelector(".rc-qty").value, unit:(r.querySelector(".rc-unit").value||"").trim()
+    })).filter(x=>x.name);
+  const res=await API._post({op:"recipeCreate", row:{party:g("rcParty"), quality, shade, name:g("rcName"), unit:g("rcUnit"), items}});
+  if(res&&res.error){ err.style.display="block"; err.textContent=res.error; return; }
+  document.getElementById("recCreateOverlay").remove();
+  await API.db(); renderNav();
+  toast("Created recipe "+res.name); recipeSearch(quality+" "+shade);
 }
 function viewRecipe(i){
   const r=_recipeResults[i]; if(!r) return;

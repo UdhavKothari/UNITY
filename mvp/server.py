@@ -12,7 +12,7 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, csv as _csv
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, csv as _csv
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -94,6 +94,39 @@ def _make_user(uid, username, pw, role, active=True):
 def _perms_for(db, user):
     role = next((r for r in db.get("roles", []) if r.get("name") == user.get("role")), None)
     return role.get("perms", []) if role else []
+
+def _edit_perms_for(db, user):
+    """pages this user may MODIFY. A role's 'edit' list is a subset of its viewable 'perms';
+    older roles without an explicit 'edit' key keep full edit rights on what they can see."""
+    role = next((r for r in db.get("roles", []) if r.get("name") == user.get("role")), None)
+    if not role:
+        return []
+    edit = role.get("edit")
+    view = role.get("perms", [])
+    if edit is None:                       # legacy role: editable == viewable (no behaviour change)
+        return list(view)
+    return [p for p in edit if p in view]  # never grant edit on a page the role can't see
+
+def _ensure_quality_and_shade(db, quality):
+    """Quick-add a quality stub (if new) and a shade '0' for it (if new) — used by the inbox
+    importer and the 'sync qualities & shades' buttons during setup. Returns (added_q, added_shade)."""
+    q = (quality or "").strip()
+    if not q:
+        return 0, 0
+    aq = asr = 0
+    quals = db.setdefault("qualities", [])
+    if not any((x.get("name") or "").strip().upper() == q.upper() for x in quals):
+        quals.append({"id": "Q-" + uuid.uuid4().hex[:6], "name": q, "gsm": 0, "width": 0, "maxBatch": 0,
+                      "dyeStep": 3, "step1_mc": "", "step1_time": 0, "step2_mc": "", "step2_time": 0,
+                      "step3_mc": "jet", "step3_time": 0, "step4_mc": "stentor", "step4_time": 0})
+        aq = 1
+    shades = db.setdefault("shadeRecipes", [])
+    if not any((x.get("quality") or "").strip().upper() == q.upper() and str(x.get("shade") or "").strip() == "0"
+               for x in shades):
+        shades.append({"id": "SH-" + uuid.uuid4().hex[:6], "quality": q, "shade": "0",
+                       "family": "Neutral", "tone": 0, "program": ""})
+        asr = 1
+    return aq, asr
 
 def _sanitized(db):
     """copy of db with password material stripped from users (never sent to client)"""
@@ -218,10 +251,10 @@ def load_db():
     # otherwise newly added pages stay invisible on an existing data file
     for r in db.get("roles", []):
         if r.get("name") == "Administrator":
-            missing = [p for p in ALL_PAGES if p not in r.get("perms", [])]
-            if missing:
-                r["perms"] = list(ALL_PAGES)
-                changed = True
+            if [p for p in ALL_PAGES if p not in r.get("perms", [])]:
+                r["perms"] = list(ALL_PAGES); changed = True
+            if r.get("edit") != list(ALL_PAGES):          # Administrator can always edit everything
+                r["edit"] = list(ALL_PAGES); changed = True
     if _migrate(db):
         changed = True
     if changed:
@@ -239,46 +272,83 @@ HEAVY_TABLES = {"recipes"}
 
 def _connect():
     c = sqlite3.connect(DB_PATH, timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA journal_mode=WAL")        # readers never block the single writer
     c.execute("PRAGMA synchronous=NORMAL")
+    c.execute("PRAGMA busy_timeout=5000")       # wait up to 5s for a lock instead of erroring
     return c
 
 def _doc_tables(c):
     return [r[0] for r in c.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name<>'_kv' AND name NOT LIKE 'sqlite_%'")]
 
+# Per-thread snapshot of the last-loaded DB (row id -> serialized JSON), so a save writes ONLY the
+# rows that actually changed instead of rewriting every table. DB_VERSION bumps on every save and
+# drives the /api/db ETag so unchanged clients get a cheap 304. (Scales to ~150 concurrent users.)
+_SNAP = threading.local()
+_BOOT = secrets.token_hex(4)
+DB_VERSION = 0
+
+def _rowmap(v):
+    return {str(r.get("id") or ("_row%d" % i)): json.dumps(r, ensure_ascii=False) for i, r in enumerate(v)}
+
+def _snapshot(db):
+    _SNAP.data = {k: _rowmap(v) for k, v in db.items() if isinstance(v, list)}
+
 def _read_all(c):
     db = {}
+    snap = {}
     for t in _doc_tables(c):
         if t in HEAVY_TABLES:                  # never load big reference tables into memory
             continue
-        db[t] = [json.loads(d) for (_id, d) in c.execute('SELECT id,data FROM "%s"' % t)]
+        rows, raw = [], {}
+        for (_id, d) in c.execute('SELECT id,data FROM "%s"' % t):
+            rows.append(json.loads(d)); raw[str(_id)] = d
+        db[t] = rows; snap[t] = raw
     for (k, v) in c.execute("SELECT k,v FROM _kv"):
         db[k] = json.loads(v)
+    _SNAP.data = snap                          # remember exactly what was on disk, for diffed writes
     return db
 
 def _write_all(c, db):
+    """Persist only what changed vs. the snapshot taken at load time (falls back to a full
+    write for any table with no snapshot, e.g. a brand-new table)."""
     c.execute("CREATE TABLE IF NOT EXISTS _kv (k TEXT PRIMARY KEY, v TEXT)")
+    snap = getattr(_SNAP, "data", None) or {}
     lists = {k for k, v in db.items() if isinstance(v, list)}
-    for t in set(_doc_tables(c)) - lists - HEAVY_TABLES:   # heavy tables are managed by their own ops
+    for t in set(_doc_tables(c)) - lists - HEAVY_TABLES:   # a whole table dropped from the in-memory db
         c.execute('DELETE FROM "%s"' % t)
     for k, v in db.items():
         if isinstance(v, list):
             c.execute('CREATE TABLE IF NOT EXISTS "%s" (id TEXT PRIMARY KEY, data TEXT)' % k)
-            c.execute('DELETE FROM "%s"' % k)
-            c.executemany('INSERT OR REPLACE INTO "%s" (id,data) VALUES (?,?)' % k,
-                          [(str(r.get("id") or ("_row%d" % i)), json.dumps(r, ensure_ascii=False))
-                           for i, r in enumerate(v)])
+            cur = _rowmap(v)
+            old = snap.get(k)
+            if old is None:                                # unknown table -> full write, once
+                c.execute('DELETE FROM "%s"' % k)
+                if cur:
+                    c.executemany('INSERT OR REPLACE INTO "%s" (id,data) VALUES (?,?)' % k, list(cur.items()))
+            else:
+                removed = [(rid,) for rid in old if rid not in cur]
+                if removed:
+                    c.executemany('DELETE FROM "%s" WHERE id=?' % k, removed)
+                changed = [(rid, js) for rid, js in cur.items() if old.get(rid) != js]
+                if changed:
+                    c.executemany('INSERT OR REPLACE INTO "%s" (id,data) VALUES (?,?)' % k, changed)
         elif isinstance(v, dict):
             c.execute("INSERT OR REPLACE INTO _kv (k,v) VALUES (?,?)", (k, json.dumps(v, ensure_ascii=False)))
     c.commit()
+    _snapshot(db)                                          # snapshot now matches disk again
 
 def save_db(db):
+    global DB_VERSION
     c = _connect()
     try:
         _write_all(c, db)
     finally:
         c.close()
+    DB_VERSION += 1
+
+def _etag():
+    return '"%s-%d"' % (_BOOT, DB_VERSION)
 
 def _load_raw():
     c = _connect()
@@ -364,21 +434,37 @@ CT = {".html":"text/html",".js":"application/javascript",".css":"text/css",
       ".woff2":"font/woff2",".woff":"font/woff"}
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json", cookies=None):
+    def _send(self, code, body, ctype="application/json", cookies=None, extra=None, cache=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
             body = body.encode()
+        enc = None
+        if body and len(body) > 900 and "gzip" in (self.headers.get("Accept-Encoding", "") or ""):
+            body = gzip.compress(body, 5); enc = "gzip"     # shrink big JSON/JS/CSS payloads on the wire
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        # never cache: edits to html/css/js appear on a normal refresh, no hard-reload needed
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
+        # default: never cache, so edits to html/css/js appear on a normal refresh. Endpoints that
+        # support revalidation (e.g. /api/db with an ETag) pass cache="no-cache" instead.
+        self.send_header("Cache-Control", cache or "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
+        for k, v in (extra or []):
+            self.send_header(k, v)
         for c in (cookies or []):
             self.send_header("Set-Cookie", c)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _session_ok(self):
+        """cheap check that a live session cookie exists — no DB read (for the 304 fast path)"""
+        tok = self._sid()
+        s = SESSIONS.get(tok) if tok else None
+        return bool(s and s["expires"] >= time.time())
 
     def _sid(self):
         raw = self.headers.get("Cookie", "") or ""
@@ -409,13 +495,17 @@ class Handler(BaseHTTPRequestHandler):
                 db = load_db(); u, perms = self._auth(db)
             if not u:
                 return self._send(401, {"error": "not authenticated"})
-            return self._send(200, {"user": {"username": u["username"], "role": u["role"], "perms": perms}})
+            return self._send(200, {"user": {"username": u["username"], "role": u["role"],
+                                             "perms": perms, "edit": _edit_perms_for(db, u)}})
         if path == "/api/db":
+            # fast path: an unchanged DB + a live session -> 304, with no lock and no full load
+            if self.headers.get("If-None-Match") == _etag() and self._session_ok():
+                return self._send(304, b"", cache="no-cache", extra=[("ETag", _etag())])
             with LOCK:
                 db = load_db(); u, perms = self._auth(db)
             if not u:
                 return self._send(401, {"error": "login required"})
-            return self._send(200, _sanitized(db))
+            return self._send(200, _sanitized(db), cache="no-cache", extra=[("ETag", _etag())])
         # static files
         if path == "/" or path == "":
             path = "/index.html"
@@ -451,7 +541,8 @@ class Handler(BaseHTTPRequestHandler):
                 SESSIONS[token] = {"username": username, "expires": time.time() + SESSION_TTL}
                 perms = _perms_for(db, u)
                 _log(db, username, "login", "users", u.get("id", ""), "signed in"); save_db(db)
-                return self._send(200, {"ok": True, "user": {"username": username, "role": u["role"], "perms": perms}},
+                return self._send(200, {"ok": True, "user": {"username": username, "role": u["role"],
+                                                            "perms": perms, "edit": _edit_perms_for(db, u)}},
                                   cookies=[f"sid={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL}"])
 
             if op == "logout":
@@ -467,6 +558,10 @@ class Handler(BaseHTTPRequestHandler):
             u, perms = self._auth(db)
             if not u:
                 return self._send(401, {"error": "login required"})
+            eperms = _edit_perms_for(db, u)     # pages this user may MODIFY (subset of perms)
+            def _need_edit(pages):
+                # True (=> caller should 403) when the user can't edit ANY of these pages
+                return not any(p in eperms for p in pages)
 
             if op == "changePassword":
                 new = req.get("newPassword") or ""
@@ -479,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
 
             if op == "batchStatus":
-                if not any(p in perms for p in ("batches", "op_batch")):
+                if _need_edit(("batches", "op_batch")):
                     return self._send(403, {"error": "forbidden"})
                 to = req.get("to")
                 if to not in ("running", "done", "planned"):
@@ -503,14 +598,14 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---- dye recipes (big on-demand table; imported from Excel) ----
             if op == "recipesBulkAdd":
-                if "recipes" not in perms:
+                if _need_edit(("recipes",)):
                     return self._send(403, {"error": "forbidden"})
                 n = recipes_bulk_add(req.get("rows") or [])
                 _log(db, u["username"], "recipesImport", "recipes", "", "added %d recipes" % n); save_db(db)
                 return self._send(200, {"ok": True, "added": n, "total": recipes_count()})
 
             if op == "recipesClear":
-                if "recipes" not in perms:
+                if _need_edit(("recipes",)):
                     return self._send(403, {"error": "forbidden"})
                 recipes_clear()
                 _log(db, u["username"], "recipesClear", "recipes", "", "cleared all recipes"); save_db(db)
@@ -527,10 +622,63 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(403, {"error": "forbidden"})
                 return self._send(200, {"pairs": recipes_distinct_shades()})
 
+            if op == "recipeCreate":
+                # manually create ONE dye recipe (party-quality-shade + chemical lines)
+                if _need_edit(("recipes",)):
+                    return self._send(403, {"error": "forbidden"})
+                r = req.get("row") or {}
+                party = (r.get("party") or "").strip()
+                quality = (r.get("quality") or "").strip()
+                shade = str(r.get("shade") or "").strip()
+                if not (quality and shade):
+                    return self._send(400, {"error": "Quality and Shade are required."})
+                name = (r.get("name") or "").strip() or "-".join(x for x in (party, quality, shade) if x)
+                row = {"name": name, "party": party, "quality": quality, "shade": shade,
+                       "unit": (r.get("unit") or "KG"), "items": r.get("items") or []}
+                recipes_bulk_add([row])
+                # keep the catalog in step: ensure this quality + a shade entry exist for planning
+                _ensure_quality_and_shade(db, quality)
+                exists = any(str(s.get("quality", "")).upper() == quality.upper()
+                             and str(s.get("shade", "")).upper() == shade.upper() for s in db.get("shadeRecipes", []))
+                if not exists:
+                    db.setdefault("shadeRecipes", []).append(
+                        {"id": "SH-" + uuid.uuid4().hex[:6], "quality": quality, "shade": shade,
+                         "family": "Neutral", "tone": 0, "program": name})
+                _log(db, u["username"], "recipeCreate", "recipes", "", "created recipe " + name)
+                save_db(db)
+                return self._send(200, {"ok": True, "name": name, "total": recipes_count()})
+
+            if op == "catalogSync":
+                # setup helper: make sure every quality/shade referenced by lots AND by imported
+                # recipes exists in the catalog (quality stub + shade '0', plus recipe-named shades)
+                if _need_edit(("qualities", "shadeRecipes")):
+                    return self._send(403, {"error": "forbidden"})
+                aq = ash = 0
+                for q in {(l.get("quality") or "").strip() for l in db.get("lots", [])}:
+                    a, s = _ensure_quality_and_shade(db, q); aq += a; ash += s
+                existing = {}
+                for s in db.get("shadeRecipes", []):
+                    existing[(str(s.get("quality", "")).upper(), str(s.get("shade", "")).upper())] = s
+                fixed = 0
+                for p in recipes_distinct_shades():
+                    key = (str(p["quality"]).upper(), str(p["shade"]).upper())
+                    a, _ = _ensure_quality_and_shade(db, p["quality"]); aq += a
+                    s = existing.get(key)
+                    if not s:
+                        row = {"id": "SH-" + uuid.uuid4().hex[:6], "quality": p["quality"], "shade": p["shade"],
+                               "family": "Neutral", "tone": 0, "program": p.get("name") or ""}
+                        db.setdefault("shadeRecipes", []).append(row); existing[key] = row; ash += 1
+                    elif (not s.get("program")) or s.get("program") == "from dye recipe":
+                        s["program"] = p.get("name") or ""; fixed += 1
+                _log(db, u["username"], "catalogSync", "qualities", "",
+                     "added %d qualities, %d shades; program-fixed %d" % (aq, ash, fixed))
+                save_db(db)
+                return self._send(200, {"ok": True, "qualities": aq, "shades": ash, "fixed": fixed})
+
             if op == "recipesShadeSync":
                 # create a shade entry for every quality-shade in the recipes, and set each shade's
                 # program to its recipe name (fixing the old "from dye recipe" placeholder)
-                if "shadeRecipes" not in perms:
+                if _need_edit(("shadeRecipes",)):
                     return self._send(403, {"error": "forbidden"})
                 existing = {}
                 for s in db.get("shadeRecipes", []):
@@ -555,8 +703,8 @@ class Handler(BaseHTTPRequestHandler):
                 if table in ("activityLog",) or table in HEAVY_TABLES:
                     return self._send(403, {"error": "not allowed for this table"})
                 allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"]}.get(table, [table])
-                if not any(p in perms for p in allowed):
-                    return self._send(403, {"error": "forbidden: no permission for %s" % table})
+                if _need_edit(allowed):
+                    return self._send(403, {"error": "forbidden: no edit permission for %s" % table})
                 if table not in db or not isinstance(db.get(table), list):
                     return self._send(400, {"error": "unknown table %s" % table})
                 SYSTEM_IDS = ("lots", "batches", "orders")
@@ -577,8 +725,8 @@ class Handler(BaseHTTPRequestHandler):
                 allowed = ["settings"]
             else:
                 allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"]}.get(table, [table])
-            if not any(p in perms for p in allowed):
-                return self._send(403, {"error": f"forbidden: no permission for {table}"})
+            if _need_edit(allowed):
+                return self._send(403, {"error": f"forbidden: no edit permission for {table}"})
 
             if table == "__settings__":
                 db["settings"] = req.get("row", {}); save_db(db)
@@ -601,7 +749,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "Stentor is a post-dyeing finish - it cannot be step %d when dyeing is step %d" % (i, dye)})
                 if table == "batches":
                     was = bool(existing.get("urgent")) if existing else False
-                    if bool(row.get("urgent")) != was and "urgent_flag" not in perms:
+                    if bool(row.get("urgent")) != was and "urgent_flag" not in eperms:
                         return self._send(403, {"error": "Only a Master can flag a batch urgent"})
                     if bool(row.get("urgent")) and not was:
                         row["urgentBy"] = u["username"]; row["urgentAt"] = time.strftime("%Y-%m-%d %H:%M")
@@ -783,7 +931,11 @@ def _apply_lots(lots):
                 by_id[lot["id"]].update(lot); updated += 1
             else:
                 db.setdefault("lots", []).append(lot); by_id[lot["id"]] = lot; added += 1
-        _log(db, "inbox", "lotImport", "lots", "", "imported %d lots (%d new, %d updated)" % (len(lots), added, updated))
+        aq = ash = 0                                   # quick-add each new lot's quality + a shade '0'
+        for q in {(l.get("quality") or "").strip() for l in lots}:
+            a, s = _ensure_quality_and_shade(db, q); aq += a; ash += s
+        _log(db, "inbox", "lotImport", "lots", "",
+             "imported %d lots (%d new, %d updated); +%d qualities, +%d shades" % (len(lots), added, updated, aq, ash))
         save_db(db)
     return added, updated
 

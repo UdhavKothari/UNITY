@@ -8,6 +8,15 @@ echo   http://localhost:8080/
 echo ============================================
 echo.
 
+echo Checking GitHub for updates before starting...
+git -C "%~dp0\.." pull
+if errorlevel 1 (
+  echo (Could not reach GitHub - starting with the code already on this PC.)
+) else (
+  echo Up to date.
+)
+echo.
+
 :loop
 python server.py %*
 echo.

@@ -475,7 +475,7 @@ function renderMassPlan(){
     totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
     const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
-    const canEdit=can("op_batch");                 // create/delete batches needs op_batch (server-enforced)
+    const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
     const bodyRows = (rows.length ? rows.map(b=>{
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
@@ -485,11 +485,11 @@ function renderMassPlan(){
         <td class="mp-actions">${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}
           <button class="btn ghost sm" title="move up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
           <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
-          ${canEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}
-          ${canEdit?`<button class="btn ghost sm mp-del" title="delete batch" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
+          ${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}
+          ${mayEdit?`<button class="btn ghost sm mp-del" title="delete batch" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
         </td></tr>`;
     }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
-      + (canEdit ? (editing
+      + (mayEdit ? (editing
           ? `<tr class="mp-editrow"><td colspan="9">${mpEditorHTML(m)}</td></tr>`
           : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`)
         : '');
@@ -650,7 +650,7 @@ async function mpSaveNew(machineId){
   toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
 }
 async function mpDeleteBatch(id){
-  if(!can("op_batch")){ toast("You don't have permission to delete batches"); return; }
+  if(!canEdit("op_batch")){ toast("You don't have permission to delete batches"); return; }
   if(!window.confirm("Delete batch "+id+"? This cannot be undone.")) return;
   const res=await API.del("batches", id);
   if(res && res.error){ toast(res.error); return; }

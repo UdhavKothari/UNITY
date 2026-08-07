@@ -678,6 +678,8 @@ function serverBanner(){
 let CURRENT_USER=null;
 async function apiMe(){ try{ const r=await fetch("/api/me"); if(r.status!==200) return null; return (await r.json()).user; }catch(e){ return "ERR"; } }
 function can(page){ return !!(CURRENT_USER && CURRENT_USER.perms && CURRENT_USER.perms.indexOf(page)>=0); }
+/* can this user MODIFY the page? (view-only roles can see but not edit — server-enforced too) */
+function canEdit(page){ return !!(CURRENT_USER && CURRENT_USER.edit && CURRENT_USER.edit.indexOf(page)>=0); }
 
 async function boot(initFn){
   const u=await apiMe();
