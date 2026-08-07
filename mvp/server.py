@@ -842,10 +842,12 @@ INBOX_DONE = os.path.join(INBOX_DIR, "done")
 INBOX_ERR  = os.path.join(INBOX_DIR, "error")
 INBOX_POLL_SECS = 45
 
-# Header names matched (order-independent). Each CSV row is ONE taka; rows are grouped by LOT.
-# TAKA length uses TakaPendingMts (falls back to Despatch, then Received). Adjust here if needed.
+# Header names matched (order-independent). Each CSV row is ONE taka; rows are grouped by the LOT
+# NUMBER, which is the DESPNO (despatch number) column — NOT the "LOT" column. LOT is kept only as a
+# fallback for older exports that had no DESPNO. TAKA length is TakaPendingMts (the balance still to
+# be dyed), falling back to Despatch, then Received. Adjust here if your headers differ.
 LOT_COL_ALIASES = {
-    "lotNo":   ["LOT", "LOT NO", "LOTNO", "LOT NUMBER"],
+    "lotNo":   ["DESPNO", "DESP NO", "DESPATCHNO", "DESPATCH NO", "LOT", "LOT NO", "LOTNO", "LOT NUMBER"],
     "quality": ["GREYQUAL", "GREY QUALITY", "GREYQUALITY", "GREY QUAL", "QUALITY", "ITEM NAME"],
     "cardNo":  ["CARDNO", "CARD NO", "CARD"],
     "inDate":  ["LOTCREATETIME", "LOT CREATE TIME", "INW DATE", "IN DATE", "DATE"],
@@ -892,7 +894,8 @@ def _csv_to_lots(rows):
             continue
         get = lambda f: (r[cm[f]] if (f in cm and cm[f] < len(r)) else "")
         lotno = str(get("lotNo")).strip()
-        if not lotno or set(lotno) <= set("- ") or "(" in lotno:   # skip dashes + SQL footers like "(445 rows affected)"
+        # skip dashes, SQL footers like "(445 rows affected)", and rows with no real despatch number
+        if not lotno or set(lotno) <= set("- ") or "(" in lotno or lotno.upper() in ("0", "NULL"):
             continue
         lot = lots.get(lotno)
         if lot is None:
