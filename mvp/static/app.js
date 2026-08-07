@@ -4,10 +4,26 @@ let DB = null;
 const API = {
   async db(){ DB = await (await fetch("/api/db")).json(); return DB; },
   async _post(body){ const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); return r.json(); },
-  save(table,row){ return this._post({op:"upsert",table,row}); },
-  del(table,id){ return this._post({op:"delete",table,id}); },
-  batchStatus(id,to){ return this._post({op:"batchStatus",id,to}); }
+  // save/del patch the in-memory DB from the server's response instead of re-downloading the whole
+  // database — so an edit is instant no matter how many lots/recipes exist. (One row changed = patch
+  // one row.) Multi-row operations (imports, catalog sync) still call API.db() explicitly.
+  async save(table,row){ const res=await this._post({op:"upsert",table,row}); if(res&&res.ok&&res.row) patchLocalRow(table,res.row); return res; },
+  async del(table,id){ const res=await this._post({op:"delete",table,id}); if(res&&res.ok) removeLocalRow(table,id); return res; },
+  async batchStatus(id,to){ const res=await this._post({op:"batchStatus",id,to}); if(res&&res.ok&&res.row) patchLocalRow("batches",res.row); return res; }
 };
+/* keep DB current locally after a single-row change, and drop caches derived from it */
+function patchLocalRow(table,row){
+  if(!row||row.id==null) return;
+  const arr=DB[table]; if(!Array.isArray(arr)) return;
+  const i=arr.findIndex(r=>r.id===row.id);
+  if(i>=0) arr[i]=row; else arr.push(row);
+  _lotAllocCache=null;                       // lot allocation etc. are derived — force recompute
+}
+function removeLocalRow(table,id){
+  const arr=DB[table]; if(!Array.isArray(arr)) return;
+  const i=arr.findIndex(r=>r.id===id); if(i>=0) arr.splice(i,1);
+  _lotAllocCache=null;
+}
 
 /* ---------- lookups ---------- */
 const byName = (arr,n)=> arr.find(x=>x.name===n);

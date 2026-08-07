@@ -412,7 +412,7 @@ async function submitBatch(){
   }
   delete document.getElementById("b_mc").dataset.mpMachine;
   delete document.getElementById("b_mc").dataset.mpDay;
-  await API.db();
+  // DB patched in place by each API.save above — no full reload needed
   const r=document.getElementById("batchResult"); r.classList.add("on");
   r.innerHTML = created.length>1
     ? `<h3>✓ Split into ${created.length} batches</h3>
@@ -452,7 +452,7 @@ function batchLifeCell(b){
 async function setBatchStatus(id,to){
   const res=await API.batchStatus(id,to);
   if(res&&res.error){ toast(res.error); return; }
-  await API.db(); renderBatchList(); draw();       // Gantt advances immediately
+  renderBatchList(); draw();       // Gantt advances immediately (DB patched in place)
   toast(to==="running"?"Batch started":to==="done"?"Batch marked complete":"Batch reopened");
 }
 function renderBatchList(){
@@ -646,7 +646,7 @@ async function mpSaveNew(machineId){
     pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status:"planned" };
   const res=await API.save("batches", row);
   if(res && res.error){ toast(res.error); return; }
-  MP_EDIT=null; await API.db(); renderMassPlan(); draw();
+  MP_EDIT=null; renderMassPlan(); draw();               // DB patched in place by API.save
   toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
 }
 async function mpDeleteBatch(id){
@@ -654,7 +654,7 @@ async function mpDeleteBatch(id){
   if(!window.confirm("Delete batch "+id+"? This cannot be undone.")) return;
   const res=await API.del("batches", id);
   if(res && res.error){ toast(res.error); return; }
-  await API.db(); renderMassPlan(); draw();
+  renderMassPlan(); draw();                              // DB patched in place by API.del
   toast(id+" deleted");
 }
 /* ---- manual start/end time logging: pick a day, type the two clock times ---- */
@@ -698,8 +698,8 @@ async function mpSaveLog(id){
   });
   const res=await API.save("batches", row);
   if(res && res.error){ toast(res.error); return; }
-  await API.db(); const ov=document.getElementById("logOverlay"); if(ov) ov.remove();
-  renderMassPlan(); draw();
+  const ov=document.getElementById("logOverlay"); if(ov) ov.remove();
+  renderMassPlan(); draw();                              // DB patched in place by API.save
   toast(en ? id+" finished — moved to history" : st ? id+" started" : id+" times cleared");
 }
 async function mpMove(batchId, dir){
@@ -708,8 +708,8 @@ async function mpMove(batchId, dir){
   const i=list.findIndex(x=>x.id===batchId), j=i+dir;
   if(j<0||j>=list.length) return;
   const reordered=reorderPlan(list,i,j);
-  for(const r of reordered){ await API.save("batches", r); }   // persists renumbered seq
-  await API.db(); renderMassPlan(); draw();
+  for(const r of reordered){ await API.save("batches", r); }   // persists renumbered seq (each patched locally)
+  renderMassPlan(); draw();
   toast("Sequence updated");
 }
 function MC_ICON(t){ return {jet:"water_drop",jigger:"waves",drum:"cyclone",stentor:"compress",hydro:"mode_fan",rope:"timeline"}[t]||"precision_manufacturing"; }

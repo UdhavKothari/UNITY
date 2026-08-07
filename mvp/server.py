@@ -129,10 +129,12 @@ def _ensure_quality_and_shade(db, quality):
     return aq, asr
 
 def _sanitized(db):
-    """copy of db with password material stripped from users (never sent to client)"""
+    """copy of db with password material stripped, and the (large) activity log left OUT of the
+    full payload — the Activity page fetches it a page at a time via the 'logPage' op instead."""
     d = dict(db)
     d["users"] = [{k: v for k, v in u.items() if k not in ("passHash", "salt")}
                   for u in db.get("users", [])]
+    d["activityLog"] = []                 # fetched on demand; keeps every page load small
     return d
 
 def _prepare_user_row(db, row):
@@ -696,6 +698,19 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], "recipesShadeSync", "shadeRecipes", "", "added %d, program-fixed %d" % (added, fixed))
                 save_db(db)
                 return self._send(200, {"ok": True, "added": added, "fixed": fixed})
+
+            if op == "logPage":
+                # paginated activity log (newest first) — kept out of /api/db so page loads stay small
+                if "activity" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                q = (req.get("q") or "").strip().lower()
+                off = max(0, int(req.get("offset") or 0))
+                lim = min(max(1, int(req.get("limit") or 100)), 500)
+                rows = list(reversed(db.get("activityLog", [])))
+                if q:
+                    rows = [e for e in rows if any(q in str(e.get(k, "")).lower()
+                            for k in ("ts", "user", "action", "table", "recordId", "summary"))]
+                return self._send(200, {"rows": rows[off:off + lim], "total": len(rows)})
 
             # ---- fast bulk insert into a normal table (client has already de-duped) ----
             if op == "bulkUpsert":

@@ -454,24 +454,38 @@ function bigOnScroll(e){ const el=e.target; if(el.scrollTop+el.clientHeight >= e
 const ACTION_LABEL={login:"signed in",logout:"signed out",create:"created",update:"updated",
   delete:"deleted",running:"started batch",done:"completed batch",planned:"reopened batch",
   reset:"reset data",changePassword:"changed password"};
+let _logState={offset:0,total:0,q:"",loading:false,done:false};
+function logRowHTML(e){
+  return '<tr><td class="tnum">'+esc(e.ts)+'</td><td><b>'+esc(e.user)+'</b></td>'
+    +'<td><span class="pill '+actionPill(e.action)+'">'+esc(ACTION_LABEL[e.action]||e.action)+'</span></td>'
+    +'<td>'+esc(e.table||"")+'</td><td class="tnum">'+esc(e.recordId||"")+'</td><td class="muted">'+esc(e.summary||"")+'</td></tr>';
+}
 function renderActivity(c){
-  const term=(SEARCH.activity||"").toLowerCase();
-  let rows=(DB.activityLog||[]).slice().reverse();     // newest first
-  if(term) rows=rows.filter(e=>[e.ts,e.user,e.action,e.table,e.recordId,e.summary]
-                                 .some(v=>String(v||"").toLowerCase().indexOf(term)>=0));
-  c.innerHTML='<div class="page-head"><h1>Activity log</h1><p>'+(DB.activityLog||[]).length
-      +' event(s). A full audit trail — who did what, and when. Append-only.</p></div>'
+  const term=(SEARCH.activity||"");
+  c.innerHTML='<div class="page-head"><h1>Activity log</h1><p id="logHead">Loading…</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
-    +'<input placeholder="Search the log..." value="'+esc(SEARCH.activity||"")+'" oninput="onSearchInput(this)"></div>'
+    +'<input placeholder="Search the log..." value="'+esc(term)+'" oninput="onSearchInput(this)"></div>'
     +'<div class="spacer"></div>'
     +'<button class="btn ghost" onclick="exportActivityToExcel()"><span class="material-symbols-rounded">download</span>Export</button></div>'
-    +'<div class="card"><div class="tbl-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Table</th><th>Record</th><th>Detail</th></tr></thead><tbody>'
-    +(rows.length?rows.map(e=>'<tr><td class="tnum">'+esc(e.ts)+'</td><td><b>'+esc(e.user)+'</b></td>'
-        +'<td><span class="pill '+actionPill(e.action)+'">'+esc(ACTION_LABEL[e.action]||e.action)+'</span></td>'
-        +'<td>'+esc(e.table||"")+'</td><td class="tnum">'+esc(e.recordId||"")+'</td><td class="muted">'+esc(e.summary||"")+'</td></tr>').join("")
-      :'<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:26px">No events'+(term?' match your search':' yet')+'.</td></tr>')
-    +'</tbody></table></div></div>';
+    +'<div class="card"><div class="tbl-wrap big-scroll" id="logScroll" onscroll="logOnScroll(event)"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Table</th><th>Record</th><th>Detail</th></tr></thead><tbody id="logBody"></tbody></table></div><div class="big-foot" id="logFoot"></div></div>';
+  _logState={offset:0,total:0,q:term,loading:false,done:false};
+  logLoadMore(true);
 }
+async function logLoadMore(reset){
+  if(_logState.loading||_logState.done) return;
+  _logState.loading=true;
+  const res=await API._post({op:"logPage", q:_logState.q, offset:_logState.offset, limit:150});
+  _logState.loading=false;
+  const body=document.getElementById("logBody"); if(!body) return;   // navigated away
+  if(res&&res.error){ body.innerHTML='<tr><td colspan="6" class="flag">'+esc(res.error)+'</td></tr>'; return; }
+  const rows=res.rows||[]; _logState.total=res.total||0; _logState.offset+=rows.length;
+  if(rows.length<150) _logState.done=true;
+  if(reset && !rows.length){ body.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:26px">No events'+(_logState.q?' match your search':' yet')+'.</td></tr>'; }
+  else body.insertAdjacentHTML("beforeend", rows.map(logRowHTML).join(""));
+  const head=document.getElementById("logHead"); if(head) head.textContent=_logState.total+' event(s). A full audit trail — who did what, and when.';
+  const f=document.getElementById("logFoot"); if(f) f.textContent=_logState.offset+' of '+_logState.total+' shown';
+}
+function logOnScroll(e){ const el=e.target; if(el.scrollTop+el.clientHeight >= el.scrollHeight-320) logLoadMore(false); }
 function actionPill(a){
   if(a==="delete"||a==="reset") return "wash";
   if(a==="done") return "run";
@@ -479,9 +493,13 @@ function actionPill(a){
   if(a==="login"||a==="create") return "free";
   return "free";
 }
-function exportActivityToExcel(){
+async function exportActivityToExcel(){
   const header=["Time","User","Action","Table","Record","Detail"];
-  const body=(DB.activityLog||[]).slice().reverse().map(e=>[e.ts,e.user,ACTION_LABEL[e.action]||e.action,e.table||"",e.recordId||"",e.summary||""]);
+  let all=[], off=0;                                    // pull the whole log in pages, then export
+  for(;;){ const res=await API._post({op:"logPage", q:(SEARCH.activity||""), offset:off, limit:500});
+    const rows=(res&&res.rows)||[]; all=all.concat(rows); off+=rows.length;
+    if(rows.length<500) break; }
+  const body=all.map(e=>[e.ts,e.user,ACTION_LABEL[e.action]||e.action,e.table||"",e.recordId||"",e.summary||""]);
   const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Activity");
   XLSX.writeFile(wb,"ActivityLog_"+new Date().toISOString().slice(0,10)+".xlsx");
@@ -525,9 +543,11 @@ function exportTakaMasterToExcel(){
   XLSX.writeFile(wb,"TakaMaster_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-/* ---- per-batch history: the log filtered to one batch ---- */
-function showBatchHistory(id){
-  const events=(DB.activityLog||[]).filter(e=>e.recordId===id);
+/* ---- per-batch history: the log filtered to one batch (fetched on demand) ---- */
+async function showBatchHistory(id){
+  openInfoModal('History — '+esc(id), '<p class="muted">Loading…</p>');
+  const res=await API._post({op:"logPage", q:id, offset:0, limit:500});
+  const events=((res&&res.rows)||[]).filter(e=>e.recordId===id);
   const body=events.length
     ? '<table class="mini"><thead><tr><th>Time</th><th>User</th><th>Event</th></tr></thead><tbody>'
       +events.map(e=>'<tr><td class="tnum">'+esc(e.ts)+'</td><td><b>'+esc(e.user)+'</b></td><td>'+esc(ACTION_LABEL[e.action]||e.action)+'</td></tr>').join("")
@@ -808,7 +828,7 @@ function updateShadePreview(){
 async function setShadeHex(id,hex){                 // click a swatch in the shade list -> pick a custom colour
   const s=(DB.shadeRecipes||[]).find(x=>x.id===id); if(!s) return;
   await API.save("shadeRecipes", Object.assign({}, s, {hex:hex}));
-  await API.db(); render(); toast("Shade colour set");
+  render(); toast("Shade colour set");                 // DB patched in place by API.save
 }
 /* ---- every quality gets a shade "0" recipe by default — a real dye step (white/near-colourless)
    that produces RFP (Ready for Print) fabric, ready to go to the printer ---- */
@@ -873,7 +893,7 @@ async function saveModal(){
   }
   await API.save(editTable,row);
   if(editTable==="qualities") await ensureGreigeShade(row.name);
-  await API.db(); closeModal(); renderNav(); render(); toast("Saved");
+  closeModal(); renderNav(); render(); toast("Saved");   // DB already patched in place by API.save
 }
 function closeModal(){document.getElementById("modalBg").classList.remove("on");}
 function openLotImport(){
@@ -1308,7 +1328,7 @@ async function commitQualityQuickAdd(){
   await API.db(); document.getElementById("qqaOverlay").remove(); renderNav(); render();
   toast("Saved "+rows.length+" quality(ies)");
 }
-async function delRow(table,id){ if(!confirm("Delete this record?"))return; await API.del(table,id); await API.db(); renderNav(); render(); toast("Deleted"); }
+async function delRow(table,id){ if(!confirm("Delete this record?"))return; const r=await API.del(table,id); if(r&&r.error){ toast(r.error); return; } renderNav(); render(); toast("Deleted"); }
 
 /* ---- settings ---- */
 function renderSettings(c){
