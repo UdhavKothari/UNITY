@@ -855,6 +855,8 @@ LOT_COL_ALIASES = {
     "takaMts": ["TAKAPENDINGMTS", "TAKA PENDING MTS", "TAKADESPATCHMTS", "TAKA DESPATCH MTS",
                 "TAKARECEIVEDMTS", "PENDING MTS", "METERS", "MTS", "MTR"],
     "takaWt":  ["TAKA_WT", "TAKAWT", "TAKA WT", "WEIGHT", "WT"],
+    "lotPcs":  ["LOTPCS", "LOT PCS", "LOT PIECES"],           # reference totals from the source system
+    "lotMts":  ["LOTMTS", "LOT MTS", "LOTMTRS", "LOT MTRS", "LOT METERS"],
 }
 
 def _norm_hdr(h): return re.sub(r"[^A-Z0-9]", "", str(h).upper())
@@ -899,7 +901,7 @@ def _csv_to_lots(rows):
             continue
         lot = lots.get(lotno)
         if lot is None:
-            lot = {"id": lotno, "status": "in stock", "takas": [], "takaNos": [], "_wts": []}
+            lot = {"id": lotno, "status": "in stock", "takas": [], "takaNos": [], "_wts": [], "_seen": set()}
             q = str(get("quality")).strip()
             if q: lot["quality"] = q
             card = str(get("cardNo")).strip()
@@ -908,15 +910,27 @@ def _csv_to_lots(rows):
             if dt:
                 lot["inDate"] = dt[:10]
                 if len(dt) >= 16: lot["inTime"] = dt[11:16]
+            sp = _num(get("lotPcs")); sm = _num(get("lotMts"))    # reference totals from EMPIRE, if filled
+            if sp > 0: lot["srcPcs"] = int(sp)
+            if sm > 0: lot["srcMeters"] = round(sm)
             lots[lotno] = lot
+        # EMPIRE emits ONE ROW PER PROCESS STEP, so every taka repeats (same DESPNO + TAKASRNO).
+        # Record each taka exactly once — ignore all later rows for a taka already counted.
+        sr_raw = str(get("takaSr")).strip()
+        key = sr_raw or None
+        if key is not None and key in lot["_seen"]:
+            continue
         mts = _num(get("takaMts"))
         if mts <= 0:
             continue                                  # a fully-processed / zero-length taka isn't stock
-        try: sr = int(float(get("takaSr")))
+        if key is not None:
+            lot["_seen"].add(key)
+        try: sr = int(float(sr_raw))
         except (ValueError, TypeError): sr = len(lot["takas"]) + 1
         lot["takas"].append(mts); lot["takaNos"].append(sr); lot["_wts"].append(_num(get("takaWt")))
     out = []
     for lot in lots.values():
+        lot.pop("_seen", None)
         if not lot["takas"]:
             continue                                   # drop any lot that ended up with no real takas (noise)
         order = sorted(range(len(lot["takaNos"])), key=lambda i: lot["takaNos"][i])   # by taka SR no.
@@ -943,19 +957,22 @@ def _apply_lots(lots):
     with LOCK:
         db = load_db()
         by_id = {l.get("id"): l for l in db.get("lots", [])}
-        added = updated = 0
+        added = skipped = 0
+        new_quals = set()
         for lot in lots:
             if lot["id"] in by_id:
-                by_id[lot["id"]].update(lot); updated += 1
-            else:
-                db.setdefault("lots", []).append(lot); by_id[lot["id"]] = lot; added += 1
-        aq = ash = 0                                   # quick-add each new lot's quality + a shade '0'
-        for q in {(l.get("quality") or "").strip() for l in lots}:
+                skipped += 1                            # already imported — leave the existing record
+                continue                                #   untouched (guard against re-runs / double entry)
+            db.setdefault("lots", []).append(lot); by_id[lot["id"]] = lot; added += 1
+            new_quals.add((lot.get("quality") or "").strip())
+        aq = ash = 0                                    # quick-add each NEW lot's quality + a shade '0'
+        for q in new_quals:
             a, s = _ensure_quality_and_shade(db, q); aq += a; ash += s
         _log(db, "inbox", "lotImport", "lots", "",
-             "imported %d lots (%d new, %d updated); +%d qualities, +%d shades" % (len(lots), added, updated, aq, ash))
+             "imported: %d new lots, %d already present (skipped); +%d qualities, +%d shades"
+             % (added, skipped, aq, ash))
         save_db(db)
-    return added, updated
+    return added, skipped
 
 def _process_inbox(path):
     if path.lower().endswith((".xlsx", ".xls")):
@@ -965,8 +982,8 @@ def _process_inbox(path):
     lots = _csv_to_lots(rows)
     if not lots:
         raise ValueError("no lots found in file")
-    added, updated = _apply_lots(lots)
-    return "%d lots (%d new, %d updated) from %d rows" % (len(lots), added, updated, len(rows))
+    added, skipped = _apply_lots(lots)
+    return "%d lots in file: %d new, %d already present (skipped), from %d rows" % (len(lots), added, skipped, len(rows))
 
 def _inbox_watcher():
     for d in (INBOX_DIR, INBOX_DONE, INBOX_ERR):
