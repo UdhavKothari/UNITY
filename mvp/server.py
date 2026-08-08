@@ -598,6 +598,17 @@ class Handler(BaseHTTPRequestHandler):
                 save_db(db)
                 return self._send(200, {"ok": True, "row": b})
 
+            if op == "lotsClear":
+                # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
+                # shades, recipes and batches are left alone. Admin/edit-on-lots only, and logged.
+                if _need_edit(("lots",)):
+                    return self._send(403, {"error": "forbidden"})
+                n = len(db.get("lots", []))
+                db["lots"] = []
+                _log(db, u["username"], "delete", "lots", "", "cleared ALL %d lots" % n)
+                save_db(db)
+                return self._send(200, {"ok": True, "cleared": n})
+
             # ---- dye recipes (big on-demand table; imported from Excel) ----
             if op == "recipesBulkAdd":
                 if _need_edit(("recipes",)):

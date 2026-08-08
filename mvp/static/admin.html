@@ -422,6 +422,7 @@ function render(){
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="onSearchInput(this)"></div>'
     +'<div class="spacer"></div>'
     +((CUR==="lots" && (canEdit("qualities")||canEdit("shadeRecipes"))) ? '<button class="btn ghost" onclick="syncCatalog()"><span class="material-symbols-rounded">sync</span>Sync qualities &amp; shades</button>' : '')
+    +(mayEdit&&CUR==="lots" ? '<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>' : '')
     +(mayEdit&&CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
@@ -682,6 +683,18 @@ function addLotRow(){
   const row=box.lastElementChild, t=lotTotals([row.querySelector('.lot-sel').value]);
   row.querySelector('.lot-pcs').value=t.pcs||''; row.querySelector('.lot-mtr').value=t.mtr||'';
   wireLotRows(); updateLotCount(); syncLotTotals();
+}
+
+/* Lots page: wipe ALL lots (e.g. before re-importing under the DESPNO scheme). Double-confirmed. */
+async function clearAllLots(){
+  const n=(DB.lots||[]).length;
+  if(!n){ toast("There are no lots to clear"); return; }
+  if(!confirm("Delete ALL "+n+" lots?\n\nThis cannot be undone. Qualities, shades, recipes and batches are NOT affected.")) return;
+  if((prompt('Type DELETE to confirm wiping all '+n+' lots:')||"").trim().toUpperCase()!=="DELETE"){ toast("Cancelled"); return; }
+  const res=await API._post({op:"lotsClear"});
+  if(res&&res.error){ toast(res.error); return; }
+  DB.lots=[]; PAGENO.lots=0; renderNav(); render();
+  toast("Cleared "+res.cleared+" lots");
 }
 
 /* Lots page: one click ensures every quality + a shade for it (and recipe shades) exist — used
