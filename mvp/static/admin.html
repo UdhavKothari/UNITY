@@ -370,12 +370,14 @@ function toggleSort(k){
   const cur=SORT[CUR];
   if(cur && cur.k===k) SORT[CUR]= cur.dir==="asc" ? {k,dir:"desc"} : null;
   else SORT[CUR]={k,dir:"asc"};
+  PAGENO[CUR]=0;                     // sorting changes order — back to first page
   render();
 }
 
 let _searchDebounce=null;
 function onSearchInput(el){
   SEARCH[CUR]=el.value;
+  PAGENO[CUR]=0;                     // a new search starts at the first page
   clearTimeout(_searchDebounce);
   _searchDebounce=setTimeout(()=>{
     render();
@@ -409,8 +411,12 @@ function render(){
     });
   }
   const mayEdit=canEdit(CUR);
-  const first=Math.min(rows.length, BIG_CHUNK);
-  BIG={cur:CUR, rows:rows, shown:first, sc:sc, mayEdit:mayEdit};
+  // paginate: show PAGE_SIZE (200) rows per page and stop — Prev/Next to move, search/sort to narrow
+  const total=rows.length;
+  const pages=Math.max(1, Math.ceil(total/PAGE_SIZE));
+  let p=PAGENO[CUR]||0; if(p>pages-1) p=pages-1; if(p<0) p=0; PAGENO[CUR]=p;
+  const start=p*PAGE_SIZE, endi=Math.min(total, start+PAGE_SIZE);
+  const pageRows=rows.slice(start, endi);
   c.innerHTML='<div class="page-head"><h1>'+sc.label+'</h1><p>'+(DB[CUR]||[]).length+' record(s). '+(mayEdit?'Click Edit to change, or Add to create a new one.':'You have view-only access to this page.')+'</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="onSearchInput(this)"></div>'
@@ -421,34 +427,32 @@ function render(){
     +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
     +(mayEdit ? '<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>' : '')
     +'<button class="btn ghost" onclick="exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export</button></div>'
-    +'<div class="card"><div class="tbl-wrap big-scroll" id="bigScroll" onscroll="bigOnScroll(event)"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
-      +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody id="bigBody">'
-    +(rows.length?bigRowsHTML(0,first)
+    +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
+      +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
+    +(total?pageRows.map(r=>rowHTML(CUR,sc,mayEdit,r)).join("")
       :'<tr><td colspan="'+(sc.cols.length+1)+'" style="text-align:center;color:var(--muted);padding:26px">No records'+(term?' match your search':'')+'.</td></tr>')
-    +'</tbody></table></div><div class="big-foot" id="bigFoot">'+(rows.length?(first+' of '+rows.length+' shown'):'')+'</div></div>';
+    +'</tbody></table></div>'+pagerHTML(CUR,total,pages,p,start,endi)+'</div>';
 }
-/* infinite scroll: render large tables in chunks so 5,000+ rows never freeze the page */
-const BIG_CHUNK=200;
-let BIG={cur:null,rows:[],shown:0,sc:null,mayEdit:false};
-function bigRowsHTML(from,to){
-  const sc=BIG.sc, cur=BIG.cur;
-  return BIG.rows.slice(from,to).map(r=>'<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(cur,r,x[0])+'</td>').join("")
+const PAGE_SIZE=200;                 // load 200 rows per page and stop; page/search for more
+let PAGENO={};                       // current page index per table
+function rowHTML(cur,sc,mayEdit,r){
+  return '<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(cur,r,x[0])+'</td>').join("")
     +'<td><div class="rowbtns">'
     +(cur==="batches"?'<button class="btn ghost sm" onclick=\'showBatchHistory('+JSON.stringify(r.id)+')\'>History</button>':'')
-    +(BIG.mayEdit?'<button class="btn ghost sm" onclick=\'openModal("'+cur+'",'+JSON.stringify(r.id)+')\'>Edit</button>':'')
-    +(BIG.mayEdit?'<button class="btn danger sm" onclick=\'delRow("'+cur+'",'+JSON.stringify(r.id)+')\'>Delete</button>':'')
-    +(BIG.mayEdit?'':'<span class="muted small">view only</span>')
-    +'</div></td></tr>').join("");
+    +(mayEdit?'<button class="btn ghost sm" onclick=\'openModal("'+cur+'",'+JSON.stringify(r.id)+')\'>Edit</button>':'')
+    +(mayEdit?'<button class="btn danger sm" onclick=\'delRow("'+cur+'",'+JSON.stringify(r.id)+')\'>Delete</button>':'')
+    +(mayEdit?'':'<span class="muted small">view only</span>')
+    +'</div></td></tr>';
 }
-function bigMore(){
-  if(BIG.shown>=BIG.rows.length) return;
-  const tb=document.getElementById("bigBody"); if(!tb) return;
-  const to=Math.min(BIG.rows.length, BIG.shown+BIG_CHUNK);
-  tb.insertAdjacentHTML("beforeend", bigRowsHTML(BIG.shown,to));
-  BIG.shown=to;
-  const f=document.getElementById("bigFoot"); if(f) f.textContent=BIG.shown+' of '+BIG.rows.length+' shown';
+function pagerHTML(cur,total,pages,p,start,endi){
+  if(!total) return '';
+  return '<div class="pager">'
+    +'<button class="btn ghost sm" '+(p<=0?'disabled':'')+' onclick="pageStep(\''+cur+'\',-1)"><span class="material-symbols-rounded">chevron_left</span>Prev</button>'
+    +'<span class="pager-info">Showing '+(start+1)+'–'+endi+' of '+total+' &middot; Page '+(p+1)+' / '+pages+'</span>'
+    +'<button class="btn ghost sm" '+(p>=pages-1?'disabled':'')+' onclick="pageStep(\''+cur+'\',1)">Next<span class="material-symbols-rounded">chevron_right</span></button>'
+    +'</div>';
 }
-function bigOnScroll(e){ const el=e.target; if(el.scrollTop+el.clientHeight >= el.scrollHeight-320) bigMore(); }
+function pageStep(cur,d){ PAGENO[cur]=(PAGENO[cur]||0)+d; render(); const m=document.querySelector('main'); if(m) m.scrollTop=0; window.scrollTo({top:0}); }
 
 /* ---- activity log (console history): every event, newest first, searchable ---- */
 const ACTION_LABEL={login:"signed in",logout:"signed out",create:"created",update:"updated",
