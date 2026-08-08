@@ -1013,12 +1013,32 @@ def _inbox_watcher():
             print("[inbox] watcher error:", e, flush=True)
         time.sleep(INBOX_POLL_SECS)
 
+def _bind_server(preferred):
+    """Bind to the preferred port; if Windows refuses it (in use, or inside a reserved/excluded
+    range — common with Hyper-V/WSL/Docker), fall back to the next few ports with a clear message."""
+    candidates = [preferred] + [p for p in (8090, 8000, 5000, 3000, 8081, 8888) if p != preferred]
+    last = None
+    for p in candidates:
+        try:
+            srv = ThreadingHTTPServer(("0.0.0.0", p), Handler)
+            if p != preferred:
+                print(f"[!] Port {preferred} was refused by Windows (in use, or a reserved range).")
+                print(f"    Started on {p} instead — use http://localhost:{p}/ , or free {preferred}")
+                print(f"    (netstat -ano | findstr :{preferred}) / restart WinNAT: net stop winnat & net start winnat")
+            return srv, p
+        except OSError as e:
+            last = e
+            continue
+    print("Could not bind any port. Last error:", last)
+    print("Fix: run as Administrator, free the port, or pass one explicitly:  python server.py 8090")
+    sys.exit(1)
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     load_db()  # ensure the database exists
     threading.Thread(target=_watch_and_reload, daemon=True).start()
     threading.Thread(target=_inbox_watcher, daemon=True).start()
-    srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    srv, port = _bind_server(port)
     print(f"REL Dyeing ERP MVP running:")
     print(f"   local:   http://localhost:{port}/")
     print(f"   LAN:     http://<this-machine-ip>:{port}/   (share with floor terminals)")
