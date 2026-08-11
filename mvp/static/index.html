@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>REL Dyeing ERP — Operations</title>
+<title>REL-UNITY — Operations</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="dot"></span>REL·DYE <small>ERP</small></div>
+  <div class="brand"><span class="dot"></span>REL-UNITY <small>OPERATIONS</small></div>
   <nav><a href="index.html" class="on">Operations</a><a href="admin.html">Admin</a></nav>
   <div class="right"><span id="userbox" style="display:flex;align-items:center;gap:8px"></span><span class="envtag">LAN · MVP</span></div>
 </header>
@@ -81,6 +82,8 @@
   <section class="view" id="v-massplan" style="display:none">
     <div class="bar">
       <span class="small muted" id="mp_note"></span>
+      <span class="spacer"></span>
+      <button class="btn ghost sm" id="mp_washbtn" onclick="scheduleWashAllJets()" title="Add a boil-out wash to the end of every jet's plan"><span class="material-symbols-rounded">bubble_chart</span>Schedule wash (all jets)</button>
     </div>
     <div id="mp_body"></div>
   </section>
@@ -478,6 +481,14 @@ function renderMassPlan(){
     const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
     const bodyRows = (rows.length ? rows.map(b=>{
+      if(b.wash) return `<tr class="mp-wash"><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td>
+        <td colspan="6"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
+        <td class="mp-actions">${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}
+          <button class="btn ghost sm" title="move up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
+          <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
+          ${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}
+          ${mayEdit?`<button class="btn ghost sm mp-del" title="delete wash" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
+        </td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
       return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
@@ -648,6 +659,21 @@ async function mpSaveNew(machineId){
   if(res && res.error){ toast(res.error); return; }
   MP_EDIT=null; renderMassPlan(); draw();               // DB patched in place by API.save
   toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
+}
+async function scheduleWashAllJets(){
+  if(!canEdit("op_batch")){ toast("You don't have permission to schedule washes"); return; }
+  const jets=(DB.machines||[]).filter(m=>m.type==="jet");
+  if(!jets.length){ toast("No jet machines configured"); return; }
+  if(!confirm("Add a machine wash (boil-out) to the end of the plan on all "+jets.length+" jet(s)?")) return;
+  let n=0;
+  for(const m of jets){
+    const mins=+m.wash||(+cfg().defaultWashMins||60);
+    const res=await API.save("batches",{machine:m.id, mcPin:m.id, seq:nextSeq(m.id), wash:true, washMins:mins,
+      quality:"", shadeNo:"", lots:[], pcs:0, mtr:0, weight:0, status:"planned"});
+    if(!(res&&res.error)) n++;
+  }
+  renderMassPlan(); draw();                              // DB patched in place by each API.save
+  toast("Wash scheduled on "+n+" jet(s)");
 }
 async function mpDeleteBatch(id){
   if(!canEdit("op_batch")){ toast("You don't have permission to delete batches"); return; }

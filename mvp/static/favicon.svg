@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="REL-UNITY">
+  <rect width="96" height="96" rx="20" fill="#1f2d4d"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="13">
+    <!-- stem + bowl of the R in white -->
+    <path d="M34 26 V72 M34 26 H56 C66 26 66 49 56 49 H34" stroke="#ffffff"/>
+    <!-- the leg, in the brand accent (a dye 'flow') -->
+    <path d="M45 49 L67 73" stroke="#3a63c4"/>
+  </g>
+</svg>

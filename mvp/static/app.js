@@ -1,4 +1,4 @@
-/* ================= REL Dyeing ERP - shared engine (v2) ================= */
+/* ================= REL-UNITY - shared engine (v2) ================= */
 let DB = null;
 
 const API = {
@@ -471,6 +471,17 @@ function manualSchedule(){
     const rows=(DB.batches||[]).filter(b=>b.machine===m.id).slice()
       .sort((a,b)=> (+a.seq||0)-(+b.seq||0));
     rows.forEach(raw=>{
+      if(raw.status==="done") return;                // completed items free the machine
+      if(raw.wash){                                  // a scheduled machine wash: fixed boil-out time, no route
+        const mins=+raw.washMins||(+m.wash||60);
+        const start=q0.cursor;
+        const wb={key:raw.id, batchId:raw.id, id:raw.id, wash:true, machine:m.id, seq:+raw.seq||0,
+                  status:raw.status||"planned", startedAt:raw.startedAt||"", mcAssigned:m.id, dyeStart:start, dyeEnd:start+mins};
+        batches.push(wb);
+        q0.blocks.push({kind:"wash", start:start, mins:mins, batch:wb});
+        q0.cursor=start+mins;
+        return;
+      }
       const b=byId[raw.id]; if(!b) return;          // done/invalid batches were dropped — machine frees up
       batches.push(b);
       const steps=routeOf(b.q, b.meters);
@@ -719,8 +730,8 @@ function showLogin(initFn){
   o.style.cssText="position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:#eef1f7;font-family:'Inter',system-ui,sans-serif;animation:riseIn .3s cubic-bezier(.16,1,.3,1) both";
   o.innerHTML='<form id="loginForm" style="width:352px;max-width:92vw;background:#fff;border:1px solid #e6eaf1;border-radius:16px;padding:30px;box-shadow:0 24px 60px rgba(16,24,40,.14)">'
     +'<div style="display:flex;align-items:center;gap:11px">'
-    +'<div style="width:38px;height:38px;border-radius:11px;background:#1f2d4d;display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\',monospace;font-weight:600;color:#fff;font-size:13px">RD</div>'
-    +'<div><div style="font-weight:800;font-size:16px;color:#18233b;letter-spacing:-.02em">REL Dyeing ERP</div><div style="font-size:12.5px;color:#7a8598">Sign in to continue</div></div></div>'
+    +'<div style="width:38px;height:38px;border-radius:11px;background:#1f2d4d;display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\',monospace;font-weight:600;color:#fff;font-size:13px">R</div>'
+    +'<div><div style="font-weight:800;font-size:16px;color:#18233b;letter-spacing:-.02em">REL-UNITY</div><div style="font-size:12.5px;color:#7a8598">Sign in to continue</div></div></div>'
     +'<label style="display:block;font-size:12.5px;font-weight:600;color:#48546b;margin-top:20px">Username'
     +'<input id="lg_u" autocomplete="username" style="width:100%;margin-top:6px;padding:11px;border:1px solid #dbe1ea;border-radius:10px;background:#fff;color:#18233b;font:inherit"></label>'
     +'<label style="display:block;font-size:12.5px;font-weight:600;color:#48546b;margin-top:13px">Password'

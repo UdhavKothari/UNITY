@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-REL Dyeing ERP - MVP server (zero external dependencies).
+REL-UNITY - MVP server (zero external dependencies).
 
 Run:  python server.py            (defaults to port 8080, all interfaces)
       python server.py 9000       (custom port)
@@ -1171,7 +1171,7 @@ if __name__ == "__main__":
     threading.Thread(target=_watch_and_reload, daemon=True).start()
     threading.Thread(target=_inbox_watcher, daemon=True).start()
     srv, port = _bind_server(port)
-    print(f"REL Dyeing ERP MVP running:")
+    print(f"REL-UNITY server running:")
     print(f"   local:   http://localhost:{port}/")
     print(f"   LAN:     http://<this-machine-ip>:{port}/   (share with floor terminals)")
     print(f"   admin:   http://localhost:{port}/admin.html")

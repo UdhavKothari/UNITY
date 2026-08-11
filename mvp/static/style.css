@@ -1,4 +1,4 @@
-/* ============ REL Dyeing ERP — light product design system ============ */
+/* ============ REL-UNITY — light product design system ============ */
 :root{
   --bg:#f4f6fa; --surface:#ffffff; --surface-2:#f8fafc; --surface-3:#eef2f8;
   --ink:#18233b; --ink-2:#48546b; --muted:#7a8598; --faint:#9aa4b4;
@@ -43,7 +43,7 @@ h1,h2,h3{margin:0;letter-spacing:-.02em}
 header.top{background:var(--surface);color:var(--ink);display:flex;align-items:center;gap:18px;padding:0 22px;height:60px;position:sticky;top:0;z-index:40;border-bottom:1px solid var(--line)}
 header.top .brand{font-weight:800;letter-spacing:-.02em;font-size:15px;display:flex;align-items:center;gap:10px}
 header.top .brand .dot{width:30px;height:30px;border-radius:9px;background:var(--primary);display:inline-flex;align-items:center;justify-content:center}
-header.top .brand .dot::after{content:"RD";font-family:var(--mono);font-size:11px;font-weight:600;color:#fff}
+header.top .brand .dot::after{content:"R";font-family:var(--mono);font-size:11px;font-weight:600;color:#fff}
 header.top .brand small{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.02em;border-left:1px solid var(--line-2);padding-left:10px;margin-left:2px}
 header.top nav{display:flex;gap:4px;margin-left:8px}
 header.top nav a{color:var(--ink-2);font-weight:600;padding:8px 14px;border-radius:var(--r-s);font-size:13px;transition:background var(--dur)}
@@ -486,6 +486,10 @@ input[type=checkbox]:disabled{opacity:.5;cursor:not-allowed}
 .big-scroll{max-height:calc(100vh - 260px);overflow:auto}
 .big-scroll thead th{position:sticky;top:0;z-index:2}
 .big-foot{padding:8px 14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right}
+
+/* ---- scheduled machine-wash row in the planner ---- */
+.mp-wash{background:var(--info-soft)}
+.mp-wash td{border-bottom-color:#d6e0f5}
 
 /* ---- table pagination (200 rows per page, then stop) ---- */
 .pager{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-top:1px solid var(--line)}
