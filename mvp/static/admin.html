@@ -1367,7 +1367,32 @@ function renderSettings(c){
    +'<option value="auto"'+(s.completionMode==="auto"?" selected":"")+'>Automatic (IoT sensors — coming soon)</option>'
    +'</select><span class="help">Manual today. When jets are wired to IoT sensors, switch to Automatic and completion will be logged from the floor. Manual override always stays available.</span></label>'
    +'</div></div>'
-   +'<div style="margin-top:16px"><button class="btn" onclick="saveSettings()">Save settings</button></div>';
+   +'<div style="margin-top:16px"><button class="btn" onclick="saveSettings()">Save settings</button></div>'
+   +(canEdit("settings")?('<div class="card" style="margin-top:16px"><div class="card-b">'
+     +'<h2 style="margin:0 0 4px;font-size:15px">System</h2>'
+     +'<p class="small muted" style="margin:0 0 12px">Update or restart the software remotely — no need to visit the factory PC.</p>'
+     +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
+     +'<button class="btn" id="sysUpdBtn" onclick="systemUpdate()"><span class="material-symbols-rounded">cloud_download</span>Check for updates &amp; apply</button>'
+     +'<button class="btn ghost" onclick="systemRestart()"><span class="material-symbols-rounded">restart_alt</span>Restart server</button></div>'
+     +'<pre id="sysOut" style="display:none;margin-top:12px;background:var(--surface-3);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:11.5px;white-space:pre-wrap;max-height:220px;overflow:auto"></pre>'
+     +'</div></div>'):'');
+}
+async function systemUpdate(){
+  const out=document.getElementById("sysOut"), btn=document.getElementById("sysUpdBtn");
+  out.style.display="block"; out.textContent="Checking GitHub for updates…"; btn.disabled=true;
+  const res=await API._post({op:"systemUpdate"});
+  btn.disabled=false;
+  if(res&&res.error){ out.textContent=res.error; return; }
+  out.textContent=(res.output||"")+"\n\n"+(res.changed?"Update applied. The server is restarting — wait a few seconds, then refresh this page.":"Already up to date.");
+  if(res.changed) toast("Updated — server restarting, refresh shortly");
+}
+async function systemRestart(){
+  if(!confirm("Restart the server now? Everyone will be briefly disconnected (a few seconds).")) return;
+  const out=document.getElementById("sysOut"); if(out){ out.style.display="block"; out.textContent="Restarting the server…"; }
+  const res=await API._post({op:"systemRestart"});
+  if(res&&res.error){ toast(res.error); return; }
+  if(out) out.textContent="Server is restarting. Wait a few seconds, then refresh this page.";
+  toast("Server restarting…");
 }
 async function saveSettings(){
   const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,completionMode:document.getElementById("s_cmode").value};

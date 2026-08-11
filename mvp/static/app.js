@@ -394,7 +394,7 @@ function batchesForSchedule(){
     const meters=tot.mtr;
     const kg=tot.weight || kgOf(meters,q.gsm,q.width);         // weighed kg wins; else derive from meters
     out.push({key:b.id, batchId:b.id, order:b.orderId||b.id, cust:b.customer||"",
-      qual:b.quality, shade:b.shadeNo||"", type:routeStep(q,+q.dyeStep||3).mc,
+      qual:b.quality, shade:b.shadeNo||"", type:routeStep(q,dyeStepOf(q)).mc,
       meters:Math.round(meters), kg:Math.round(kg),
       dyeMins:q.dyeMins, finishMins:q.finishMins,
       pri:+b.pri||2, due:+b.due||7, urgent:!!b.urgent, redye:(b.status==="redye"),
@@ -431,8 +431,16 @@ function mpCapacityOk(machineId, kg){
 
 /* ---------- routes: every quality is up to 4 machine steps ---------- */
 function routeStep(q,i){ return {mc:(q["step"+i+"_mc"]||""), time:(+q["step"+i+"_time"]||0)}; }
+/* The dyeing step is whichever step uses a JET machine; if the route has no JET step, it's the
+   JIGGER step. Falls back to the quality's stored dyeStep only if neither exists. */
+function dyeStepOf(q){
+  if(!q) return 3;
+  for(let i=1;i<=4;i++) if(String(q["step"+i+"_mc"]||"").toLowerCase()==="jet") return i;
+  for(let i=1;i<=4;i++) if(String(q["step"+i+"_mc"]||"").toLowerCase()==="jigger") return i;
+  return +q.dyeStep||3;
+}
 function routeOf(q, meters){
-  const out=[]; const dye=+q.dyeStep||3;
+  const out=[]; const dye=dyeStepOf(q);
   for(let i=1;i<=4;i++){
     const mc=q["step"+i+"_mc"]||""; if(!mc) continue;
     let time=+q["step"+i+"_time"]||0;
@@ -466,7 +474,7 @@ function manualSchedule(){
       const b=byId[raw.id]; if(!b) return;          // done/invalid batches were dropped — machine frees up
       batches.push(b);
       const steps=routeOf(b.q, b.meters);
-      const dyeStep=steps.find(s=>s.isDye) || steps[steps.length-1] || {time:+b.q.dyeMins||120, idx:(+b.q.dyeStep||3)};
+      const dyeStep=steps.find(s=>s.isDye) || steps[steps.length-1] || {time:+b.q.dyeMins||120, idx:dyeStepOf(b.q)};
       const H=(+b.q.loadMin||cfg().loadMin||35)+(+b.q.unloadMin||cfg().unloadMin||25);
       const mins=H+(+dyeStep.time||0);
       const start=q0.cursor;
@@ -492,7 +500,7 @@ function computeSchedule(){
   let washCount=0; const orderFinish={};
   batches.forEach(b=>{
     let t=0, steps=routeOf(b.q, b.meters);
-    if(b.redye) steps=steps.filter(st=>st.idx>= (+b.q.dyeStep||3));   // redye goes straight back to the dye machine
+    if(b.redye) steps=steps.filter(st=>st.idx>= dyeStepOf(b.q));   // redye goes straight back to the dye machine
     if(!steps.length){ b.unplanned=true; return; }
     const H = (+b.q.loadMin||cfg().loadMin||35) + (+b.q.unloadMin||cfg().unloadMin||25);
     steps.forEach(st=>{
@@ -525,7 +533,7 @@ function computeSchedule(){
       best.q.blocks.push({kind: st.isDye?"dye":"pre", batch:b, start:best.start, mins:occ, step:st.idx, mcType:st.mc});
       best.q.cursor=best.fin; t=best.fin;
       if(st.isDye){ best.q.last={family:b.family,tone:b.tone}; b.mcAssigned=best.m.id; b.dyeStart=best.start; b.dyeEnd=best.fin; }
-      else if(st.idx < (+b.q.dyeStep||3)) b.rfdReady=best.fin;
+      else if(st.idx < dyeStepOf(b.q)) b.rfdReady=best.fin;
     });
     b.routeEnd=t;
     orderFinish[b.order]=Math.max(orderFinish[b.order]||0, t*BUF);

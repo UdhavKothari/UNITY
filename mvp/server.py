@@ -12,7 +12,7 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, csv as _csv
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -107,16 +107,31 @@ def _edit_perms_for(db, user):
         return list(view)
     return [p for p in edit if p in view]  # never grant edit on a page the role can't see
 
+# EMPIRE names a quality like "AREA 60 INCH" — the trailing "<width> INCH" is the fabric width,
+# not part of the quality name. Strip it so "AREA 60 INCH" and "AREA" are treated as ONE quality
+# (the width is captured separately). Also handles 44", 60 IN, 60INCH, 60".
+_QUAL_WIDTH_RE = re.compile(r"\s*[-,]?\s*(\d+(?:\.\d+)?)\s*(?:INCHES|INCH|INS|IN|\")\s*$", re.I)
+
+def _normalize_quality(name):
+    return _QUAL_WIDTH_RE.sub("", str(name or "").strip()).strip()
+
+def _quality_width(name):
+    m = _QUAL_WIDTH_RE.search(str(name or ""))
+    try: return int(float(m.group(1))) if m else 0
+    except (ValueError, TypeError): return 0
+
 def _ensure_quality_and_shade(db, quality):
     """Quick-add a quality stub (if new) and a shade '0' for it (if new) — used by the inbox
-    importer and the 'sync qualities & shades' buttons during setup. Returns (added_q, added_shade)."""
-    q = (quality or "").strip()
+    importer and the 'sync qualities & shades' buttons during setup. Returns (added_q, added_shade).
+    The name is normalized ("AREA 60 INCH" -> "AREA") so qualities never double up on the width."""
+    width = _quality_width(quality)
+    q = _normalize_quality(quality)
     if not q:
         return 0, 0
     aq = asr = 0
     quals = db.setdefault("qualities", [])
     if not any((x.get("name") or "").strip().upper() == q.upper() for x in quals):
-        quals.append({"id": "Q-" + uuid.uuid4().hex[:6], "name": q, "gsm": 0, "width": 0, "maxBatch": 0,
+        quals.append({"id": "Q-" + uuid.uuid4().hex[:6], "name": q, "gsm": 0, "width": width, "maxBatch": 0,
                       "dyeStep": 3, "step1_mc": "", "step1_time": 0, "step2_mc": "", "step2_time": 0,
                       "step3_mc": "jet", "step3_time": 0, "step4_mc": "stentor", "step4_time": 0})
         aq = 1
@@ -598,6 +613,31 @@ class Handler(BaseHTTPRequestHandler):
                 save_db(db)
                 return self._send(200, {"ok": True, "row": b})
 
+            if op == "systemUpdate":
+                # pull the latest code from GitHub so the system can be updated WITHOUT visiting the PC.
+                # If server.py changed, the file-watcher auto-restarts within ~1s; static changes show on
+                # a browser refresh. Admin/settings-edit only, and logged.
+                if _need_edit(("settings",)):
+                    return self._send(403, {"error": "forbidden"})
+                root = os.path.dirname(HERE)
+                try:
+                    r = subprocess.run(["git", "pull", "--ff-only"], cwd=root,
+                                       capture_output=True, text=True, timeout=120)
+                    out = ((r.stdout or "") + (r.stderr or "")).strip()
+                    changed = (r.returncode == 0) and ("up to date" not in out.lower())
+                    _log(db, u["username"], "update", "settings", "",
+                         "git pull: " + ("updated" if changed else "no change")); save_db(db)
+                    return self._send(200, {"ok": r.returncode == 0, "changed": changed, "output": out[-4000:]})
+                except Exception as e:
+                    return self._send(200, {"ok": False, "changed": False, "output": "git pull failed: %s" % e})
+
+            if op == "systemRestart":
+                if _need_edit(("settings",)):
+                    return self._send(403, {"error": "forbidden"})
+                _log(db, u["username"], "restart", "settings", "", "manual server restart"); save_db(db)
+                threading.Thread(target=_restart_process, daemon=True).start()
+                return self._send(200, {"ok": True, "message": "Server restarting — refresh in a few seconds."})
+
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
                 # shades, recipes and batches are left alone. Admin/edit-on-lots only, and logged.
@@ -822,6 +862,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quieter console
         pass
 
+def _restart_process():
+    """re-exec this server (used by the admin 'Restart server' button). Waits briefly so the HTTP
+    response is flushed to the browser before the process is replaced."""
+    time.sleep(0.8)
+    try:
+        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
+    except Exception as e:
+        print("restart failed, please restart manually:", e, flush=True)
+
 def _watch_and_reload(interval=1.0):
     """restart this process automatically when server.py is edited — no manual restart"""
     me = os.path.abspath(__file__)
@@ -913,7 +962,7 @@ def _csv_to_lots(rows):
         lot = lots.get(lotno)
         if lot is None:
             lot = {"id": lotno, "status": "in stock", "takas": [], "takaNos": [], "_wts": [], "_seen": set()}
-            q = str(get("quality")).strip()
+            q = _normalize_quality(get("quality"))     # "AREA 60 INCH" -> "AREA" (same quality)
             if q: lot["quality"] = q
             card = str(get("cardNo")).strip()
             if card: lot["challanNo"] = card; lot["cardNo"] = card

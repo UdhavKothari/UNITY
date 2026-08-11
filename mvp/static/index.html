@@ -232,7 +232,7 @@ function bRefreshMachines(){
   const q=Q(document.getElementById("b_qual").value);
   const sel=document.getElementById("b_mc"); if(!sel) return;
   const cur=sel.value;
-  const dyeType = q ? routeStep(q, +q.dyeStep||3).mc : "";
+  const dyeType = q ? routeStep(q, dyeStepOf(q)).mc : "";
   const list = dyeType ? DB.machines.filter(m=>m.type===dyeType) : [];
   sel.innerHTML = '<option value="">— auto-assign —</option>'
     + list.map(m=>'<option value="'+esc(m.id)+'"'+(m.id===cur?" selected":"")+'>'+esc(m.id)+' ('+m.capMax+' kg)</option>').join("");
