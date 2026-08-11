@@ -159,10 +159,17 @@ def qualities_dedupe(db):
         n = (name or "").strip()
         return rename.get(n) or (_normalize_quality(n) if n else n)
 
+    lots_fixed, shades_removed = _repoint_qualities(db, fix)
+    return {"qualitiesRemoved": removed, "qualitiesNow": len(survivors),
+            "lotsRepointed": lots_fixed, "shadesRemoved": shades_removed}
+
+def _repoint_qualities(db, fix):
+    """Re-point every lot / batch / shade quality through fix(name), then drop shade rows that
+    became duplicate (quality, shade) — keeping the richer of the two. Shared by dedupe + merge."""
     lots_fixed = 0
     for l in db.get("lots", []):
         if l.get("quality"):
-            nv = fix(l["quality"]);
+            nv = fix(l["quality"])
             if nv != l["quality"]: l["quality"] = nv; lots_fixed += 1
     for b in db.get("batches", []):
         if b.get("quality"): b["quality"] = fix(b["quality"])
@@ -177,7 +184,33 @@ def qualities_dedupe(db):
         else:
             seen[k] = s; newsh.append(s)
     db["shadeRecipes"] = newsh
-    return {"qualitiesRemoved": removed, "qualitiesNow": len(survivors),
+    return lots_fixed, shades_removed
+
+def qualities_merge(db, names, into):
+    """Merge a hand-picked set of qualities into one surviving name (e.g. RIVER + RIVER (AJ) -> RIVER).
+    The 'into' quality keeps its config; the others are removed and every lot/batch/shade re-pointed."""
+    names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    into = str(into or "").strip()
+    ups = {n.upper() for n in names}
+    ups.add(into.upper())
+    if not into or into.upper() not in ups or len(ups) < 2:
+        return {"error": "Pick at least two qualities and the name to keep."}
+    survivors, removed, found = [], 0, False
+    for q in db.get("qualities", []):
+        nm = (q.get("name") or "").strip()
+        if nm.upper() in ups:
+            if nm.upper() == into.upper() and not found:
+                q["name"] = into; found = True; survivors.append(q)     # canonical survives
+            else:
+                removed += 1                                            # merged away
+        else:
+            survivors.append(q)
+    if not found:
+        return {"error": "The quality to keep was not found."}
+    db["qualities"] = survivors
+    fix = lambda n: into if (n or "").strip().upper() in ups else (n or "").strip()
+    lots_fixed, shades_removed = _repoint_qualities(db, fix)
+    return {"into": into, "qualitiesRemoved": removed,
             "lotsRepointed": lots_fixed, "shadesRemoved": shades_removed}
 
 def _ensure_quality_and_shade(db, quality):
@@ -697,6 +730,19 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], "restart", "settings", "", "manual server restart"); save_db(db)
                 threading.Thread(target=_restart_process, daemon=True).start()
                 return self._send(200, {"ok": True, "message": "Server restarting — refresh in a few seconds."})
+
+            if op == "qualitiesMerge":
+                # merge a hand-picked set of qualities into one (RIVER + RIVER (AJ) -> RIVER).
+                if _need_edit(("qualities",)):
+                    return self._send(403, {"error": "forbidden"})
+                res = qualities_merge(db, req.get("names"), req.get("into"))
+                if res.get("error"):
+                    return self._send(400, res)
+                _log(db, u["username"], "update", "qualities", "",
+                     "merged %d qualities into '%s' (re-pointed %d lots, dropped %d shade rows)"
+                     % (res["qualitiesRemoved"], res["into"], res["lotsRepointed"], res["shadesRemoved"]))
+                save_db(db)
+                return self._send(200, {"ok": True, **res})
 
             if op == "qualitiesDedupe":
                 # merge width-suffix duplicate qualities ('AREA 60 INCH' -> 'AREA') and re-point

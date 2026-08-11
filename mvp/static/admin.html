@@ -426,7 +426,7 @@ function render(){
     +(mayEdit&&CUR==="lots" ? '<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>' : '')
     +(mayEdit&&CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
-    +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="dedupeQualities()"><span class="material-symbols-rounded">merge</span>Merge duplicates</button>' : '')
+    +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openMergeQualities()"><span class="material-symbols-rounded">merge</span>Merge</button>' : '')
     +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
     +(mayEdit ? '<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>' : '')
     +'<button class="btn ghost" onclick="exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export</button></div>'
@@ -687,13 +687,53 @@ function addLotRow(){
   wireLotRows(); updateLotCount(); syncLotTotals();
 }
 
-/* Qualities page: merge width-suffix duplicates ("AREA 60 INCH" into "AREA") and re-point lots/shades. */
-async function dedupeQualities(){
-  if(!confirm("Merge duplicate qualities that differ only by a width (e.g. \"AREA 60 INCH\" into \"AREA\")?\n\nLots, batches and shades are re-pointed automatically. Back up first if unsure — this can't be undone.")) return;
-  const res=await API._post({op:"qualitiesDedupe"});
-  if(res&&res.error){ toast(res.error); return; }
-  await API.db(); renderNav(); render();     // multi-table change — refresh fully
-  toast("Merged "+res.qualitiesRemoved+" duplicate qualities · re-pointed "+res.lotsRepointed+" lots · dropped "+res.shadesRemoved+" shade rows");
+/* Qualities page: pick any set of qualities that are really the same and merge them into one. */
+function _normQ(name){ return String(name||"").trim().replace(/\s*[-,]?\s*\d+(?:\.\d+)?\s*(?:INCHES|INCH|INS|IN|")\s*$/i,"").trim(); }
+function openMergeQualities(){
+  const names=[...new Set((DB.qualities||[]).map(q=>q.name).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const ex=document.getElementById("mergeOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="mergeOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:560px;max-width:94vw">'
+    +'<div class="m-h"><h3><span class="material-symbols-rounded">merge</span>Merge qualities</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<p class="small muted" style="margin:0 0 10px">Tick the qualities that are really the same (e.g. RIVER and RIVER (AJ)), choose the name to keep, and merge. Lots, batches and shades are re-pointed automatically.</p>'
+    +'<div style="display:flex;gap:8px;margin-bottom:8px"><input id="mergeSearch" placeholder="Filter qualities…" style="flex:1" oninput="mergeFilter(this.value)">'
+    +'<button type="button" class="btn ghost sm" onclick="mergeAutoTick()" title="tick groups that differ only by a width, like AREA / AREA 60 INCH">Auto-tick width variants</button></div>'
+    +'<div id="mergeList" style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px">'
+    +names.map(n=>'<label class="merge-row" data-n="'+esc(n.toLowerCase())+'" style="display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer">'
+      +'<input type="checkbox" class="merge-cb" value="'+esc(n)+'" onchange="mergeSync()" style="width:auto;margin:0">'
+      +'<span>'+esc(n)+'</span></label>').join("")
+    +'</div>'
+    +'<div style="margin-top:12px;display:flex;align-items:center;gap:10px"><label class="fldlabel" style="margin:0">Keep as</label>'
+    +'<select id="mergeInto" style="flex:1"><option value="">— pick qualities above —</option></select></div>'
+    +'<div id="mergeErr" class="flag" style="display:none;margin-top:10px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" onclick="doMergeQualities()"><span class="material-symbols-rounded">merge</span>Merge</button></div></div>';
+  document.body.appendChild(o);
+}
+function mergeFilter(t){ t=(t||"").toLowerCase(); document.querySelectorAll('#mergeList .merge-row').forEach(r=>{ r.style.display=r.dataset.n.indexOf(t)>=0?"":"none"; }); }
+function mergeSync(){
+  const checked=[...document.querySelectorAll('#mergeList .merge-cb:checked')].map(c=>c.value);
+  const sel=document.getElementById("mergeInto"), cur=sel.value;
+  sel.innerHTML = checked.length ? checked.map(n=>'<option value="'+esc(n)+'">'+esc(n)+'</option>').join("") : '<option value="">— pick qualities above —</option>';
+  if(checked.indexOf(cur)>=0) sel.value=cur;
+}
+function mergeAutoTick(){                       // tick groups whose names normalize to the same base
+  const groups={}; document.querySelectorAll('#mergeList .merge-cb').forEach(cb=>{ (groups[_normQ(cb.value).toUpperCase()]=groups[_normQ(cb.value).toUpperCase()]||[]).push(cb); });
+  Object.values(groups).forEach(g=>{ if(g.length>1) g.forEach(cb=>cb.checked=true); });
+  mergeSync();
+}
+async function doMergeQualities(){
+  const names=[...document.querySelectorAll('#mergeList .merge-cb:checked')].map(c=>c.value);
+  const into=document.getElementById("mergeInto").value, err=document.getElementById("mergeErr");
+  if(names.length<2){ err.style.display="block"; err.textContent="Pick at least two qualities to merge."; return; }
+  if(!into){ err.style.display="block"; err.textContent="Choose the name to keep."; return; }
+  if(!confirm("Merge "+names.length+" qualities into \""+into+"\"?\n\nLots, batches and shades are re-pointed. This can't be undone — back up first if unsure.")) return;
+  const res=await API._post({op:"qualitiesMerge", names, into});
+  if(res&&res.error){ err.style.display="block"; err.textContent=res.error; return; }
+  document.getElementById("mergeOverlay").remove();
+  await API.db(); renderNav(); render();
+  toast("Merged into "+res.into+" · re-pointed "+res.lotsRepointed+" lots · dropped "+res.shadesRemoved+" shade rows");
 }
 
 /* Lots page: wipe ALL lots (e.g. before re-importing under the DESPNO scheme). Double-confirmed. */
