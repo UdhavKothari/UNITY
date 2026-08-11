@@ -425,6 +425,7 @@ function render(){
     +(mayEdit&&CUR==="lots" ? '<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>' : '')
     +(mayEdit&&CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
+    +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="dedupeQualities()"><span class="material-symbols-rounded">merge</span>Merge duplicates</button>' : '')
     +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
     +(mayEdit ? '<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>' : '')
     +'<button class="btn ghost" onclick="exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export</button></div>'
@@ -683,6 +684,15 @@ function addLotRow(){
   const row=box.lastElementChild, t=lotTotals([row.querySelector('.lot-sel').value]);
   row.querySelector('.lot-pcs').value=t.pcs||''; row.querySelector('.lot-mtr').value=t.mtr||'';
   wireLotRows(); updateLotCount(); syncLotTotals();
+}
+
+/* Qualities page: merge width-suffix duplicates ("AREA 60 INCH" into "AREA") and re-point lots/shades. */
+async function dedupeQualities(){
+  if(!confirm("Merge duplicate qualities that differ only by a width (e.g. \"AREA 60 INCH\" into \"AREA\")?\n\nLots, batches and shades are re-pointed automatically. Back up first if unsure — this can't be undone.")) return;
+  const res=await API._post({op:"qualitiesDedupe"});
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); renderNav(); render();     // multi-table change — refresh fully
+  toast("Merged "+res.qualitiesRemoved+" duplicate qualities · re-pointed "+res.lotsRepointed+" lots · dropped "+res.shadesRemoved+" shade rows");
 }
 
 /* Lots page: wipe ALL lots (e.g. before re-importing under the DESPNO scheme). Double-confirmed. */

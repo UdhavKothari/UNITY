@@ -120,6 +120,66 @@ def _quality_width(name):
     try: return int(float(m.group(1))) if m else 0
     except (ValueError, TypeError): return 0
 
+def _shade_score(s):
+    """how 'real' a shade row is — used to keep the richer of two duplicates when merging."""
+    sc = 0
+    prog = str(s.get("program") or "").strip()
+    if prog and prog != "from dye recipe": sc += 2
+    if s.get("hex"): sc += 2
+    for k in ("specL", "dye1", "family"):
+        v = s.get(k)
+        if v not in (None, "", 0): sc += 1
+    return sc
+
+def qualities_dedupe(db):
+    """Collapse qualities that differ only by a width suffix ('AREA 60 INCH' vs 'AREA') into one,
+    re-point every lot / batch / shade that referenced an old name, and drop duplicate shade rows.
+    The canonical quality is the one already named without the width (it usually holds the real
+    GSM/route); otherwise the first is renamed to the short form and its width captured."""
+    quals = db.get("qualities", [])
+    orig = {id(q): (q.get("name") or "").strip() for q in quals}
+    groups = {}
+    for q in quals:
+        groups.setdefault(_normalize_quality(q.get("name")).upper(), []).append(q)
+    survivors, rename, removed = [], {}, 0
+    for _, items in groups.items():
+        norm = _normalize_quality(items[0].get("name"))
+        canonical = next((q for q in items if orig[id(q)] == norm), None) or items[0]
+        for q in items:                                   # fill a missing width from any member
+            w = _quality_width(orig[id(q)])
+            if w and not canonical.get("width"): canonical["width"] = w
+        canonical["name"] = norm
+        survivors.append(canonical)
+        for q in items:
+            rename[orig[id(q)]] = norm
+            if q is not canonical: removed += 1
+    db["qualities"] = survivors
+
+    def fix(name):
+        n = (name or "").strip()
+        return rename.get(n) or (_normalize_quality(n) if n else n)
+
+    lots_fixed = 0
+    for l in db.get("lots", []):
+        if l.get("quality"):
+            nv = fix(l["quality"]);
+            if nv != l["quality"]: l["quality"] = nv; lots_fixed += 1
+    for b in db.get("batches", []):
+        if b.get("quality"): b["quality"] = fix(b["quality"])
+    seen, newsh, shades_removed = {}, [], 0
+    for s in db.get("shadeRecipes", []):
+        s["quality"] = fix(s.get("quality"))
+        k = (str(s.get("quality", "")).upper(), str(s.get("shade", "")).upper())
+        if k in seen:
+            shades_removed += 1
+            if _shade_score(s) > _shade_score(seen[k]):    # keep the richer duplicate
+                newsh[newsh.index(seen[k])] = s; seen[k] = s
+        else:
+            seen[k] = s; newsh.append(s)
+    db["shadeRecipes"] = newsh
+    return {"qualitiesRemoved": removed, "qualitiesNow": len(survivors),
+            "lotsRepointed": lots_fixed, "shadesRemoved": shades_removed}
+
 def _ensure_quality_and_shade(db, quality):
     """Quick-add a quality stub (if new) and a shade '0' for it (if new) — used by the inbox
     importer and the 'sync qualities & shades' buttons during setup. Returns (added_q, added_shade).
@@ -637,6 +697,18 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], "restart", "settings", "", "manual server restart"); save_db(db)
                 threading.Thread(target=_restart_process, daemon=True).start()
                 return self._send(200, {"ok": True, "message": "Server restarting — refresh in a few seconds."})
+
+            if op == "qualitiesDedupe":
+                # merge width-suffix duplicate qualities ('AREA 60 INCH' -> 'AREA') and re-point
+                # every lot/batch/shade. Destructive — admin/edit-on-qualities only, and logged.
+                if _need_edit(("qualities",)):
+                    return self._send(403, {"error": "forbidden"})
+                res = qualities_dedupe(db)
+                _log(db, u["username"], "update", "qualities", "",
+                     "merged %d duplicate qualities, re-pointed %d lots, dropped %d shade rows"
+                     % (res["qualitiesRemoved"], res["lotsRepointed"], res["shadesRemoved"]))
+                save_db(db)
+                return self._send(200, {"ok": True, **res})
 
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
