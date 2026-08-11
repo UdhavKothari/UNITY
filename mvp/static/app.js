@@ -423,10 +423,11 @@ function reorderPlan(list, fromIdx, toIdx){
   const a=list.slice(); const [it]=a.splice(fromIdx,1); a.splice(toIdx,0,it);
   return resequenced(a);
 }
+function capTolerance(){ const t=cfg().capToleranceKg; return t==null?25:(+t||0); }   // grace over capMax
 function mpCapacityOk(machineId, kg){
   const m=(DB.machines||[]).find(x=>x.id===machineId);
   if(!m || !m.capMax) return true;
-  return (+kg||0) <= (+m.capMax);
+  return (+kg||0) <= (+m.capMax) + capTolerance();
 }
 
 /* ---------- routes: every quality is up to 4 machine steps ---------- */
@@ -634,8 +635,6 @@ function showGanttHover(blk,e){
     +row("Shade no.", b.shade)
     +row("In time", b.inTime)
     +row("Out time", b.outTime)
-    +row("Machine", b.mcAssigned)
-    +(b.mcPin?row("M/C pin", b.mcPin):'')
     +(b.pinWarning?'<div class="gh-note"><span class="material-symbols-rounded">warning</span>'+esc(b.pinWarning)+'</div>':'')
     +(b.unplannedReason?'<div class="gh-note"><span class="material-symbols-rounded">error</span>'+esc(b.unplannedReason)+'</div>':'')
     +(b.notes?'<div class="gh-note"><span class="material-symbols-rounded">sticky_note_2</span>'+esc(b.notes)+'</div>':'');

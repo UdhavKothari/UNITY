@@ -36,7 +36,7 @@ def load_secrets():
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan","op_history",
              "dashboard","machines","qualities","shadeRecipes","recipes",
              "batches","lots","weavers","takaMaster",
              "customers","orders","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
@@ -805,7 +805,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "Quality and Shade are required."})
                 name = (r.get("name") or "").strip() or "-".join(x for x in (party, quality, shade) if x)
                 row = {"name": name, "party": party, "quality": quality, "shade": shade,
-                       "unit": (r.get("unit") or "KG"), "items": r.get("items") or []}
+                       "unit": (r.get("unit") or "KG"), "machine": (r.get("machine") or ""),
+                       "items": r.get("items") or []}
                 recipes_bulk_add([row])
                 # keep the catalog in step: ensure this quality + a shade entry exist for planning
                 _ensure_quality_and_shade(db, quality)

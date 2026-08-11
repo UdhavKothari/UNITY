@@ -486,6 +486,15 @@ input[type=checkbox]:disabled{opacity:.5;cursor:not-allowed}
 .big-scroll thead th{position:sticky;top:0;z-index:2}
 .big-foot{padding:8px 14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right}
 
+/* ---- planner: drag-to-reorder + hold-to-save ---- */
+.mp-drag{cursor:grab;color:var(--muted);font-size:19px;vertical-align:-4px;user-select:none;padding:0 2px}
+.mp-drag:hover{color:var(--ink)} .mp-drag:active{cursor:grabbing}
+.mp-table tbody tr.mp-dragging{opacity:.55;background:var(--accent-soft)}
+.mp-remark{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-hold{position:relative;overflow:hidden;user-select:none}
+.mp-hold .hold-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,255,255,.30);pointer-events:none}
+.mp-hold .hold-lbl{position:relative;display:inline-flex;align-items:center;gap:6px}
+
 /* ---- batch remarks (batch-maker editor + planner row note) ---- */
 .mp-ed-remarks{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
 .mp-ed-remarks .material-symbols-rounded{color:var(--muted);font-size:19px}

@@ -264,7 +264,7 @@ const SCHEMAS={
 };
 /* every page a role can be granted (keys must match server ALL_PAGES) */
 const PAGES=[
-  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_order","New order","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Mass planning","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],
+  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_order","New order","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Batch planner","Operations"],["op_history","History (past batches)","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
   ["shadeRecipes","Shade recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
@@ -1114,6 +1114,7 @@ function openRecipeCreate(){
     +'<label class="fld" style="flex:1">Quality<input id="rcQual" list="rcQuals" placeholder="e.g. CANYON"></label>'
     +'<label class="fld" style="width:110px">Shade<input id="rcShade" placeholder="e.g. 08"></label></div>'
     +'<div class="row" style="margin-top:10px"><label class="fld" style="flex:2">Recipe name <span class="muted small">(blank = PARTY-QUALITY-SHADE)</span><input id="rcName" placeholder="auto"></label>'
+    +'<label class="fld" style="width:120px">Machine<select id="rcMachine"><option value="jet">JET recipe</option><option value="jigger">JIGGER recipe</option></select></label>'
     +'<label class="fld" style="width:120px">Unit<select id="rcUnit"><option>KG</option><option>BATCH</option></select></label></div>'
     +'<div class="fldlabel" style="margin-top:14px">Chemicals</div><div id="rcItems"></div>'
     +'<button type="button" class="btn ghost sm" style="margin-top:8px" onclick="rcAddItem()"><span class="material-symbols-rounded">add</span>Add chemical</button>'
@@ -1139,7 +1140,7 @@ async function saveRecipeCreate(){
       name:(r.querySelector(".rc-in").value||"").trim(),
       qty:r.querySelector(".rc-qty").value, unit:(r.querySelector(".rc-unit").value||"").trim()
     })).filter(x=>x.name);
-  const res=await API._post({op:"recipeCreate", row:{party:g("rcParty"), quality, shade, name:g("rcName"), unit:g("rcUnit"), items}});
+  const res=await API._post({op:"recipeCreate", row:{party:g("rcParty"), quality, shade, name:g("rcName"), unit:g("rcUnit"), machine:g("rcMachine"), items}});
   if(res&&res.error){ err.style.display="block"; err.textContent=res.error; return; }
   document.getElementById("recCreateOverlay").remove();
   await API.db(); renderNav();
@@ -1410,6 +1411,7 @@ function renderSettings(c){
    +'<label class="fld">Default loading time (min)<input id="s_load" type="number" value="'+s.loadMin+'"><span class="help">Used only when a quality has no loading time of its own</span></label>'
    +'<label class="fld">Default unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"><span class="help">Used only when a quality has no unloading time of its own</span></label>'
    +'<label class="fld">Family preference penalty (min)<input id="s_fampen" type="number" value="'+(s.familyPreferencePenaltyMins||120)+'"><span class="help">A non-preferred machine only wins over a preferred one if it finishes at least this much sooner</span></label>'
+   +'<label class="fld">Batch capacity tolerance (kg)<input id="s_captol" type="number" min="0" value="'+(s.capToleranceKg==null?25:s.capToleranceKg)+'"><span class="help">Batches may go this much over a machine\'s max capacity before being blocked</span></label>'
    +'</div></div></div>'
    +'<div class="card" style="margin-top:16px"><div class="card-b">'
    +'<h2 style="margin:0 0 10px;font-size:15px">Batch completion</h2>'
@@ -1446,7 +1448,7 @@ async function systemRestart(){
   toast("Server restarting…");
 }
 async function saveSettings(){
-  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,completionMode:document.getElementById("s_cmode").value};
+  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,capToleranceKg:+document.getElementById("s_captol").value||0,completionMode:document.getElementById("s_cmode").value};
   await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"upsert",table:"__settings__",row:st})});
   await API.db(); toast("Settings saved");
 }

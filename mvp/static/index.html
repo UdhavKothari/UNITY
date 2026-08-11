@@ -29,6 +29,7 @@
     <button data-s="order"><span class="material-symbols-rounded">point_of_sale</span>Sales</button>
     <button data-s="storage"><span class="material-symbols-rounded">shelves</span>Storage</button>
     <button data-s="massplan"><span class="material-symbols-rounded">table_view</span>Batch planner</button>
+    <button data-s="history"><span class="material-symbols-rounded">history</span>History</button>
   </div>
 
   <!-- Shop floor -->
@@ -82,8 +83,21 @@
   <section class="view" id="v-massplan" style="display:none">
     <div class="bar">
       <span class="small muted" id="mp_note"></span>
+      <span class="spacer"></span>
+      <button class="btn mp-hold" id="mp_saveorder" style="display:none" onmousedown="mpHoldStart(event)" onmouseup="mpHoldCancel()" onmouseleave="mpHoldCancel()" ontouchstart="mpHoldStart(event)" ontouchend="mpHoldCancel()"><span class="hold-fill" id="mp_holdfill"></span><span class="hold-lbl"><span class="material-symbols-rounded">save</span>Hold 3s to save order</span></button>
     </div>
     <div id="mp_body"></div>
+  </section>
+
+  <!-- History: resolved (completed) batches -->
+  <section class="view" id="v-history" style="display:none">
+    <div class="bar">
+      <div class="search"><span class="material-symbols-rounded">search</span>
+        <input id="hist_search" placeholder="Search batch, quality, shade, lot, machine…" oninput="renderHistory()"></div>
+      <span class="spacer"></span>
+      <span class="small muted" id="hist_note"></span>
+    </div>
+    <div id="hist_body"></div>
   </section>
 </main>
 
@@ -127,6 +141,7 @@ document.getElementById("secTabs").addEventListener("click",e=>{
   document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
   if(s==="storage") renderStorageMap();
   if(s==="massplan") renderMassPlan();
+  if(s==="history") renderHistory();
 });
 function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
 
@@ -478,32 +493,28 @@ function renderMassPlan(){
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
     const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
+    const acts=b=>`${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}`
+      +`${mayEdit?`<span class="mp-drag material-symbols-rounded" draggable="true" title="drag to reorder" ondragstart="mpDragStart(event)" ondragend="mpDragEnd(event)">drag_indicator</span>`:''}`
+      +`${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}`
+      +`${mayEdit?`<button class="btn ghost sm mp-del" title="delete" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}`;
     const bodyRows = (rows.length ? rows.map(b=>{
-      if(b.wash) return `<tr class="mp-wash"><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td>
+      const drag=`data-mid="${esc(m.id)}" data-bid="${esc(b.id)}" ondragover="mpDragOver(event)" ondrop="mpDrop(event)"`;
+      if(b.wash) return `<tr class="mp-wash" ${drag}><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td>
         <td colspan="6"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
-        <td class="mp-actions">${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}
-          <button class="btn ghost sm" title="move up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
-          <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
-          ${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}
-          ${mayEdit?`<button class="btn ghost sm mp-del" title="delete wash" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
-        </td></tr>`;
+        <td class="mp-actions">${acts(b)}</td><td></td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
-      return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}${b.notes?` <span class="material-symbols-rounded mp-noteic" title="${esc(b.notes)}">sticky_note_2</span>`:''}</td><td>${esc(b.quality||"")}</td>
+      return `<tr ${drag}><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
         <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
-        <td class="mp-actions">${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}
-          <button class="btn ghost sm" title="move up" onclick="mpMove('${esc(b.id)}',-1)"><span class="material-symbols-rounded">arrow_upward</span></button>
-          <button class="btn ghost sm" title="move down" onclick="mpMove('${esc(b.id)}',1)"><span class="material-symbols-rounded">arrow_downward</span></button>
-          ${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}
-          ${mayEdit?`<button class="btn ghost sm mp-del" title="delete batch" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
-        </td></tr>`;
-    }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
+        <td class="mp-actions">${acts(b)}</td>
+        <td class="mp-remark small muted" title="${esc(b.notes||'')}">${esc(b.notes||'')}</td></tr>`;
+    }).join("") : `<tr><td colspan="10" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (mayEdit ? (editing
-          ? `<tr class="mp-editrow"><td colspan="9">${mpEditorHTML(m)}</td></tr>`
-          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
+          ? `<tr class="mp-editrow"><td colspan="10">${mpEditorHTML(m)}</td></tr>`
+          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="9"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
         : '');
     return `<div class="card mp-machine${editing?' editing':''}"><div class="card-b">${head}
-      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th></tr></thead>
+      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th><th>Remarks</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
@@ -651,7 +662,8 @@ async function mpSaveNew(machineId){
   const tot={pcs:rows.reduce((a,r)=>a+r.pcs,0), mtr:Math.round(rows.reduce((a,r)=>a+r.mtr,0)),
              weight:Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10};
   if(!mpCapacityOk(machineId, tot.weight)){
-    toast(machineId+" holds "+((DB.machines.find(x=>x.id===machineId)||{}).capMax)+" kg — this "+tot.weight+" kg batch is too heavy."); return; }
+    const cap=(DB.machines.find(x=>x.id===machineId)||{}).capMax;
+    toast(machineId+" holds "+cap+" kg (+"+capTolerance()+" kg tolerance) — this "+tot.weight+" kg batch is too heavy."); return; }
   const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
     machine:machineId, mcPin:machineId, seq:nextSeq(machineId),
     notes:((document.getElementById("mp_remarks")||{}).value||"").trim(),
@@ -660,6 +672,34 @@ async function mpSaveNew(machineId){
   if(res && res.error){ toast(res.error); return; }
   MP_EDIT=null; renderMassPlan(); draw();               // DB patched in place by API.save
   toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
+}
+/* ---- History: resolved (completed) batches, newest first ---- */
+function renderHistory(){
+  if(!can("op_history")) return;
+  const body=document.getElementById("hist_body"); if(!body) return;
+  const term=((document.getElementById("hist_search")||{}).value||"").toLowerCase();
+  let rows=(DB.batches||[]).filter(b=>b.status==="done");
+  rows.sort((a,b)=>String(b.completedAt||"").localeCompare(String(a.completedAt||"")));
+  const cell=b=>{
+    const lots=(b.lots||[]).map(l=>l.lotId).filter(Boolean).join(", ")||(b.lotIds||[]).join(", ");
+    const takas=(b.lots||[]).reduce((n,l)=>n+((l.takaNos||l.takas||[]).length),0);
+    return {id:b.id,quality:b.quality||"",shade:b.shadeNo||"",lots:lots,takas:takas,pcs:b.pcs||0,mtr:b.mtr||0,kg:b.weight||0,
+      machine:b.machine||b.mcPin||"",started:b.startedAt||"",resolved:b.completedAt||"",by:b.completedBy||b.startedBy||"",operator:b.operator||"",notes:b.notes||""};
+  };
+  let list=rows.map(cell);
+  if(term) list=list.filter(r=>[r.id,r.quality,r.shade,r.lots,r.machine,r.by,r.operator,r.notes].some(v=>String(v).toLowerCase().indexOf(term)>=0));
+  document.getElementById("hist_note").textContent=list.length+" of "+rows.length+" resolved batch(es)";
+  body.innerHTML='<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr>'
+    +'<th>Batch</th><th>Resolved</th><th>Machine</th><th>Quality</th><th>Shade</th><th>Lots</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Started</th><th>By</th><th>Operator</th><th>Remarks</th></tr></thead><tbody>'
+    +(list.length?list.map(r=>'<tr>'
+      +'<td class="tnum">'+esc(r.id)+'</td><td class="tnum small">'+esc(r.resolved)+'</td><td class="tnum">'+esc(r.machine)+'</td>'
+      +'<td>'+esc(r.quality)+'</td><td><span class="swatch" style="background:'+shadeColor(r.shade,r.quality)+'"></span> '+esc(r.shade)+'</td>'
+      +'<td class="small muted">'+esc(r.lots||"—")+(r.takas?' · '+r.takas+'tk':'')+'</td>'
+      +'<td class="tnum">'+r.pcs+'</td><td class="tnum">'+r.mtr+'</td><td class="tnum">'+r.kg+'</td>'
+      +'<td class="tnum small">'+esc(r.started)+'</td><td>'+esc(r.by||"—")+'</td><td>'+esc(r.operator||"—")+'</td>'
+      +'<td class="small muted">'+esc(r.notes||"")+'</td></tr>').join("")
+      :'<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:26px">No resolved batches'+(term?' match your search':' yet')+'.</td></tr>')
+    +'</tbody></table></div></div>';
 }
 async function mpAddWash(machineId){          // add one boil-out wash cycle to this machine's plan
   if(!canEdit("op_batch")){ toast("You don't have permission to schedule washes"); return; }
@@ -685,6 +725,37 @@ function _ymd(x){ return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"
 function todayStr(){ return _ymd(new Date()); }                                   // local date, not UTC
 function nextDay(d){ const p=d.split("-").map(Number); return _ymd(new Date(p[0],p[1]-1,p[2]+1)); }  // TZ-safe next day
 function _splitDT(s){ s=s?String(s):""; const p=s.replace("T"," ").split(" "); return {d:p[0]||"", t:(p[1]||"").slice(0,5)}; }
+/* ---- drag to reorder batches within a machine; commit only on a 3-second hold ---- */
+let MP_DRAG=null;
+function mpDragStart(e){ const tr=e.target.closest('tr'); MP_DRAG=tr; if(tr) tr.classList.add('mp-dragging');
+  if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain', (tr&&tr.dataset.bid)||''); }catch(_){} } }
+function mpDragOver(e){ if(!MP_DRAG) return; const tr=e.target.closest('tr[data-bid]');
+  if(!tr || tr===MP_DRAG || tr.dataset.mid!==MP_DRAG.dataset.mid) return;    // reorder only within the same machine
+  e.preventDefault();
+  const r=tr.getBoundingClientRect(); const after=(e.clientY-r.top)>r.height/2;
+  tr.parentNode.insertBefore(MP_DRAG, after?tr.nextSibling:tr); }
+function mpDrop(e){ if(!MP_DRAG) return; e.preventDefault(); mpOrderDirty(); }
+function mpDragEnd(){ if(MP_DRAG) MP_DRAG.classList.remove('mp-dragging'); MP_DRAG=null; }
+function mpOrderDirty(){ const b=document.getElementById('mp_saveorder'); if(b) b.style.display='';
+  const byM={}; document.querySelectorAll('#mp_body tr[data-bid]').forEach(tr=>{ (byM[tr.dataset.mid]=byM[tr.dataset.mid]||[]).push(tr); });
+  Object.values(byM).forEach(list=>list.forEach((tr,i)=>{ const c=tr.querySelector('td'); if(c) c.textContent=i+1; }));   // live seq preview
+}
+let _mpHold=null;
+function mpHoldStart(e){ if(e&&e.preventDefault) e.preventDefault();
+  const f=document.getElementById('mp_holdfill'); if(f){ f.style.transition='width 3s linear'; f.style.width='100%'; }
+  _mpHold=setTimeout(()=>{ mpHoldCancel(); mpCommitOrder(); }, 3000); }
+function mpHoldCancel(){ if(_mpHold){ clearTimeout(_mpHold); _mpHold=null; }
+  const f=document.getElementById('mp_holdfill'); if(f){ f.style.transition='width .12s'; f.style.width='0'; } }
+async function mpCommitOrder(){
+  const byM={}; document.querySelectorAll('#mp_body tr[data-bid]').forEach(tr=>{ (byM[tr.dataset.mid]=byM[tr.dataset.mid]||[]).push(tr.dataset.bid); });
+  let changed=0;
+  for(const mid in byM){ const order=byM[mid];
+    for(let i=0;i<order.length;i++){ const b=(DB.batches||[]).find(x=>x.id===order[i]);
+      if(b && (+b.seq||0)!==i+1){ b.seq=i+1; const r=await API.save('batches',b); if(!(r&&r.error)) changed++; } } }
+  const sb=document.getElementById('mp_saveorder'); if(sb) sb.style.display='none';
+  renderMassPlan(); draw();
+  toast(changed?('Order saved — '+changed+' batch'+(changed>1?'es':'')+' resequenced'):'Order unchanged');
+}
 function mpLogTime(id){
   const b=(DB.batches||[]).find(x=>x.id===id); if(!b) return;
   const ex=document.getElementById("logOverlay"); if(ex) ex.remove();
@@ -873,7 +944,7 @@ function exportScheduleToExcel(){
   XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",storage:"op_storage",massplan:"op_massplan"};
+const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",storage:"op_storage",massplan:"op_massplan",history:"op_history"};
 boot(()=>{
   f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
   f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
