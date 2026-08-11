@@ -486,6 +486,13 @@ input[type=checkbox]:disabled{opacity:.5;cursor:not-allowed}
 .big-scroll thead th{position:sticky;top:0;z-index:2}
 .big-foot{padding:8px 14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right}
 
+/* ---- batch remarks (batch-maker editor + planner row note) ---- */
+.mp-ed-remarks{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
+.mp-ed-remarks .material-symbols-rounded{color:var(--muted);font-size:19px}
+.mp-ed-remarks input{flex:1;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:12.8px;background:var(--surface);color:var(--ink)}
+.mp-ed-remarks input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.mp-noteic{font-size:15px;vertical-align:-3px;color:var(--warning);cursor:help}
+
 /* ---- scheduled machine-wash row in the planner ---- */
 .mp-wash{background:var(--info-soft)}
 .mp-wash td{border-bottom-color:#d6e0f5}

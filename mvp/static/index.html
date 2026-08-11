@@ -488,7 +488,7 @@ function renderMassPlan(){
           ${mayEdit?`<button class="btn ghost sm mp-del" title="delete wash" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}
         </td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
-      return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
+      return `<tr><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}${b.notes?` <span class="material-symbols-rounded mp-noteic" title="${esc(b.notes)}">sticky_note_2</span>`:''}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
         <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
         <td class="mp-actions">${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}
@@ -522,6 +522,8 @@ function mpEditorHTML(m){
     </div>
     <div class="lotq-head mp-ed-lhead"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span>Takas</span><span></span></div>
     <div id="mp_lots"></div>
+    <label class="mp-ed-remarks"><span class="material-symbols-rounded">sticky_note_2</span>
+      <input id="mp_remarks" type="text" placeholder="Remarks (optional) — a note for this batch only"></label>
     <div class="mp-ed-foot">
       <button class="btn ghost sm" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button>
       <span class="mp-ed-total" id="mp_ed_total"></span>
@@ -652,6 +654,7 @@ async function mpSaveNew(machineId){
     toast(machineId+" holds "+((DB.machines.find(x=>x.id===machineId)||{}).capMax)+" kg — this "+tot.weight+" kg batch is too heavy."); return; }
   const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
     machine:machineId, mcPin:machineId, seq:nextSeq(machineId),
+    notes:((document.getElementById("mp_remarks")||{}).value||"").trim(),
     pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status:"planned" };
   const res=await API.save("batches", row);
   if(res && res.error){ toast(res.error); return; }
