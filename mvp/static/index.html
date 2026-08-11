@@ -10,7 +10,7 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="dot"></span>REL-UNITY <small>OPERATIONS</small></div>
+  <div class="brand"><img class="brand-logo" src="favicon.svg" alt="REL-UNITY logo">REL-UNITY <small>OPERATIONS</small></div>
   <nav><a href="index.html" class="on">Operations</a><a href="admin.html">Admin</a></nav>
   <div class="right"><span id="userbox" style="display:flex;align-items:center;gap:8px"></span><span class="envtag">LAN · MVP</span></div>
 </header>
@@ -82,8 +82,6 @@
   <section class="view" id="v-massplan" style="display:none">
     <div class="bar">
       <span class="small muted" id="mp_note"></span>
-      <span class="spacer"></span>
-      <button class="btn ghost sm" id="mp_washbtn" onclick="scheduleWashAllJets()" title="Add a boil-out wash to the end of every jet's plan"><span class="material-symbols-rounded">bubble_chart</span>Schedule wash (all jets)</button>
     </div>
     <div id="mp_body"></div>
   </section>
@@ -502,7 +500,7 @@ function renderMassPlan(){
     }).join("") : `<tr><td colspan="9" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (mayEdit ? (editing
           ? `<tr class="mp-editrow"><td colspan="9">${mpEditorHTML(m)}</td></tr>`
-          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button></td></tr>`)
+          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="8"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
         : '');
     return `<div class="card mp-machine${editing?' editing':''}"><div class="card-b">${head}
       <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th></tr></thead>
@@ -660,20 +658,15 @@ async function mpSaveNew(machineId){
   MP_EDIT=null; renderMassPlan(); draw();               // DB patched in place by API.save
   toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
 }
-async function scheduleWashAllJets(){
+async function mpAddWash(machineId){          // add one boil-out wash cycle to this machine's plan
   if(!canEdit("op_batch")){ toast("You don't have permission to schedule washes"); return; }
-  const jets=(DB.machines||[]).filter(m=>m.type==="jet");
-  if(!jets.length){ toast("No jet machines configured"); return; }
-  if(!confirm("Add a machine wash (boil-out) to the end of the plan on all "+jets.length+" jet(s)?")) return;
-  let n=0;
-  for(const m of jets){
-    const mins=+m.wash||(+cfg().defaultWashMins||60);
-    const res=await API.save("batches",{machine:m.id, mcPin:m.id, seq:nextSeq(m.id), wash:true, washMins:mins,
-      quality:"", shadeNo:"", lots:[], pcs:0, mtr:0, weight:0, status:"planned"});
-    if(!(res&&res.error)) n++;
-  }
-  renderMassPlan(); draw();                              // DB patched in place by each API.save
-  toast("Wash scheduled on "+n+" jet(s)");
+  const m=(DB.machines||[]).find(x=>x.id===machineId); if(!m) return;
+  const mins=+m.wash||(+cfg().defaultWashMins||60);
+  const res=await API.save("batches",{machine:m.id, mcPin:m.id, seq:nextSeq(m.id), wash:true, washMins:mins,
+    quality:"", shadeNo:"", lots:[], pcs:0, mtr:0, weight:0, status:"planned"});
+  if(res&&res.error){ toast(res.error); return; }
+  renderMassPlan(); draw();                              // DB patched in place by API.save
+  toast("Wash cycle added to "+m.id);
 }
 async function mpDeleteBatch(id){
   if(!canEdit("op_batch")){ toast("You don't have permission to delete batches"); return; }

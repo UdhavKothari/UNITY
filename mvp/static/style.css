@@ -42,8 +42,7 @@ h1,h2,h3{margin:0;letter-spacing:-.02em}
 /* ---- top bar ---- */
 header.top{background:var(--surface);color:var(--ink);display:flex;align-items:center;gap:18px;padding:0 22px;height:60px;position:sticky;top:0;z-index:40;border-bottom:1px solid var(--line)}
 header.top .brand{font-weight:800;letter-spacing:-.02em;font-size:15px;display:flex;align-items:center;gap:10px}
-header.top .brand .dot{width:30px;height:30px;border-radius:9px;background:var(--primary);display:inline-flex;align-items:center;justify-content:center}
-header.top .brand .dot::after{content:"R";font-family:var(--mono);font-size:11px;font-weight:600;color:#fff}
+header.top .brand .brand-logo{width:32px;height:32px;border-radius:9px;display:block;flex:none}
 header.top .brand small{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.02em;border-left:1px solid var(--line-2);padding-left:10px;margin-left:2px}
 header.top nav{display:flex;gap:4px;margin-left:8px}
 header.top nav a{color:var(--ink-2);font-weight:600;padding:8px 14px;border-radius:var(--r-s);font-size:13px;transition:background var(--dur)}
