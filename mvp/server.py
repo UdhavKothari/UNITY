@@ -252,6 +252,7 @@ def _sanitized(db):
     d["users"] = [{k: v for k, v in u.items() if k not in ("passHash", "salt")}
                   for u in db.get("users", [])]
     d["activityLog"] = []                 # fetched on demand; keeps every page load small
+    d["challans"] = []                    # ditto — challans accumulate; loaded only on the Challans page
     return d
 
 def _prepare_user_row(db, row):
@@ -349,6 +350,7 @@ def seed():
     data["users"] = [_make_user("U-01", DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PW, "Administrator")]
     data.setdefault("_seq", {})
     data.setdefault("activityLog", [])
+    data.setdefault("challans", [])        # table always exists so edits/adds work before the first import
     return data
 
 def load_db():
@@ -746,6 +748,12 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], "restart", "settings", "", "manual server restart"); save_db(db)
                 threading.Thread(target=_restart_process, daemon=True).start()
                 return self._send(200, {"ok": True, "message": "Server restarting — refresh in a few seconds."})
+
+            if op == "challansLoad":
+                # challans are kept OUT of /api/db (they accumulate) — the Challans page loads them here
+                if "challans" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                return self._send(200, {"rows": db.get("challans", [])})
 
             if op == "challanReconcile":
                 # manually match inward-pending challans to their EMPIRE lots (also runs automatically
@@ -1258,23 +1266,29 @@ def _link_challan_to_lot(db, c, lot):
     if c.get("ownShade") and not lot.get("ownShade"):
         lot["ownShade"] = c["ownShade"]
     rw = _num(c.get("realWeightKg"))
-    if rw > 0:
-        lot["weight"] = round(rw, 1)     # the real weighed kg from the challan
+    if rw > 0 and not _num(lot.get("weight")):
+        lot["weight"] = round(rw, 1)         # real weighed kg — only when the lot has none (don't clobber)
     c["status"] = "linked"; c["lotId"] = lot.get("id", "")
 
 def _reconcile_challans(db):
-    """link every inward-pending challan to a matching lot that isn't already linked. Returns count."""
+    """Link inward-pending challans to matching lots. Only links an UNAMBIGUOUS match (exactly one
+    candidate lot) so two identical deliveries never cross-link. Lots are bucketed by quality so this
+    is O(challans + lots), not O(challans x lots). Returns the number linked."""
+    buckets = {}
+    for lot in db.get("lots", []):
+        if lot.get("weaverChallanNo"):        # already has its challan
+            continue
+        buckets.setdefault(_normalize_quality(lot.get("quality")), []).append(lot)
     linked = 0
-    lots = db.get("lots", [])
     for c in db.get("challans", []):
         if c.get("status") != "inward-pending":
             continue
-        for lot in lots:
-            if lot.get("weaverChallanNo"):    # this lot already has its challan
-                continue
-            if _cl_match(c, lot):
-                _link_challan_to_lot(db, c, lot); linked += 1
-                break
+        bucket = buckets.get(_normalize_quality(c.get("quality")), [])
+        cands = [lot for lot in bucket if _cl_match(c, lot)]
+        if len(cands) == 1:                   # exactly one match -> safe to auto-link
+            _link_challan_to_lot(db, c, cands[0])
+            bucket.remove(cands[0])           # that lot is now taken
+            linked += 1
     return linked
 
 def _apply_challan(payload):

@@ -336,9 +336,13 @@ function renderNav(){
   });
   document.getElementById("nav").innerHTML=h;
 }
-document.getElementById("nav").addEventListener("click",e=>{
-  const el=e.target.closest(".navitem"); if(!el)return; clearTimeout(_searchDebounce); CUR=el.dataset.t; renderNav(); render();
+document.getElementById("nav").addEventListener("click",async e=>{
+  const el=e.target.closest(".navitem"); if(!el)return; clearTimeout(_searchDebounce); CUR=el.dataset.t; renderNav();
+  if(CUR==="challans") await loadChallans();   // challans aren't in /api/db — fetch them for this page
+  render();
 });
+/* challans accumulate, so they're excluded from /api/db and loaded only when viewing this page */
+async function loadChallans(){ const r=await API._post({op:"challansLoad"}); if(r&&r.rows) DB.challans=r.rows; }
 
 function cellVal(table,r,k){
   if(table==="challans" && k==="status"){
@@ -807,7 +811,7 @@ async function doMergeQualities(){
 async function reconcileChallans(){
   const res=await API._post({op:"challanReconcile"});
   if(res&&res.error){ toast(res.error); return; }
-  await API.db(); render();
+  await API.db(); await loadChallans(); render();   // reconcile touches lots (weights) and challans (status)
   toast("Linked "+(res.linked||0)+" challan(s) to lots · "+(res.pending||0)+" still inward-pending");
 }
 

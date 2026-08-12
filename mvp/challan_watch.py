@@ -148,10 +148,22 @@ def process_once(verbose=True):
                 done += 1
         _log_line("[challan] %d mail(s) had PDFs; imported %d new, skipped %d already-seen"
                   % (pdf_mails, done, skipped))
+        _prune_pdfs()
         return done
     finally:
         try: m.logout()
         except Exception: pass
+
+
+def _prune_pdfs(keep=200):
+    """keep only the newest `keep` saved source PDFs (dedup is by processed.txt, not the files)."""
+    try:
+        files = sorted(os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.lower().endswith(".pdf"))
+    except OSError:
+        return
+    for old in files[:-keep]:
+        try: os.remove(old)
+        except OSError: pass
 
 
 def _run_safe():
