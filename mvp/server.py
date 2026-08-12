@@ -1240,17 +1240,27 @@ def _cl_match(c, lot):
     """does an inward-pending challan describe the same fabric as this EMPIRE lot?
     Match on quality + piece count + total meters (within tolerance). Dates are a week apart, so
     they're used only as a soft guard (the lot must not predate the challan)."""
+    # ALL THREE must be present AND agree: quality, piece count, and meters — both the TOTAL and,
+    # when the challan carries per-roll meters, each individual taka length (sorted, element-wise).
+    # Never fall back to quality+pcs alone — that stuck challans to similar-but-different lots.
     q = _normalize_quality(lot.get("quality"))
     if not q or _normalize_quality(c.get("quality")) != q:
         return False
-    lpcs = len([t for t in (lot.get("takas") or [])])
-    cpcs = int(c.get("pcs") or 0)
-    if not lpcs or lpcs != cpcs:
+    lot_takas = sorted(_num(t) for t in (lot.get("takas") or []))
+    ch_takas = sorted(_num(t) for t in (c.get("takas") or []))
+    lpcs, cpcs = len(lot_takas), int(c.get("pcs") or 0)
+    if not lpcs or not cpcs or lpcs != cpcs:
         return False
-    lm = sum(_num(t) for t in (lot.get("takas") or []))
-    cm = _num(c.get("meters") or c.get("totalMeter"))
-    if cm > 0 and lm > 0 and abs(cm - lm) > max(30.0, 0.05 * max(cm, lm)):
+    lm = sum(lot_takas)                                   # total meters of every taka on the lot
+    cm = _num(c.get("meters") or c.get("totalMeter"))     # the challan's total meters
+    if lm <= 0 or cm <= 0:                                # meters REQUIRED on both sides
         return False
+    if abs(cm - lm) > max(2.0, 0.01 * max(cm, lm)):       # totals must match closely (2 m or 1%)
+        return False
+    if ch_takas and len(ch_takas) == lpcs:               # each individual taka must line up too
+        for a, b in zip(lot_takas, ch_takas):
+            if abs(a - b) > max(3.0, 0.05 * max(a, b, 1)):   # per-taka: within 3 m or 5%
+                return False
     cd, ld = str(c.get("packingDate") or ""), str(lot.get("inDate") or "")
     if cd and ld and ld < cd:            # the lot's inward date can't be before the challan's
         return False

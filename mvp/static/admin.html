@@ -250,7 +250,7 @@ const SCHEMAS={
       {k:"metric",l:"Metric",sec:"Metric",req:true},
       {k:"target",l:"Target / spec",sec:"Metric"},
       {k:"weight",l:"Weight (%)",sec:"Metric",t:"number",min:0,max:100}]},
-  challans:{label:"Mill challans",single:"challan",
+  challans:{label:"Inward pending",single:"challan",
     rowClass:r=>r.status==="inward-pending"?"inward-pending":(r.status==="linked"?"linked":""),
     cols:[["weaverChallanNo","Weaver challan"],["packingDate","Date"],["quality","Quality"],["customer","Customer"],["toShade","To shade"],["pcs","Takas"],["meters","Meters"],["realWeightKg","Real wt"],["status","Status"],["lotId","Lot no."]],
     search:["weaverChallanNo","packingListNo","quality","customer","toShade","status","po","source","lotId"],
@@ -294,7 +294,7 @@ const PAGES=[
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
   ["shadeRecipes","Shade recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
-  ["customers","Customers","Admin"],["orders","Orders","Admin"],["challans","Mill challans","Admin"],["storageAreas","Storage areas","Admin"],
+  ["customers","Customers","Admin"],["orders","Orders","Admin"],["challans","Inward pending (mill challans)","Admin"],["storageAreas","Storage areas","Admin"],
   ["shelves","Shelves","Admin"],["storageSlots","Storage slots","Admin"],
   ["suppliers","Suppliers","Admin"],["operators","Operators","Admin"],["qcMetrics","QC metrics","Admin"],
   ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"],
@@ -305,7 +305,7 @@ const NAV=[
   {grp:"Production setup", items:[["machines","Machines"],["qualities","Qualities"]]},
   {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"],["takaMaster","Taka master"],["weavers","Weavers"]]},
   {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["recipes","Dye recipes"]]},
-  {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"],["challans","Mill challans"]]},
+  {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"]]},
   {grp:"Store & stock", items:[["storageAreas","Storage areas"],["shelves","Shelves"],["storageSlots","Storage slots"],["suppliers","Suppliers"]]},
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
   {grp:"Access", items:[["users","Users"],["roles","Roles"]]},
@@ -343,6 +343,8 @@ document.getElementById("nav").addEventListener("click",async e=>{
 });
 /* challans accumulate, so they're excluded from /api/db and loaded only when viewing this page */
 async function loadChallans(){ const r=await API._post({op:"challansLoad"}); if(r&&r.rows) DB.challans=r.rows; }
+/* opened from a button in Lot master (challans are no longer a left-nav item) */
+async function openInwardPending(){ CUR="challans"; renderNav(); await loadChallans(); render(); const m=document.querySelector('main'); if(m) m.scrollTop=0; window.scrollTo({top:0}); }
 
 function cellVal(table,r,k){
   if(table==="challans" && k==="status"){
@@ -458,6 +460,7 @@ function render(){
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search '+sc.label.toLowerCase()+'..." value="'+esc(SEARCH[CUR]||"")+'" oninput="onSearchInput(this)"></div>'
     +'<div class="spacer"></div>'
+    +((CUR==="lots" && can("challans")) ? '<button class="btn ghost" onclick="openInwardPending()"><span class="material-symbols-rounded">local_shipping</span>Inward pending</button>' : '')
     +((CUR==="lots" && (canEdit("qualities")||canEdit("shadeRecipes"))) ? '<button class="btn ghost" onclick="syncCatalog()"><span class="material-symbols-rounded">sync</span>Sync qualities &amp; shades</button>' : '')
     +(mayEdit&&CUR==="lots" ? '<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>' : '')
     +(mayEdit&&CUR==="challans" ? '<button class="btn ghost" onclick="reconcileChallans()"><span class="material-symbols-rounded">link</span>Reconcile now</button>' : '')
@@ -769,7 +772,7 @@ function openMergeQualities(){
     +'<div class="m-b">'
     +'<p class="small muted" style="margin:0 0 10px">Tick the qualities that are really the same (e.g. RIVER and RIVER (AJ)), choose the name to keep, and merge. Lots, batches and shades are re-pointed automatically.</p>'
     +'<div style="display:flex;gap:8px;margin-bottom:8px"><input id="mergeSearch" placeholder="Filter qualities…" style="flex:1" oninput="mergeFilter(this.value)">'
-    +'<button type="button" class="btn ghost sm" onclick="mergeAutoTick()" title="tick groups that differ only by a width, like AREA / AREA 60 INCH">Auto-tick width variants</button></div>'
+    +'<button type="button" class="btn ghost sm" onclick="mergeWidthDuplicates()" title="Safely merge ONLY width variants (AREA 60 INCH into AREA) — each group into its own short name">Merge width duplicates</button></div>'
     +'<div id="mergeList" style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px">'
     +names.map(n=>'<label class="merge-row" data-n="'+esc(n.toLowerCase())+'" style="display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer">'
       +'<input type="checkbox" class="merge-cb" value="'+esc(n)+'" onchange="mergeSync()" style="width:auto;margin:0">'
@@ -789,17 +792,29 @@ function mergeSync(){
   sel.innerHTML = checked.length ? checked.map(n=>'<option value="'+esc(n)+'">'+esc(n)+'</option>').join("") : '<option value="">— pick qualities above —</option>';
   if(checked.indexOf(cur)>=0) sel.value=cur;
 }
-function mergeAutoTick(){                       // tick groups whose names normalize to the same base
-  const groups={}; document.querySelectorAll('#mergeList .merge-cb').forEach(cb=>{ (groups[_normQ(cb.value).toUpperCase()]=groups[_normQ(cb.value).toUpperCase()]||[]).push(cb); });
-  Object.values(groups).forEach(g=>{ if(g.length>1) g.forEach(cb=>cb.checked=true); });
-  mergeSync();
+/* SAFE automatic path: merge ONLY width variants, each group into its own short name (server-side,
+   per-group) — it can never collapse unrelated qualities into one. */
+async function mergeWidthDuplicates(){
+  if(!confirm("Merge only width-variant duplicates (e.g. \"AREA 60 INCH\" into \"AREA\")?\n\nEach group merges into its own short name — unrelated qualities are NEVER combined. Lots/shades are re-pointed.")) return;
+  const res=await API._post({op:"qualitiesDedupe"});
+  if(res&&res.error){ toast(res.error); return; }
+  const ov=document.getElementById("mergeOverlay"); if(ov) ov.remove();
+  await API.db(); renderNav(); render();
+  toast("Merged "+(res.qualitiesRemoved||0)+" width duplicate(s) · re-pointed "+(res.lotsRepointed||0)+" lots");
 }
 async function doMergeQualities(){
   const names=[...document.querySelectorAll('#mergeList .merge-cb:checked')].map(c=>c.value);
   const into=document.getElementById("mergeInto").value, err=document.getElementById("mergeErr");
   if(names.length<2){ err.style.display="block"; err.textContent="Pick at least two qualities to merge."; return; }
   if(!into){ err.style.display="block"; err.textContent="Choose the name to keep."; return; }
-  if(!confirm("Merge "+names.length+" qualities into \""+into+"\"?\n\nLots, batches and shades are re-pointed. This can't be undone — back up first if unsure.")) return;
+  const others=names.filter(n=>n!==into);
+  const affected=(DB.lots||[]).filter(l=>names.indexOf(l.quality)>=0 && l.quality!==into).length;   // lots re-pointed
+  const preview='Merge these '+others.length+' quality(ies) INTO "'+into+'":\n\n  • '+others.join("\n  • ")
+    +'\n\nThis re-points '+affected+' lot(s) and cannot be undone.';
+  const risky = names.length>4 || affected>20;                 // big/mass merge -> require typing to confirm
+  if(risky){
+    if((prompt(preview+'\n\nThis is a large merge. Type MERGE to confirm:')||"").trim().toUpperCase()!=="MERGE"){ toast("Cancelled"); return; }
+  }else if(!confirm(preview)){ return; }
   const res=await API._post({op:"qualitiesMerge", names, into});
   if(res&&res.error){ err.style.display="block"; err.textContent=res.error; return; }
   document.getElementById("mergeOverlay").remove();
