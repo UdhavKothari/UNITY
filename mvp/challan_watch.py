@@ -29,6 +29,19 @@ CHALLAN_POLL_SECS = 120
 sys.path.insert(0, HERE)
 import challan_parser as CP
 
+LOG = os.path.join(OUT_DIR, "challan.log")
+
+
+def _log_line(msg):
+    line = time.strftime("%Y-%m-%d %H:%M:%S") + "  " + str(msg)
+    print(line, flush=True)
+    try:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
 
 def _secrets():
     try:
@@ -58,9 +71,12 @@ def _pdf_attachments(msg):
 
 def process_once(verbose=True):
     cfg = _secrets()
+    if not os.path.exists(SECRETS):
+        _log_line("[challan] secrets.local.json not found — copy secrets.example.json to it and add the Gmail app password.")
+        return None
     if not cfg.get("gmailUser") or not cfg.get("gmailAppPassword"):
-        print("[challan] no Gmail credentials in secrets.local.json — skipping.", flush=True)
-        return 0
+        _log_line("[challan] gmailUser / gmailAppPassword missing (or blank) in secrets.local.json — nothing to do.")
+        return None
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(PDF_DIR, exist_ok=True)
     m = _connect(cfg)
@@ -106,17 +122,34 @@ def process_once(verbose=True):
         except Exception: pass
 
 
+def _run_safe():
+    try:
+        n = process_once()
+        if n is not None:
+            _log_line("[challan] run complete — %d PDF attachment(s) processed" % (n or 0))
+        return True
+    except imaplib.IMAP4.error as e:
+        _log_line("[challan] EMAIL LOGIN FAILED: %s" % e)
+        _log_line("          Fix: turn ON 2-Step Verification for the Gmail account, use an APP")
+        _log_line("          PASSWORD (16 chars, not the normal password), and make sure IMAP is")
+        _log_line("          enabled (Gmail -> Settings -> Forwarding and POP/IMAP -> Enable IMAP).")
+        return False
+    except (OSError, ssl.SSLError) as e:
+        _log_line("[challan] CONNECTION ERROR (no internet / firewall / wrong host): %s" % e)
+        return False
+    except Exception as e:
+        _log_line("[challan] ERROR: %r" % e)
+        return False
+
+
 def main():
-    loop = "--loop" in sys.argv
-    if not loop:
-        process_once(); return
-    print("[challan] polling every %ds — Ctrl+C to stop" % CHALLAN_POLL_SECS, flush=True)
-    while True:
-        try:
-            process_once()
-        except Exception as e:
-            print("[challan] poll error:", e, flush=True)
-        time.sleep(CHALLAN_POLL_SECS)
+    if "--loop" in sys.argv:
+        _log_line("[challan] polling every %ds — close the window to stop" % CHALLAN_POLL_SECS)
+        while True:
+            _run_safe()
+            time.sleep(CHALLAN_POLL_SECS)
+    else:
+        _run_safe()
 
 
 if __name__ == "__main__":
