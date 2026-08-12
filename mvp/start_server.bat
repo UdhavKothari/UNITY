@@ -1,9 +1,9 @@
 @echo off
-title REL Dyeing ERP - server
+title REL-UNITY - server
 cd /d "%~dp0"
 
 echo ============================================
-echo   REL Dyeing ERP  -  keep this window open
+echo   REL-UNITY  -  keep this window open
 echo   http://localhost:8080/
 echo ============================================
 echo.
@@ -14,6 +14,13 @@ if errorlevel 1 (
   echo (Could not reach GitHub - starting with the code already on this PC.)
 ) else (
   echo Up to date.
+)
+echo.
+
+REM ---- start the email->challan poller once, in its own window (keeps polling on its own) ----
+if exist challan_watch.py (
+  echo Starting the mill-challan email poller...
+  start "REL-UNITY challan poller" cmd /k python challan_watch.py --loop
 )
 echo.
 
