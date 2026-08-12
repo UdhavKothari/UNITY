@@ -17,10 +17,10 @@ if errorlevel 1 (
 )
 echo.
 
-REM ---- start the email->challan poller once, in its own window (keeps polling on its own) ----
+REM ---- check email for challans ONCE, in this same window (recurring polls: use Task Scheduler) ----
 if exist challan_watch.py (
-  echo Starting the mill-challan email poller...
-  start "REL-UNITY challan poller" cmd /k python challan_watch.py --loop
+  echo Checking email for new mill challans...
+  python challan_watch.py
 )
 echo.
 
