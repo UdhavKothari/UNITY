@@ -51,7 +51,7 @@ function ic(name){
     operators:"badge", qcMetrics:"verified", users:"person",
     roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
     batches:"widgets", lots:"qr_code_2", weavers:"factory", recipes:"science",
-    activity:"history", takaMaster:"tag", history:"manage_history"
+    activity:"history", takaMaster:"tag", history:"manage_history", challans:"mail"
   };
   return '<span class="material-symbols-rounded">'+(M[name]||"circle")+'</span>';
 }
@@ -248,6 +248,26 @@ const SCHEMAS={
       {k:"metric",l:"Metric",sec:"Metric",req:true},
       {k:"target",l:"Target / spec",sec:"Metric"},
       {k:"weight",l:"Weight (%)",sec:"Metric",t:"number",min:0,max:100}]},
+  challans:{label:"Mill challans",single:"challan",
+    cols:[["packingListNo","Packing list"],["packingDate","Date"],["quality","Quality"],["customer","Customer"],["toShade","To shade"],["ownShade","Own shade"],["pcs","Takas"],["meters","Meters"],["realWeightKg","Real wt (kg)"],["width","Inch"],["status","Status"]],
+    search:["packingListNo","quality","customer","toShade","status","po","source"],
+    fields:[
+      {k:"packingListNo",l:"Packing list no.",sec:"Challan",t:"readonly"},
+      {k:"packingDate",l:"Date",sec:"Challan",t:"readonly"},
+      {k:"quality",l:"Quality",sec:"Challan",t:"readonly"},
+      {k:"customer",l:"Customer",sec:"Challan",help:"Extracted from the process remark — edit if wrong"},
+      {k:"toShade",l:"To shade (dye target)",sec:"Challan"},
+      {k:"ownShade",l:"Own shade (current)",sec:"Challan",t:"readonly"},
+      {k:"width",l:"Width (inch)",sec:"Challan",t:"number",min:0},
+      {k:"po",l:"PO",sec:"Challan",t:"readonly"},
+      {k:"process",l:"Process (e.g. Dyeing / RF)",sec:"Challan"},
+      {k:"totalTaka",l:"Total taka",sec:"Quantities",t:"readonly"},
+      {k:"totalMeter",l:"Total meter",sec:"Quantities",t:"readonly"},
+      {k:"realWeightKg",l:"Real weight (kg, >2kg rolls)",sec:"Quantities",t:"readonly"},
+      {k:"processRemark",l:"Process remark (raw text)",sec:"Source",t:"readonly"},
+      {k:"source",l:"Source file",sec:"Source",t:"readonly"},
+      {k:"receivedAt",l:"Received",sec:"Source",t:"readonly"},
+      {k:"status",l:"Status",sec:"Source",t:"select",o:["received","linked","ignored"],help:"'linked' once matched to an EMPIRE lot"}]},
   users:{label:"Users",single:"user",
     cols:[["username","Username"],["role","Role"],["active","Active"]],
     search:["username","role"],
@@ -270,7 +290,7 @@ const PAGES=[
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
   ["shadeRecipes","Shade recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
-  ["customers","Customers","Admin"],["orders","Orders","Admin"],["storageAreas","Storage areas","Admin"],
+  ["customers","Customers","Admin"],["orders","Orders","Admin"],["challans","Mill challans","Admin"],["storageAreas","Storage areas","Admin"],
   ["shelves","Shelves","Admin"],["storageSlots","Storage slots","Admin"],
   ["suppliers","Suppliers","Admin"],["operators","Operators","Admin"],["qcMetrics","QC metrics","Admin"],
   ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"],
@@ -281,7 +301,7 @@ const NAV=[
   {grp:"Production setup", items:[["machines","Machines"],["qualities","Qualities"]]},
   {grp:"Production", items:[["batches","Batch maker"],["lots","Lot master"],["takaMaster","Taka master"],["weavers","Weavers"]]},
   {grp:"Colour & recipes", items:[["shadeRecipes","Shade recipes"],["recipes","Dye recipes"]]},
-  {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"]]},
+  {grp:"Commercial", items:[["customers","Customers"],["orders","Orders"],["challans","Mill challans"]]},
   {grp:"Store & stock", items:[["storageAreas","Storage areas"],["shelves","Shelves"],["storageSlots","Storage slots"],["suppliers","Suppliers"]]},
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
   {grp:"Access", items:[["users","Users"],["roles","Roles"]]},

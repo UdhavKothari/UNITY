@@ -39,7 +39,7 @@ SESSION_TTL = 12 * 3600       # 12 hours
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
              "dashboard","machines","qualities","shadeRecipes","recipes","history",
              "batches","lots","weavers","takaMaster",
-             "customers","orders","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
+             "customers","orders","challans","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]
 
 LOG_CAP = 5000
@@ -1140,7 +1140,7 @@ def _csv_to_lots(rows):
 
 def _prune_dir(d, keep=30):
     try:
-        files = sorted(f for f in os.listdir(d) if f.lower().endswith((".csv", ".txt")))
+        files = sorted(f for f in os.listdir(d) if f.lower().endswith((".csv", ".txt", ".json")))
     except OSError:
         return
     for old in files[:-keep]:                          # keep the newest `keep`, delete the rest (+ their .log)
@@ -1208,6 +1208,69 @@ def _inbox_watcher():
             print("[inbox] watcher error:", e, flush=True)
         time.sleep(INBOX_POLL_SECS)
 
+# ---------------------------------------------------------------- mill challans (parsed from emailed PDFs)
+# challan_watch.py (a separate helper, uses pdfplumber) drops parsed JSON here; the server stays
+# dependency-free and just files the results into the 'challans' table. One PDF page = one challan lot.
+CHALLAN_DIR  = os.path.join(HERE, "inbox_challan")
+CHALLAN_DONE = os.path.join(CHALLAN_DIR, "done")
+CHALLAN_ERR  = os.path.join(CHALLAN_DIR, "error")
+
+def _apply_challan(payload):
+    added = 0
+    with LOCK:
+        db = load_db()
+        by_id = {c.get("id"): c for c in db.get("challans", [])}
+        sig = payload.get("sig") or uuid.uuid4().hex[:10]
+        for i, lot in enumerate(payload.get("lots", [])):
+            cid = "CH-%s-%d" % (sig, i + 1)                 # stable id -> re-processing never duplicates
+            if cid in by_id:
+                continue
+            rolls = lot.get("rolls", [])
+            rec = {"id": cid, "sig": sig, "source": payload.get("source", ""),
+                   "receivedAt": payload.get("receivedAt", ""), "status": "received", "page": i + 1,
+                   "quality": _normalize_quality(lot.get("quality")), "customer": lot.get("customer", ""),
+                   "toShade": lot.get("toShade", ""), "ownShade": lot.get("ownShade", ""),
+                   "width": lot.get("width", 0), "po": lot.get("po", ""),
+                   "packingListNo": lot.get("packingListNo", ""), "packingDate": lot.get("packingDate", ""),
+                   "process": lot.get("process", ""), "processRemark": lot.get("processRemark", ""),
+                   "totalTaka": lot.get("totalTaka", 0), "totalMeter": lot.get("totalMeter", 0),
+                   "pcs": lot.get("pcs", len(lot.get("takas", []))), "meters": lot.get("meters", 0),
+                   "realWeightKg": lot.get("realWeightKg", 0),
+                   "takas": lot.get("takas", []), "takaWts": lot.get("takaWts", []),
+                   "rollNos": [r.get("rollNo", "") for r in rolls]}
+            db.setdefault("challans", []).append(rec); by_id[cid] = rec; added += 1
+        if added:
+            _log(db, "challan", "challanImport", "challans", "",
+                 "imported %d challan lot(s) from %s" % (added, payload.get("source", "email")))
+            save_db(db)
+    return added
+
+def _challan_watcher():
+    for d in (CHALLAN_DIR, CHALLAN_DONE, CHALLAN_ERR):
+        try: os.makedirs(d, exist_ok=True)
+        except OSError: pass
+    while True:
+        try:
+            for name in sorted(os.listdir(CHALLAN_DIR)):
+                p = os.path.join(CHALLAN_DIR, name)
+                if not os.path.isfile(p) or not name.lower().endswith(".json"):
+                    continue
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    n = _apply_challan(payload)
+                    os.replace(p, os.path.join(CHALLAN_DONE, stamp + "-" + name))
+                    print("[challan]", name, "->", n, "lots", flush=True)
+                except Exception as e:
+                    try: os.replace(p, os.path.join(CHALLAN_ERR, stamp + "-" + name))
+                    except OSError: pass
+                    print("[challan] ERROR", name, ":", e, flush=True)
+            _prune_dir(CHALLAN_DONE); _prune_dir(CHALLAN_ERR)
+        except Exception as e:
+            print("[challan] watcher error:", e, flush=True)
+        time.sleep(INBOX_POLL_SECS)
+
 def _bind_server(preferred):
     """Bind to the preferred port; if Windows refuses it (in use, or inside a reserved/excluded
     range — common with Hyper-V/WSL/Docker), fall back to the next few ports with a clear message."""
@@ -1233,6 +1296,7 @@ if __name__ == "__main__":
     load_db()  # ensure the database exists
     threading.Thread(target=_watch_and_reload, daemon=True).start()
     threading.Thread(target=_inbox_watcher, daemon=True).start()
+    threading.Thread(target=_challan_watcher, daemon=True).start()
     srv, port = _bind_server(port)
     print(f"REL-UNITY server running:")
     print(f"   local:   http://localhost:{port}/")

@@ -22,3 +22,4 @@ mvp/secrets.local.json
 
 # Inbox drop folder (runtime CSVs from the .bat, processed files, logs)
 mvp/inbox/
+mvp/inbox_challan/
