@@ -341,6 +341,11 @@ document.getElementById("nav").addEventListener("click",e=>{
 });
 
 function cellVal(table,r,k){
+  if(table==="challans" && k==="status"){
+    const s=r.status||"", cls=s==="linked"?"run":s==="ignored"?"wash":"free";
+    return '<span class="pill '+cls+'">'+esc(s==="inward-pending"?"inward pending":s)+'</span>';
+  }
+  if(table==="challans" && k==="lotId") return r.lotId?'<span class="tnum">'+esc(r.lotId)+'</span>':'<span class="muted">—</span>';
   if(k==="sw") return '<input type="color" class="sw-pick" value="'+shadeColorHex(r)+'" title="Click to pick a custom colour for this shade" onclick="event.stopPropagation()" onchange="setShadeHex('+JSON.stringify(r.id)+',this.value)">';
   if(k==="shades") return (r.lines||[]).map(l=>esc(l.shade)+" ("+l.m+"m)").join(", ");
   if(k==="plc") return r.plc?"Yes":"";
