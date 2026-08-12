@@ -29,7 +29,6 @@
     <button data-s="order"><span class="material-symbols-rounded">point_of_sale</span>Sales</button>
     <button data-s="storage"><span class="material-symbols-rounded">shelves</span>Storage</button>
     <button data-s="massplan"><span class="material-symbols-rounded">table_view</span>Batch planner</button>
-    <button data-s="history"><span class="material-symbols-rounded">history</span>History</button>
   </div>
 
   <!-- Shop floor -->
@@ -88,17 +87,6 @@
     </div>
     <div id="mp_body"></div>
   </section>
-
-  <!-- History: resolved (completed) batches -->
-  <section class="view" id="v-history" style="display:none">
-    <div class="bar">
-      <div class="search"><span class="material-symbols-rounded">search</span>
-        <input id="hist_search" placeholder="Search batch, quality, shade, lot, machine…" oninput="renderHistory()"></div>
-      <span class="spacer"></span>
-      <span class="small muted" id="hist_note"></span>
-    </div>
-    <div id="hist_body"></div>
-  </section>
 </main>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -141,7 +129,6 @@ document.getElementById("secTabs").addEventListener("click",e=>{
   document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
   if(s==="storage") renderStorageMap();
   if(s==="massplan") renderMassPlan();
-  if(s==="history") renderHistory();
 });
 function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
 
@@ -673,34 +660,6 @@ async function mpSaveNew(machineId){
   MP_EDIT=null; renderMassPlan(); draw();               // DB patched in place by API.save
   toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
 }
-/* ---- History: resolved (completed) batches, newest first ---- */
-function renderHistory(){
-  if(!can("op_history")) return;
-  const body=document.getElementById("hist_body"); if(!body) return;
-  const term=((document.getElementById("hist_search")||{}).value||"").toLowerCase();
-  let rows=(DB.batches||[]).filter(b=>b.status==="done");
-  rows.sort((a,b)=>String(b.completedAt||"").localeCompare(String(a.completedAt||"")));
-  const cell=b=>{
-    const lots=(b.lots||[]).map(l=>l.lotId).filter(Boolean).join(", ")||(b.lotIds||[]).join(", ");
-    const takas=(b.lots||[]).reduce((n,l)=>n+((l.takaNos||l.takas||[]).length),0);
-    return {id:b.id,quality:b.quality||"",shade:b.shadeNo||"",lots:lots,takas:takas,pcs:b.pcs||0,mtr:b.mtr||0,kg:b.weight||0,
-      machine:b.machine||b.mcPin||"",started:b.startedAt||"",resolved:b.completedAt||"",by:b.completedBy||b.startedBy||"",operator:b.operator||"",notes:b.notes||""};
-  };
-  let list=rows.map(cell);
-  if(term) list=list.filter(r=>[r.id,r.quality,r.shade,r.lots,r.machine,r.by,r.operator,r.notes].some(v=>String(v).toLowerCase().indexOf(term)>=0));
-  document.getElementById("hist_note").textContent=list.length+" of "+rows.length+" resolved batch(es)";
-  body.innerHTML='<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr>'
-    +'<th>Batch</th><th>Resolved</th><th>Machine</th><th>Quality</th><th>Shade</th><th>Lots</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Started</th><th>By</th><th>Operator</th><th>Remarks</th></tr></thead><tbody>'
-    +(list.length?list.map(r=>'<tr>'
-      +'<td class="tnum">'+esc(r.id)+'</td><td class="tnum small">'+esc(r.resolved)+'</td><td class="tnum">'+esc(r.machine)+'</td>'
-      +'<td>'+esc(r.quality)+'</td><td><span class="swatch" style="background:'+shadeColor(r.shade,r.quality)+'"></span> '+esc(r.shade)+'</td>'
-      +'<td class="small muted">'+esc(r.lots||"—")+(r.takas?' · '+r.takas+'tk':'')+'</td>'
-      +'<td class="tnum">'+r.pcs+'</td><td class="tnum">'+r.mtr+'</td><td class="tnum">'+r.kg+'</td>'
-      +'<td class="tnum small">'+esc(r.started)+'</td><td>'+esc(r.by||"—")+'</td><td>'+esc(r.operator||"—")+'</td>'
-      +'<td class="small muted">'+esc(r.notes||"")+'</td></tr>').join("")
-      :'<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:26px">No resolved batches'+(term?' match your search':' yet')+'.</td></tr>')
-    +'</tbody></table></div></div>';
-}
 async function mpAddWash(machineId){          // add one boil-out wash cycle to this machine's plan
   if(!canEdit("op_batch")){ toast("You don't have permission to schedule washes"); return; }
   const m=(DB.machines||[]).find(x=>x.id===machineId); if(!m) return;
@@ -944,7 +903,7 @@ function exportScheduleToExcel(){
   XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",storage:"op_storage",massplan:"op_massplan",history:"op_history"};
+const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",storage:"op_storage",massplan:"op_massplan"};
 boot(()=>{
   f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
   f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");

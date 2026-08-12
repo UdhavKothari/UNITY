@@ -36,8 +36,8 @@ def load_secrets():
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan","op_history",
-             "dashboard","machines","qualities","shadeRecipes","recipes",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
+             "dashboard","machines","qualities","shadeRecipes","recipes","history",
              "batches","lots","weavers","takaMaster",
              "customers","orders","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]
@@ -106,6 +106,15 @@ def _edit_perms_for(db, user):
     if edit is None:                       # legacy role: editable == viewable (no behaviour change)
         return list(view)
     return [p for p in edit if p in view]  # never grant edit on a page the role can't see
+
+def _find_principal(db, username):
+    """A login principal is a full user, or an operator (operators log in with username + PIN and
+    carry a role too). Users take priority if a username exists in both."""
+    u = next((x for x in db.get("users", []) if x.get("username") == username and x.get("active", True)), None)
+    if u:
+        return u
+    return next((o for o in db.get("operators", [])
+                 if o.get("username") == username and o.get("active", True)), None)
 
 # EMPIRE names a quality like "AREA 60 INCH" — the trailing "<width> INCH" is the fabric width,
 # not part of the quality name. Strip it so "AREA 60 INCH" and "AREA" are treated as ONE quality
@@ -592,8 +601,7 @@ class Handler(BaseHTTPRequestHandler):
             if tok:
                 SESSIONS.pop(tok, None)
             return None, None
-        u = next((x for x in db.get("users", [])
-                  if x.get("username") == s["username"] and x.get("active", True)), None)
+        u = _find_principal(db, s["username"])
         if not u:
             return None, None
         return u, _perms_for(db, u)
@@ -605,7 +613,7 @@ class Handler(BaseHTTPRequestHandler):
                 db = load_db(); u, perms = self._auth(db)
             if not u:
                 return self._send(401, {"error": "not authenticated"})
-            return self._send(200, {"user": {"username": u["username"], "role": u["role"],
+            return self._send(200, {"user": {"username": u["username"], "role": u.get("role", ""),
                                              "perms": perms, "edit": _edit_perms_for(db, u)}})
         if path == "/api/db":
             # fast path: an unchanged DB + a live session -> 304, with no lock and no full load
@@ -644,14 +652,22 @@ class Handler(BaseHTTPRequestHandler):
                 pw = req.get("password") or ""
                 u = next((x for x in db.get("users", [])
                           if x.get("username") == username and x.get("active", True)), None)
-                if (not u or not u.get("passHash")
-                        or not hmac.compare_digest(u["passHash"], _hash_pw(pw, u["salt"]))):
+                ok = bool(u and u.get("passHash") and hmac.compare_digest(u["passHash"], _hash_pw(pw, u["salt"])))
+                if not ok:                                     # operator logging in with their username + PIN
+                    o = next((x for x in db.get("operators", [])
+                              if x.get("username") == username and x.get("active", True)), None)
+                    if o and pw and hmac.compare_digest(str(o.get("pin") or ""), pw):
+                        u = o; ok = True
+                if not ok:
                     return self._send(401, {"error": "Invalid username or password"})
+                # only ONE active session per user — drop any earlier one (logs out the previous device)
+                for _t in [t for t, s in list(SESSIONS.items()) if s.get("username") == username]:
+                    SESSIONS.pop(_t, None)
                 token = secrets.token_hex(24)
                 SESSIONS[token] = {"username": username, "expires": time.time() + SESSION_TTL}
                 perms = _perms_for(db, u)
                 _log(db, username, "login", "users", u.get("id", ""), "signed in"); save_db(db)
-                return self._send(200, {"ok": True, "user": {"username": username, "role": u["role"],
+                return self._send(200, {"ok": True, "user": {"username": username, "role": u.get("role", ""),
                                                             "perms": perms, "edit": _edit_perms_for(db, u)}},
                                   cookies=[f"sid={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL}"])
 
