@@ -30,6 +30,24 @@ sys.path.insert(0, HERE)
 import challan_parser as CP
 
 LOG = os.path.join(OUT_DIR, "challan.log")
+PROC = os.path.join(OUT_DIR, "processed.txt")     # attachment hashes already imported (never re-import)
+
+
+def _load_processed():
+    try:
+        with open(PROC, "r", encoding="utf-8") as f:
+            return set(l.strip() for l in f if l.strip())
+    except OSError:
+        return set()
+
+
+def _mark_processed(sig):
+    try:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        with open(PROC, "a", encoding="utf-8") as f:
+            f.write(sig + "\n")
+    except OSError:
+        pass
 
 
 def _log_line(msg):
@@ -81,41 +99,55 @@ def process_once(verbose=True):
     os.makedirs(PDF_DIR, exist_ok=True)
     m = _connect(cfg)
     try:
-        crit = ["UNSEEN"]
+        # Search a DATE WINDOW (read OR unread) so already-opened mails are still picked up.
+        # De-duplication is by attachment content hash (below) + the server's stable ids, so a
+        # message can be seen many times without ever importing twice.
+        since_days = int(cfg.get("gmailSinceDays", 5) or 5)
+        since = (datetime.date.today() - datetime.timedelta(days=since_days)).strftime("%d-%b-%Y")
+        crit = ["SINCE", since]
         frm = (cfg.get("gmailFromFilter") or "").strip()
         if frm:
             crit += ["FROM", frm]
         typ, data = m.search(None, *crit)
         ids = data[0].split() if data and data[0] else []
-        done = 0
+        _log_line("[challan] %d message(s) since %s (%s)" % (len(ids), since,
+                  "from " + frm if frm else "any sender"))
+        seen_sigs = _load_processed()
+        done = skipped = pdf_mails = 0
         for mid in ids:
-            typ, raw = m.fetch(mid, "(RFC822)")
+            typ, raw = m.fetch(mid, "(BODY.PEEK[])")     # PEEK = don't change the mail's read flag
             if typ != "OK" or not raw or not raw[0]:
                 continue
             msg = email.message_from_bytes(raw[0][1])
             subj = str(email.header.make_header(email.header.decode_header(msg.get("Subject", ""))))
             atts = list(_pdf_attachments(msg))
             if not atts:
-                continue                      # leave non-PDF mails UNSEEN
-            stamp = time.strftime("%Y%m%d-%H%M%S")
+                continue
+            pdf_mails += 1
             for i, (fn, payload) in enumerate(atts):
                 sig = hashlib.sha1(payload).hexdigest()[:10]
+                if sig in seen_sigs:                     # already imported this exact PDF before
+                    skipped += 1
+                    continue
+                stamp = time.strftime("%Y%m%d-%H%M%S")
                 pdf_path = os.path.join(PDF_DIR, "%s-%s.pdf" % (stamp, sig))
                 with open(pdf_path, "wb") as f:
                     f.write(payload)
                 try:
                     lots = CP.parse_challan_pdf(pdf_path)
                 except Exception as e:
-                    print("[challan] parse failed for", fn, ":", e, flush=True)
+                    _log_line("[challan] parse failed for %s: %s (is pdfplumber installed?)" % (fn, e))
                     lots = []
-                out = {"source": fn, "subject": subj, "receivedAt": datetime.datetime.now().isoformat(timespec="seconds"),
+                out = {"source": fn, "subject": subj,
+                       "receivedAt": datetime.datetime.now().isoformat(timespec="seconds"),
                        "sig": sig, "lots": lots}
                 with open(os.path.join(OUT_DIR, "%s-%s.json" % (stamp, sig)), "w", encoding="utf-8") as f:
                     json.dump(out, f, ensure_ascii=False)
-                if verbose:
-                    print("[challan] %s -> %d lots" % (fn, len(lots)), flush=True)
+                _mark_processed(sig); seen_sigs.add(sig)
+                _log_line("[challan] %s -> %d lots" % (fn, len(lots)))
                 done += 1
-            m.store(mid, "+FLAGS", "\\Seen")
+        _log_line("[challan] %d mail(s) had PDFs; imported %d new, skipped %d already-seen"
+                  % (pdf_mails, done, skipped))
         return done
     finally:
         try: m.logout()
