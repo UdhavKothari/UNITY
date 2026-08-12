@@ -191,11 +191,13 @@ const SCHEMAS={
       {k:"shift",l:"Shift",sec:"Process",t:"select",o:["","Day","Night"]},
       {k:"notes",l:"Notes",sec:"Notes",t:"textarea",help:"Batch-specific instructions — important for jet dyeing"}]},
   lots:{label:"Lot master",single:"lot",
-    cols:[["id","Lot No."],["customer","Customer"],["quality","Quality"],["weaver","Weaver"],["takaCount","Pcs"],["lotMeters","Meters"],["inDate","In date"],["location","Location"],["allocation","Allocated to"]],
-    search:["id","customer","quality","weaver","location","status","challanNo"],
+    cols:[["id","Lot No."],["weaverChallanNo","Weaver challan"],["customer","Customer"],["quality","Quality"],["toShade","To shade"],["takaCount","Pcs"],["lotMeters","Meters"],["inDate","In date"],["location","Location"],["allocation","Allocated to"]],
+    search:["id","weaverChallanNo","customer","quality","weaver","toShade","location","status","challanNo"],
     rowClass:r=>lotAllocation(r.id).blocked?"blocked":"",
     fields:[
       {k:"lotNo",l:"Lot No.",sec:"Lot",req:true,help:"The lot number from your source system (Livewire/EMPIRE). It becomes the lot's identity and cannot be changed later."},
+      {k:"weaverChallanNo",l:"Weaver challan no. (ML…)",sec:"Lot",help:"The mill challan this lot came in on — auto-filled when the challan is matched"},
+      {k:"toShade",l:"To shade (dye target)",sec:"Lot",help:"The shade to dye this into — from the mill challan"},
       {k:"customer",l:"Customer name",sec:"Lot",t:"csel",help:"Whose fabric this lot belongs to"},
       {k:"quality",l:"Quality",sec:"Lot",t:"qsel"},
       {k:"weaver",l:"Weaver",sec:"Lot",t:"wsel",help:"Which weaving unit produced this fabric"},   // NEW
@@ -249,10 +251,11 @@ const SCHEMAS={
       {k:"target",l:"Target / spec",sec:"Metric"},
       {k:"weight",l:"Weight (%)",sec:"Metric",t:"number",min:0,max:100}]},
   challans:{label:"Mill challans",single:"challan",
-    cols:[["packingListNo","Packing list"],["packingDate","Date"],["quality","Quality"],["customer","Customer"],["toShade","To shade"],["ownShade","Own shade"],["pcs","Takas"],["meters","Meters"],["realWeightKg","Real wt (kg)"],["width","Inch"],["status","Status"]],
-    search:["packingListNo","quality","customer","toShade","status","po","source"],
+    rowClass:r=>r.status==="inward-pending"?"inward-pending":(r.status==="linked"?"linked":""),
+    cols:[["weaverChallanNo","Weaver challan"],["packingDate","Date"],["quality","Quality"],["customer","Customer"],["toShade","To shade"],["pcs","Takas"],["meters","Meters"],["realWeightKg","Real wt"],["status","Status"],["lotId","Lot no."]],
+    search:["weaverChallanNo","packingListNo","quality","customer","toShade","status","po","source","lotId"],
     fields:[
-      {k:"packingListNo",l:"Packing list no.",sec:"Challan",t:"readonly"},
+      {k:"weaverChallanNo",l:"Weaver challan no. (ML…)",sec:"Challan",t:"readonly",help:"The mill challan number — the fabric's identity until EMPIRE assigns a lot no."},
       {k:"packingDate",l:"Date",sec:"Challan",t:"readonly"},
       {k:"quality",l:"Quality",sec:"Challan",t:"readonly"},
       {k:"customer",l:"Customer",sec:"Challan",help:"Extracted from the process remark — edit if wrong"},
@@ -261,13 +264,14 @@ const SCHEMAS={
       {k:"width",l:"Width (inch)",sec:"Challan",t:"number",min:0},
       {k:"po",l:"PO",sec:"Challan",t:"readonly"},
       {k:"process",l:"Process (e.g. Dyeing / RF)",sec:"Challan"},
-      {k:"totalTaka",l:"Total taka",sec:"Quantities",t:"readonly"},
-      {k:"totalMeter",l:"Total meter",sec:"Quantities",t:"readonly"},
+      {k:"pcs",l:"Takas (pcs)",sec:"Quantities",t:"readonly"},
+      {k:"meters",l:"Meters",sec:"Quantities",t:"readonly"},
       {k:"realWeightKg",l:"Real weight (kg, >2kg rolls)",sec:"Quantities",t:"readonly"},
       {k:"processRemark",l:"Process remark (raw text)",sec:"Source",t:"readonly"},
       {k:"source",l:"Source file",sec:"Source",t:"readonly"},
       {k:"receivedAt",l:"Received",sec:"Source",t:"readonly"},
-      {k:"status",l:"Status",sec:"Source",t:"select",o:["received","linked","ignored"],help:"'linked' once matched to an EMPIRE lot"}]},
+      {k:"lotId",l:"Linked lot no.",sec:"Status",t:"readonly"},
+      {k:"status",l:"Status",sec:"Status",t:"select",o:["inward-pending","linked","ignored"],help:"'inward-pending' until an EMPIRE lot is matched, then 'linked'"}]},
   users:{label:"Users",single:"user",
     cols:[["username","Username"],["role","Role"],["active","Active"]],
     search:["username","role"],
@@ -447,6 +451,7 @@ function render(){
     +'<div class="spacer"></div>'
     +((CUR==="lots" && (canEdit("qualities")||canEdit("shadeRecipes"))) ? '<button class="btn ghost" onclick="syncCatalog()"><span class="material-symbols-rounded">sync</span>Sync qualities &amp; shades</button>' : '')
     +(mayEdit&&CUR==="lots" ? '<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>' : '')
+    +(mayEdit&&CUR==="challans" ? '<button class="btn ghost" onclick="reconcileChallans()"><span class="material-symbols-rounded">link</span>Reconcile now</button>' : '')
     +(mayEdit&&CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openMergeQualities()"><span class="material-symbols-rounded">merge</span>Merge</button>' : '')
@@ -791,6 +796,14 @@ async function doMergeQualities(){
   document.getElementById("mergeOverlay").remove();
   await API.db(); renderNav(); render();
   toast("Merged into "+res.into+" · re-pointed "+res.lotsRepointed+" lots · dropped "+res.shadesRemoved+" shade rows");
+}
+
+/* Challans page: match inward-pending challans to their EMPIRE lots (also runs automatically). */
+async function reconcileChallans(){
+  const res=await API._post({op:"challanReconcile"});
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); render();
+  toast("Linked "+(res.linked||0)+" challan(s) to lots · "+(res.pending||0)+" still inward-pending");
 }
 
 /* Lots page: wipe ALL lots (e.g. before re-importing under the DESPNO scheme). Double-confirmed. */

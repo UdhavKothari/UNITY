@@ -747,6 +747,18 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=_restart_process, daemon=True).start()
                 return self._send(200, {"ok": True, "message": "Server restarting — refresh in a few seconds."})
 
+            if op == "challanReconcile":
+                # manually match inward-pending challans to their EMPIRE lots (also runs automatically
+                # on every lot import + challan import)
+                if _need_edit(("challans",)):
+                    return self._send(403, {"error": "forbidden"})
+                linked = _reconcile_challans(db)
+                if linked:
+                    _log(db, u["username"], "challanReconcile", "challans", "", "linked %d challans to lots" % linked)
+                    save_db(db)
+                pending = sum(1 for c in db.get("challans", []) if c.get("status") == "inward-pending")
+                return self._send(200, {"ok": True, "linked": linked, "pending": pending})
+
             if op == "qualitiesMerge":
                 # merge a hand-picked set of qualities into one (RIVER + RIVER (AJ) -> RIVER).
                 if _need_edit(("qualities",)):
@@ -1163,9 +1175,10 @@ def _apply_lots(lots):
         aq = ash = 0                                    # quick-add each NEW lot's quality + a shade '0'
         for q in new_quals:
             a, s = _ensure_quality_and_shade(db, q); aq += a; ash += s
+        linked = _reconcile_challans(db)                # a lot's inward challan may already be waiting
         _log(db, "inbox", "lotImport", "lots", "",
-             "imported: %d new lots, %d already present (skipped); +%d qualities, +%d shades"
-             % (added, skipped, aq, ash))
+             "imported: %d new lots, %d already present (skipped); +%d qualities, +%d shades; linked %d challans"
+             % (added, skipped, aq, ash, linked))
         save_db(db)
     return added, skipped
 
@@ -1215,6 +1228,55 @@ CHALLAN_DIR  = os.path.join(HERE, "inbox_challan")
 CHALLAN_DONE = os.path.join(CHALLAN_DIR, "done")
 CHALLAN_ERR  = os.path.join(CHALLAN_DIR, "error")
 
+def _cl_match(c, lot):
+    """does an inward-pending challan describe the same fabric as this EMPIRE lot?
+    Match on quality + piece count + total meters (within tolerance). Dates are a week apart, so
+    they're used only as a soft guard (the lot must not predate the challan)."""
+    q = _normalize_quality(lot.get("quality"))
+    if not q or _normalize_quality(c.get("quality")) != q:
+        return False
+    lpcs = len([t for t in (lot.get("takas") or [])])
+    cpcs = int(c.get("pcs") or 0)
+    if not lpcs or lpcs != cpcs:
+        return False
+    lm = sum(_num(t) for t in (lot.get("takas") or []))
+    cm = _num(c.get("meters") or c.get("totalMeter"))
+    if cm > 0 and lm > 0 and abs(cm - lm) > max(30.0, 0.05 * max(cm, lm)):
+        return False
+    cd, ld = str(c.get("packingDate") or ""), str(lot.get("inDate") or "")
+    if cd and ld and ld < cd:            # the lot's inward date can't be before the challan's
+        return False
+    return True
+
+def _link_challan_to_lot(db, c, lot):
+    """carry the challan's data onto the EMPIRE lot and mark the challan linked."""
+    lot["weaverChallanNo"] = c.get("weaverChallanNo") or c.get("packingListNo") or ""
+    if c.get("customer") and not lot.get("customer"):
+        lot["customer"] = c["customer"]
+    if c.get("toShade"):
+        lot["toShade"] = c["toShade"]
+    if c.get("ownShade") and not lot.get("ownShade"):
+        lot["ownShade"] = c["ownShade"]
+    rw = _num(c.get("realWeightKg"))
+    if rw > 0:
+        lot["weight"] = round(rw, 1)     # the real weighed kg from the challan
+    c["status"] = "linked"; c["lotId"] = lot.get("id", "")
+
+def _reconcile_challans(db):
+    """link every inward-pending challan to a matching lot that isn't already linked. Returns count."""
+    linked = 0
+    lots = db.get("lots", [])
+    for c in db.get("challans", []):
+        if c.get("status") != "inward-pending":
+            continue
+        for lot in lots:
+            if lot.get("weaverChallanNo"):    # this lot already has its challan
+                continue
+            if _cl_match(c, lot):
+                _link_challan_to_lot(db, c, lot); linked += 1
+                break
+    return linked
+
 def _apply_challan(payload):
     added = 0
     with LOCK:
@@ -1226,22 +1288,24 @@ def _apply_challan(payload):
             if cid in by_id:
                 continue
             rolls = lot.get("rolls", [])
+            pkg = lot.get("packingListNo", "")
             rec = {"id": cid, "sig": sig, "source": payload.get("source", ""),
-                   "receivedAt": payload.get("receivedAt", ""), "status": "received", "page": i + 1,
+                   "receivedAt": payload.get("receivedAt", ""), "status": "inward-pending", "page": i + 1,
                    "quality": _normalize_quality(lot.get("quality")), "customer": lot.get("customer", ""),
                    "toShade": lot.get("toShade", ""), "ownShade": lot.get("ownShade", ""),
                    "width": lot.get("width", 0), "po": lot.get("po", ""),
-                   "packingListNo": lot.get("packingListNo", ""), "packingDate": lot.get("packingDate", ""),
+                   "packingListNo": pkg, "weaverChallanNo": pkg, "packingDate": lot.get("packingDate", ""),
                    "process": lot.get("process", ""), "processRemark": lot.get("processRemark", ""),
                    "totalTaka": lot.get("totalTaka", 0), "totalMeter": lot.get("totalMeter", 0),
                    "pcs": lot.get("pcs", len(lot.get("takas", []))), "meters": lot.get("meters", 0),
-                   "realWeightKg": lot.get("realWeightKg", 0),
+                   "realWeightKg": lot.get("realWeightKg", 0), "lotId": "",
                    "takas": lot.get("takas", []), "takaWts": lot.get("takaWts", []),
                    "rollNos": [r.get("rollNo", "") for r in rolls]}
             db.setdefault("challans", []).append(rec); by_id[cid] = rec; added += 1
-        if added:
+        linked = _reconcile_challans(db)              # a matching EMPIRE lot may already be here
+        if added or linked:
             _log(db, "challan", "challanImport", "challans", "",
-                 "imported %d challan lot(s) from %s" % (added, payload.get("source", "email")))
+                 "imported %d challan lot(s) from %s; linked %d to lots" % (added, payload.get("source", "email"), linked))
             save_db(db)
     return added
 
