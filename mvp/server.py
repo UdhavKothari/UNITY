@@ -1365,6 +1365,29 @@ def _challan_watcher():
             print("[challan] watcher error:", e, flush=True)
         time.sleep(INBOX_POLL_SECS)
 
+def _challan_email_scheduler():
+    """Fetch new mill challans from email on a schedule, so it doesn't depend on Windows Task
+    Scheduler. Runs the standalone poller (challan_watch.py, which has pdfplumber/IMAP) as a
+    subprocess — the server itself stays dependency-free. Default every 2 hours; set
+    'gmailPollHours' in secrets.local.json to change it, or 0 to turn this off."""
+    script = os.path.join(HERE, "challan_watch.py")
+    if not os.path.exists(script):
+        return
+    time.sleep(20)                                     # let the server finish coming up first
+    while True:
+        try:
+            hrs = float(load_secrets().get("gmailPollHours", 2) or 2)
+        except (ValueError, TypeError):
+            hrs = 2
+        if hrs <= 0:                                   # disabled — check again in an hour
+            time.sleep(3600); continue
+        try:
+            print("[challan] scheduled email check...", flush=True)
+            subprocess.run([sys.executable, script], cwd=HERE, timeout=900)
+        except Exception as e:
+            print("[challan] scheduled email poll error:", e, flush=True)
+        time.sleep(max(300.0, hrs * 3600))             # at least 5 minutes between runs
+
 def _bind_server(preferred):
     """Bind to the preferred port; if Windows refuses it (in use, or inside a reserved/excluded
     range — common with Hyper-V/WSL/Docker), fall back to the next few ports with a clear message."""
@@ -1391,6 +1414,7 @@ if __name__ == "__main__":
     threading.Thread(target=_watch_and_reload, daemon=True).start()
     threading.Thread(target=_inbox_watcher, daemon=True).start()
     threading.Thread(target=_challan_watcher, daemon=True).start()
+    threading.Thread(target=_challan_email_scheduler, daemon=True).start()
     srv, port = _bind_server(port)
     print(f"REL-UNITY server running:")
     print(f"   local:   http://localhost:{port}/")
