@@ -61,6 +61,26 @@ def _next_seq_id(db, table):
     seq[table] = n
     return "%s-%04d" % (prefix, n)
 
+MC_LETTER = {"jet": "T", "jigger": "R", "stentor": "S", "drum": "D", "hydro": "Y", "rope": "P"}
+MC_POOLED = {"jigger": True}   # jets are numbered per-machine; jiggers share one pooled counter
+
+def _batch_id(db, row):
+    """structured batch id B{letter}{machineNo?}{seq}/{MMYY}; letter+pooling from the machine type.
+    Per-machine (jet): BT05200/0826.  Pooled (jigger): BR200/0826.  Sequence resets monthly."""
+    mid = str(row.get("machine", "") or "")
+    m = next((x for x in db.get("machines", []) if x.get("id") == mid), None)
+    mtype = str((m or {}).get("type", "") or "")
+    letter = MC_LETTER.get(mtype) or (mtype[:1].upper() if mtype else "B")
+    pooled = MC_POOLED.get(mtype, False)
+    digits = re.sub(r"\D", "", mid)
+    mcno = (digits[-2:] if digits else "").zfill(2)
+    mmyy = time.strftime("%m%y")
+    seq = db.setdefault("_batchseq", {})
+    ckey = "%s/%s" % (letter, mmyy) if pooled else "%s%s/%s" % (letter, mcno, mmyy)
+    n = int(seq.get(ckey, 0)) + 1
+    seq[ckey] = n
+    return ("B%s%03d/%s" % (letter, n, mmyy)) if pooled else ("B%s%s%03d/%s" % (letter, mcno, n, mmyy))
+
 def _op_username(name):
     parts = [p for p in re.sub(r"[^A-Za-z ]", " ", str(name or "")).split() if p]
     if not parts:
@@ -976,7 +996,7 @@ class Handler(BaseHTTPRequestHandler):
                 added = 0
                 for row in (req.get("rows") or []):
                     if not row.get("id"):
-                        row["id"] = _next_seq_id(db, table) if table in SYSTEM_IDS else (table[:2].upper() + "-" + uuid.uuid4().hex[:6])
+                        row["id"] = (_batch_id(db, row) if table == "batches" else _next_seq_id(db, table)) if table in SYSTEM_IDS else (table[:2].upper() + "-" + uuid.uuid4().hex[:6])
                     db[table].append(row); added += 1
                 _log(db, u["username"], "bulkUpsert", table, "", "added %d rows" % added); save_db(db)
                 return self._send(200, {"ok": True, "added": added})
@@ -1035,7 +1055,7 @@ class Handler(BaseHTTPRequestHandler):
                     row["id"] = lotno
                     db["lots"].append(row)
                 elif table in SYSTEM_IDS and not existing:
-                    row["id"] = _next_seq_id(db, table)            # batches / orders are still system-numbered
+                    row["id"] = _batch_id(db, row) if table == "batches" else _next_seq_id(db, table)   # structured batch id
                     db[table].append(row)
                 elif not row.get("id"):
                     row["id"] = table[:2].upper() + "-" + uuid.uuid4().hex[:6]
