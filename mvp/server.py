@@ -1038,6 +1038,13 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(403, {"error": "Only a Master can flag a batch urgent"})
                     if bool(row.get("urgent")) and not was:
                         row["urgentBy"] = u["username"]; row["urgentAt"] = time.strftime("%Y-%m-%d %H:%M")
+                    if existing and "urgent_flag" not in eperms:   # data operators may edit shade/takas/weight only
+                        if row.get("quality") != existing.get("quality"):
+                            return self._send(403, {"error": "Only a Master can change a batch's quality"})
+                        oldl = sorted(str(l.get("lotId")) for l in (existing.get("lots") or []))
+                        newl = sorted(str(l.get("lotId")) for l in (row.get("lots") or []))
+                        if newl != oldl:
+                            return self._send(403, {"error": "Only a Master can change which lots are in a batch"})
                 lotno = ""
                 if table == "lots":
                     tk = row.get("takas") or []

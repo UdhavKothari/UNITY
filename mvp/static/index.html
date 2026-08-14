@@ -462,6 +462,7 @@ function renderMassPlan(){
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
     const acts=b=>`${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}`
       +`${mayEdit?`<span class="mp-drag material-symbols-rounded" draggable="true" title="drag to reorder" ondragstart="mpDragStart(event)" ondragend="mpDragEnd(event)">drag_indicator</span>`:''}`
+      +`${mayEdit&&!b.wash?`<button class="btn ghost sm" title="edit shade / takas / weight" onclick="mpEditBatch('${esc(b.id)}')"><span class="material-symbols-rounded">edit</span></button>`:''}`
       +`${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}`
       +`${mayEdit?`<button class="btn ghost sm mp-del" title="delete" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}`;
     const bodyRows = (rows.length ? rows.map(b=>{
@@ -495,7 +496,7 @@ function mpEditorHTML(m){
       <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorSync()"></select></label>
       <label class="mp-ed-f">Shade<select id="mp_sh"></select></label>
       <div class="mp-ed-actions">
-        <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>Save batch</button>
+        <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${(MP_EDIT&&MP_EDIT.editId)?"Save changes":"Save batch"}</button>
         <button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button>
       </div>
     </div>
@@ -504,22 +505,32 @@ function mpEditorHTML(m){
     <label class="mp-ed-remarks"><span class="material-symbols-rounded">sticky_note_2</span>
       <input id="mp_remarks" type="text" placeholder="Remarks (optional) — a note for this batch only"></label>
     <div class="mp-ed-foot">
-      <button class="btn ghost sm" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button>
+      ${(MP_EDIT&&MP_EDIT.editId)?"":`<button class="btn ghost sm" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button>`}
       <span class="mp-ed-total" id="mp_ed_total"></span>
     </div>
   </div>`;
 }
 function mpAddBatch(machineId){ MP_EDIT={machineId}; renderMassPlan(); }
 function mpCancelNew(){ MP_EDIT=null; renderMassPlan(); }
+function mpEditBatch(id){ const b=(DB.batches||[]).find(x=>x.id===id); if(!b||b.wash) return; MP_EDIT={machineId:b.machine, editId:id}; renderMassPlan(); }
 function mpInitEditor(){
-  const qs=document.getElementById("mp_q"); if(!qs) return;
-  if(!qs.dataset.ready){
-    qs.innerHTML='<option value="">— pick quality —</option>'+(DB.qualities||[]).map(q=>`<option>${esc(q.name)}</option>`).join("");
-    qs.dataset.ready="1";
+  const qs=document.getElementById("mp_q"); if(!qs || qs.dataset.ready) return;
+  qs.innerHTML='<option value="">— pick quality —</option>'+(DB.qualities||[]).map(q=>`<option>${esc(q.name)}</option>`).join("");
+  qs.dataset.ready="1";
+  const ed=(MP_EDIT&&MP_EDIT.editId)?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
+  if(ed){                                        // edit mode: quality + lots are locked; shade/takas/weight editable
+    qs.value=ed.quality||""; qs.disabled=true; qs.classList.add("locked");
+    mpEditorRefreshShades();
+    const sh=document.getElementById("mp_sh"); if(sh) sh.value=ed.shadeNo||"";
+    const rm=document.getElementById("mp_remarks"); if(rm) rm.value=ed.notes||"";
+    (ed.lots||[]).forEach(l=>mpAddEditorLot({lotId:l.lotId, takaNos:l.takaNos||[], takas:l.takas||[], pcs:l.pcs||0, mtr:l.mtr||0, weight:l.weight||0}));
+    if(!(ed.lots||[]).length) mpAddEditorLot();
+  } else {
     mpEditorRefreshShades();
     if(!document.querySelector('#mp_lots .lotqrow')) mpAddEditorLot();
-    document.getElementById("mp_lots").addEventListener("input", mpEditorSync);   // catches taka-picker's dispatched input too
   }
+  document.getElementById("mp_lots").addEventListener("input", mpEditorSync);
+  mpEditorSync();
 }
 function mpEditorRefreshShades(){
   const q=document.getElementById("mp_q").value, sh=document.getElementById("mp_sh");
@@ -535,24 +546,32 @@ function mpLotFilter(l, row){
   const taken=[...document.querySelectorAll('#mp_lots .b-lot')].filter(s=>s!==mine).map(s=>lotPickVal(s));
   return taken.indexOf(l.id)<0;
 }
-function mpAddEditorLot(){
+function mpAddEditorLot(pf){
   const box=document.getElementById("mp_lots"); if(!box) return;
-  const wrap=document.createElement("div"); wrap.className="lotqrow mp-lotline";
-  wrap.innerHTML=`${lotPickerHTML("", "b-lot")}
+  const locked=!!(pf&&pf.lotId);
+  const wrap=document.createElement("div"); wrap.className="lotqrow mp-lotline"+(locked?" lot-locked":"");
+  wrap.innerHTML=`${lotPickerHTML(locked?pf.lotId:"", "b-lot")}
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
     <input class="b-mtr" type="number" min="0" placeholder="meters">
     <input class="b-wt" type="number" min="0" step="0.1" placeholder="kg">
     <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
-    <button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpLockQuality();mpEditorSync()">&times;</button>
+    ${locked?'':`<button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpLockQuality();mpEditorSync()">&times;</button>`}
     <div class="taka-pick"></div>`;
   box.appendChild(wrap);
   const row=box.lastElementChild;
-  // same behaviour as the Batch maker: filter to the batch's fabric, lock quality on first lot,
-  // prefill from what's LEFT in the lot, and snap the meters to whole takas (takas cannot be cut)
-  wireLotPicker(row.querySelector(".b-lot"), { filterFn: (l)=>mpLotFilter(l,row),
-    onSelect: ()=>{ mpLockQuality(); mpPrefillRow(row); mpEditorSync(); } });
-  row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
-  row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
+  if(locked){                                    // lot is fixed in edit mode; only takas/weight change
+    const inp=row.querySelector('.lotpick-in'); if(inp){ inp.disabled=true; inp.title="Lot is locked while editing"; }
+    if(pf.takaNos&&pf.takaNos.length) row.dataset.takaNos=JSON.stringify(pf.takaNos);
+    if(pf.takas&&pf.takas.length) row.dataset.takas=JSON.stringify(pf.takas);
+    row.querySelector('.b-pcs').value=pf.pcs||0; row.querySelector('.b-mtr').value=pf.mtr||0; row.querySelector('.b-wt').value=pf.weight||0;
+    row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
+    row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
+  } else {
+    wireLotPicker(row.querySelector(".b-lot"), { filterFn: (l)=>mpLotFilter(l,row),
+      onSelect: ()=>{ mpLockQuality(); mpPrefillRow(row); mpEditorSync(); } });
+    row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
+    row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
+  }
   mpEditorSync();
 }
 function mpPrefillRow(row){                       // start from what is still LEFT in the lot, then snap to takas
@@ -618,9 +637,10 @@ function mpEditorSync(){
 async function mpSaveNew(machineId){
   const q=(document.getElementById("mp_q")||{}).value||"";
   if(!q){ toast("Pick a quality"); return; }
+  const editing=MP_EDIT&&MP_EDIT.editId; const ex=editing?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
   const rows=mpEditorRows();
   if(!rows.length){ toast("Add at least one lot"); return; }
-  for(const r of rows){ const a=lotAllocation(r.lotId);
+  if(!editing) for(const r of rows){ const a=lotAllocation(r.lotId);
     if(a.blocked){ toast(r.lotId+" is fully used"); return; }
     if(r.mtr>a.remaining){ toast(r.lotId+" has only "+a.remaining+" m left"); return; } }
   const quals=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId);return l&&l.quality;}).filter(Boolean))];
@@ -633,13 +653,14 @@ async function mpSaveNew(machineId){
     const cap=(DB.machines.find(x=>x.id===machineId)||{}).capMax;
     toast(machineId+" holds "+cap+" kg (+"+capTolerance()+" kg tolerance) — this "+tot.weight+" kg batch is too heavy."); return; }
   const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
-    machine:machineId, mcPin:machineId, seq:nextSeq(machineId),
+    machine:machineId, mcPin:machineId, seq: ex?ex.seq:nextSeq(machineId),
     notes:((document.getElementById("mp_remarks")||{}).value||"").trim(),
-    pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status:"planned" };
+    pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status: ex?(ex.status||"planned"):"planned" };
+  if(ex){ row.id=ex.id; if(ex.startedAt) row.startedAt=ex.startedAt; if(ex.planDay) row.planDay=ex.planDay; }
   const res=await API.save("batches", row);
   if(res && res.error){ toast(res.error); return; }
   MP_EDIT=null; renderMassPlan(); draw();               // DB patched in place by API.save
-  toast((res.row&&res.row.id||"Batch")+" added to "+machineId);
+  toast((res.row&&res.row.id||"Batch")+(ex?" updated":" added to "+machineId));
 }
 async function mpAddWash(machineId){          // add one boil-out wash cycle to this machine's plan
   if(!canEdit("op_batch")){ toast("You don't have permission to schedule washes"); return; }
