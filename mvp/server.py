@@ -36,7 +36,7 @@ def load_secrets():
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan","op_workflows",
              "dashboard","machines","qualities","shadeRecipes","recipes","history",
              "batches","lots","weavers","takaMaster",
              "customers","orders","challans","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
@@ -987,7 +987,7 @@ class Handler(BaseHTTPRequestHandler):
                 table = req.get("table")
                 if table in ("activityLog",) or table in HEAVY_TABLES:
                     return self._send(403, {"error": "not allowed for this table"})
-                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"], "orders": ["orders", "op_order"]}.get(table, [table])
+                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"], "orders": ["orders", "op_order"], "workflows": ["op_workflows"], "processTypes": ["op_workflows"], "fabricGroups": ["op_workflows"]}.get(table, [table])
                 if _need_edit(allowed):
                     return self._send(403, {"error": "forbidden: no edit permission for %s" % table})
                 if table not in db or not isinstance(db.get(table), list):
@@ -1009,7 +1009,7 @@ class Handler(BaseHTTPRequestHandler):
             if table == "__settings__":
                 allowed = ["settings"]
             else:
-                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"], "orders": ["orders", "op_order"]}.get(table, [table])
+                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"], "orders": ["orders", "op_order"], "workflows": ["op_workflows"], "processTypes": ["op_workflows"], "fabricGroups": ["op_workflows"]}.get(table, [table])
             if _need_edit(allowed):
                 return self._send(403, {"error": f"forbidden: no edit permission for {table}"})
 

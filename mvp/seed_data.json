@@ -852,5 +852,72 @@
     "completionMode": "manual"
   },
   "activityLog": [],
-  "shelves": []
+  "shelves": [],
+  "processTypes": [
+    {
+      "id": "pt_heatset",
+      "name": "Heat-set",
+      "machine": "heatset",
+      "icon": "local_fire_department",
+      "letter": "H",
+      "pooled": true,
+      "defTime": 40
+    },
+    {
+      "id": "pt_zero",
+      "name": "Zero",
+      "machine": "jet",
+      "icon": "cleaning_services",
+      "letter": "T",
+      "pooled": false,
+      "defTime": 30
+    },
+    {
+      "id": "pt_jetscour",
+      "name": "Jet · Scour",
+      "machine": "jet",
+      "icon": "water_drop",
+      "letter": "T",
+      "pooled": false,
+      "defTime": 45
+    },
+    {
+      "id": "pt_jetdye",
+      "name": "Jet · Dye",
+      "machine": "jet",
+      "icon": "water_drop",
+      "letter": "T",
+      "pooled": false,
+      "defTime": 95
+    },
+    {
+      "id": "pt_jigscour",
+      "name": "Jig · Scour",
+      "machine": "jigger",
+      "icon": "waves",
+      "letter": "R",
+      "pooled": true,
+      "defTime": 60
+    },
+    {
+      "id": "pt_jigdye",
+      "name": "Jig · Dye",
+      "machine": "jigger",
+      "icon": "waves",
+      "letter": "R",
+      "pooled": true,
+      "defTime": 130
+    },
+    {
+      "id": "pt_stentor",
+      "name": "Stentor",
+      "machine": "stentor",
+      "icon": "compress",
+      "letter": "S",
+      "pooled": true,
+      "defTime": 35
+    }
+  ],
+  "workflows": [],
+  "fabricGroups": []
 }
