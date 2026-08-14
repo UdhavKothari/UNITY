@@ -36,7 +36,7 @@ def load_secrets():
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_batch","op_storage","op_massplan",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan",
              "dashboard","machines","qualities","shadeRecipes","recipes","history",
              "batches","lots","weavers","takaMaster",
              "customers","orders","challans","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
@@ -754,6 +754,23 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], "restart", "settings", "", "manual server restart"); save_db(db)
                 threading.Thread(target=_restart_process, daemon=True).start()
                 return self._send(200, {"ok": True, "message": "Server restarting — refresh in a few seconds."})
+
+            if op == "orderStatusSave":
+                # the Order-status page edits a few tracking fields on a lot (dates, design, remark)
+                if _need_edit(("op_orderstatus",)):
+                    return self._send(403, {"error": "forbidden"})
+                lid = req.get("lotId")
+                lot = next((l for l in db.get("lots", []) if l.get("id") == lid), None)
+                if not lot:
+                    return self._send(404, {"error": "lot not found"})
+                allow = ("designNo", "scourDate", "polyDyeDate", "cottonDyeDate", "finishDate",
+                         "orderRemark", "toShade")
+                for k, v in (req.get("fields") or {}).items():
+                    if k in allow:
+                        lot[k] = v
+                _log(db, u["username"], "orderStatus", "lots", lid, "updated order-status fields")
+                save_db(db)
+                return self._send(200, {"ok": True, "row": lot})
 
             if op == "challansLoad":
                 # challans are kept OUT of /api/db (they accumulate) — the Challans page loads them here

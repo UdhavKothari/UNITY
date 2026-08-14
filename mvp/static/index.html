@@ -11,7 +11,7 @@
 <body>
 <header class="top">
   <div class="brand"><img class="brand-logo" src="favicon.svg" alt="REL-UNITY logo">REL-UNITY <small>OPERATIONS</small></div>
-  <nav><a href="index.html" class="on">Operations</a><a href="admin.html">Admin</a></nav>
+  <nav><a href="index.html" class="on">Operations</a><a href="sales.html">Sales</a><a href="admin.html">Admin</a></nav>
   <div class="right"><span id="userbox" style="display:flex;align-items:center;gap:8px"></span><span class="envtag">LAN · MVP</span></div>
 </header>
 
@@ -26,7 +26,6 @@
   <div class="section-tabs" id="secTabs">
     <button data-s="floor" class="on"><span class="material-symbols-rounded">grid_view</span>Shop floor</button>
     <button data-s="sched"><span class="material-symbols-rounded">calendar_view_week</span>Schedule</button>
-    <button data-s="order"><span class="material-symbols-rounded">point_of_sale</span>Sales</button>
     <button data-s="storage"><span class="material-symbols-rounded">shelves</span>Storage</button>
     <button data-s="massplan"><span class="material-symbols-rounded">table_view</span>Batch planner</button>
   </div>
@@ -52,22 +51,6 @@
     <div class="legend" id="legend"></div>
   </section>
 
-  <!-- New order -->
-  <section class="view" id="v-order" style="display:none">
-    <div class="card"><div class="card-b">
-      <div class="grid2">
-        <label class="fld">Customer<select id="f_cust"></select></label>
-        <label class="fld">Quality<select id="f_qual"></select></label>
-        <label class="fld">Due in (days)<input id="f_due" type="number" value="6" min="1"></label>
-        <label class="fld">Priority<select id="f_pri"><option value="1">1 — Urgent</option><option value="2" selected>2 — Normal</option><option value="3">3 — Low</option></select></label>
-      </div>
-      <div class="fldlabel">Shades &amp; quantities <span class="small muted">— same quality, one or more shades (each ≥ 300 m)</span></div>
-      <div id="shadeLines"></div>
-      <button class="addshade" onclick="addShadeLine()">+ Add another shade</button>
-      <div style="margin-top:16px"><button class="btn" onclick="submitOrder()">Log order &amp; schedule</button></div>
-      <div class="result" id="orderResult"></div>
-    </div></div>
-  </section>
 
   <!-- Storage -->
   <section class="view" id="v-storage" style="display:none">
@@ -131,42 +114,6 @@ document.getElementById("secTabs").addEventListener("click",e=>{
   if(s==="massplan") renderMassPlan();
 });
 function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
-
-/* order form — shades are quality-specific */
-const shadeOptions=(quality)=>{const list=shadesForQuality(quality); return (list.length?list:[]).map(s=>`<option>${esc(s.shade)}</option>`).join("");};
-function addShadeLine(shade,m){
-  const q=document.getElementById("f_qual").value;
-  const opts=shadeOptions(q);
-  const row=document.createElement("div");row.className="slrow";
-  row.innerHTML=`<select class="sl-shade">${opts||'<option value="">— no shades for this quality —</option>'}</select>
-    <input class="sl-m" type="number" value="${m||3000}" min="300" step="100">
-    <button class="rm" onclick="this.closest('.slrow').parentNode.children.length>1 && this.closest('.slrow').remove()">×</button>`;
-  if(shade && opts.indexOf(shade)>=0)row.querySelector(".sl-shade").value=shade;
-  document.getElementById("shadeLines").appendChild(row);
-}
-function refreshShadeSelects(){
-  const q=document.getElementById("f_qual").value, opts=shadeOptions(q);
-  document.querySelectorAll('#shadeLines .sl-shade').forEach(sel=>{ sel.innerHTML=opts||'<option value="">— no shades for this quality —</option>'; });
-}
-async function submitOrder(){
-  const lines=[...document.querySelectorAll('#shadeLines .slrow')].map(r=>({shade:r.querySelector('.sl-shade').value,m:+r.querySelector('.sl-m').value}));
-  const minM=cfg().minMeters||300;
-  for(const ln of lines){ if(!ln.m||ln.m<minM){alert(ln.shade+`: below ${minM} m minimum load.`);return;} }
-  const o={id:"SO-N"+(1000+DB.orders.length),cust:f_cust.value,qual:f_qual.value,lines,due:+f_due.value,pri:+f_pri.value};
-  await API.save("orders",o); await API.db();
-  const batches=splitOrder(o); draw(batches.map(b=>b.key));
-  const q=Q(o.qual), totalM=lines.reduce((a,l)=>a+l.m,0), totalKg=kgOf(totalM,q.gsm,q.width);
-  const promiseD=(S.orderFinish[o.id]||0)/1440;
-  const r=document.getElementById("orderResult");r.classList.add("on");
-  r.innerHTML=`<h3>✓ ${o.id} logged &amp; scheduled</h3>
-    <div class="small muted">${totalM} m of ${esc(o.qual)} @ ${q.gsm} gsm across ${lines.length} shade(s) → <b>${totalKg.toFixed(0)} kg</b></div>
-    <div style="margin:8px 0">Split into <b>${batches.length}</b> batch(es):
-      ${batches.map(b=>`<span class="chip"><span class="swatch" style="background:${shadeColor(b.shade,b.qual)}"></span>${b.key} · ${esc(b.shade)} · ${b.meters} m · ${b.kg} kg</span>`).join("")}</div>
-    <div class="small muted">Route: pre-treat (${q.pt_mc1||'—'}${q.pt_mc2?(' → '+q.pt_mc2):''}) → RFD → dye (${q.dyeType}). Each op reserves ${(+q.loadMin||cfg().loadMin||35)+(+q.unloadMin||cfg().unloadMin||25)} min handling.</div>
-    <div style="margin-top:8px"><b>Next step:</b> create the batches for this order in <b>Batch maker</b> — the schedule is driven by batches, not orders.
-      <div class="small muted" style="margin-top:4px">The split above is an estimate to guide batching. Link each batch to <b>${esc(o.id)}</b> so it groups under this order in the plan.</div></div>`;
-  toast("Order saved");
-}
 
 /* init */
 /* ---------- batch maker ---------- */
@@ -903,12 +850,8 @@ function exportScheduleToExcel(){
   XLSX.writeFile(wb, "Schedule_"+new Date().toISOString().slice(0,10)+".xlsx");
 }
 
-const TABMAP={floor:"op_floor",sched:"op_schedule",order:"op_order",storage:"op_storage",massplan:"op_massplan"};
+const TABMAP={floor:"op_floor",sched:"op_schedule",storage:"op_storage",massplan:"op_massplan"};
 boot(()=>{
-  f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
-  f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
-  f_qual.addEventListener("change",refreshShadeSelects);
-  addShadeLine();
   renderStorageMap();
   // show only the section tabs this role may see
   const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REL-UNITY — Sales</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img class="brand-logo" src="favicon.svg" alt="REL-UNITY logo">REL-UNITY <small>SALES</small></div>
+  <nav><a href="index.html">Operations</a><a href="sales.html" class="on">Sales</a><a href="admin.html">Admin</a></nav>
+  <div class="right"><span id="userbox" style="display:flex;align-items:center;gap:8px"></span><span class="envtag">LAN · MVP</span></div>
+</header>
+
+<main>
+  <div class="page-head">
+    <h1>Sales</h1>
+    <p>Log customer orders and track every lot from inward to finishing.</p>
+  </div>
+
+  <div class="section-tabs" id="secTabs">
+    <button data-s="order" class="on"><span class="material-symbols-rounded">point_of_sale</span>Sales</button>
+    <button data-s="orderstatus"><span class="material-symbols-rounded">table_view</span>Order status</button>
+  </div>
+
+  <!-- Sales: order entry -->
+  <section class="view" id="v-order">
+    <div class="card"><div class="card-b">
+      <div class="grid2">
+        <label class="fld">Customer<select id="f_cust"></select></label>
+        <label class="fld">Quality<select id="f_qual"></select></label>
+        <label class="fld">Due in (days)<input id="f_due" type="number" value="6" min="1"></label>
+        <label class="fld">Priority<select id="f_pri"><option value="1">1 — Urgent</option><option value="2" selected>2 — Normal</option><option value="3">3 — Low</option></select></label>
+      </div>
+      <div class="fldlabel">Shades &amp; quantities <span class="small muted">— same quality, one or more shades (each ≥ 300 m)</span></div>
+      <div id="shadeLines"></div>
+      <button class="addshade" onclick="addShadeLine()">+ Add another shade</button>
+      <div style="margin-top:16px"><button class="btn" onclick="submitOrder()">Log order</button></div>
+      <div class="result" id="orderResult"></div>
+    </div></div>
+  </section>
+
+  <!-- Order status tracker -->
+  <section class="view" id="v-orderstatus" style="display:none">
+    <div class="bar">
+      <div class="search"><span class="material-symbols-rounded">search</span>
+        <input id="os_search" placeholder="Search lot, challan, quality, shade, party…" oninput="renderOrderStatus()"></div>
+      <span class="spacer"></span>
+      <span class="small muted" id="os_note"></span>
+    </div>
+    <div id="os_body"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+document.getElementById("secTabs").addEventListener("click",e=>{
+  const s=e.target.closest("button")&&e.target.closest("button").dataset.s; if(!s)return;
+  document.querySelectorAll("#secTabs button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));
+  document.querySelectorAll(".view").forEach(v=>v.style.display=(v.id==="v-"+s)?"":"none");
+  if(s==="orderstatus") renderOrderStatus();
+});
+function show(s){const b=document.querySelector('#secTabs button[data-s="'+s+'"]'); if(b) b.click();}
+
+/* ---- order form (shades are quality-specific) ---- */
+const shadeOptions=(quality)=>{const list=shadesForQuality(quality); return (list.length?list:[]).map(s=>`<option>${esc(s.shade)}</option>`).join("");};
+function addShadeLine(shade,m){
+  const q=document.getElementById("f_qual").value, opts=shadeOptions(q);
+  const row=document.createElement("div"); row.className="slrow";
+  row.innerHTML=`<select class="sl-shade">${opts||'<option value="">— no shades for this quality —</option>'}</select>
+    <input class="sl-m" type="number" value="${m||3000}" min="300" step="100">
+    <button class="rm" onclick="this.closest('.slrow').parentNode.children.length>1 && this.closest('.slrow').remove()">×</button>`;
+  if(shade && opts.indexOf(shade)>=0) row.querySelector(".sl-shade").value=shade;
+  document.getElementById("shadeLines").appendChild(row);
+}
+function refreshShadeSelects(){
+  const q=document.getElementById("f_qual").value, opts=shadeOptions(q);
+  document.querySelectorAll('#shadeLines .sl-shade').forEach(sel=>{ sel.innerHTML=opts||'<option value="">— no shades for this quality —</option>'; });
+}
+async function submitOrder(){
+  const lines=[...document.querySelectorAll('#shadeLines .slrow')].map(r=>({shade:r.querySelector('.sl-shade').value,m:+r.querySelector('.sl-m').value}));
+  const minM=cfg().minMeters||300;
+  for(const ln of lines){ if(!ln.m||ln.m<minM){ alert(ln.shade+`: below ${minM} m minimum load.`); return; } }
+  const o={id:"SO-N"+(1000+DB.orders.length),cust:f_cust.value,qual:f_qual.value,lines,due:+f_due.value,pri:+f_pri.value};
+  const res=await API.save("orders",o); if(res&&res.error){ toast(res.error); return; }
+  const q=Q(o.qual), totalM=lines.reduce((a,l)=>a+l.m,0), totalKg=q?kgOf(totalM,q.gsm,q.width):0, batches=splitOrder(o);
+  const r=document.getElementById("orderResult"); r.classList.add("on");
+  r.innerHTML=`<h3>✓ ${o.id} logged</h3>
+    <div class="small muted">${totalM} m of ${esc(o.qual)}${q?(' @ '+q.gsm+' gsm'):''} across ${lines.length} shade(s)${q?(' → <b>'+totalKg.toFixed(0)+' kg</b>'):''}</div>
+    <div style="margin:8px 0">Estimated split into <b>${batches.length}</b> batch(es): ${batches.map(b=>`<span class="chip"><span class="swatch" style="background:${shadeColor(b.shade,b.qual)}"></span>${b.key} · ${esc(b.shade)} · ${b.meters} m</span>`).join("")}</div>
+    <div class="small muted" style="margin-top:6px">Create the actual batches in <b>Operations → Batch planner</b> — the schedule runs off batches.</div>`;
+  toast("Order saved");
+}
+
+/* ---- order status tracker ---- */
+function _dbet(a,b){ if(!a||!b) return ""; const d1=new Date(a), d2=new Date(b); if(isNaN(d1)||isNaN(d2)) return ""; return Math.round((d2-d1)/86400000); }
+function _todayISO(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function renderOrderStatus(){
+  if(!can("op_orderstatus")) return;
+  const body=document.getElementById("os_body"); if(!body) return;
+  const term=((document.getElementById("os_search")||{}).value||"").toLowerCase();
+  const rows=(DB.lots||[]).map(l=>{
+    const takas=(l.takas||[]).map(Number).filter(n=>!isNaN(n));
+    const pcs=takas.length||+l.pcs||0, mtr=Math.round(takas.reduce((a,b)=>a+b,0))||+l.meters||0;
+    const ind=l.inDate||"", fin=l.finishDate||"";
+    return {id:l.id, date:ind, challan:l.weaverChallanNo||"", pcs, mtr, weight:l.weight||"", quality:l.quality||"", shade:l.toShade||"",
+      design:l.designNo||"", party:l.customer||"", scour:l.scourDate||"", poly:l.polyDyeDate||"", cotton:l.cottonDyeDate||"", finish:fin,
+      proc:_dbet(l.scourDate, fin), lead:_dbet(ind, fin), age:fin?_dbet(ind,fin):_dbet(ind,_todayISO()), remark:l.orderRemark||""};
+  });
+  let list=rows;
+  if(term) list=list.filter(r=>[r.id,r.challan,r.quality,r.shade,r.design,r.party,r.remark].some(v=>String(v).toLowerCase().indexOf(term)>=0));
+  list.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  document.getElementById("os_note").textContent=list.length+" of "+rows.length+" lots";
+  const canEd=canEdit("op_orderstatus");
+  const H=['Date','Lot no.','Challan','Pcs','Mtr','Weight','Quality','Shade','Design no.','Party','Scouring','Poly dyeing','Cotton dyeing','Finish','Process (d)','Lead (d)','Age (d)','Remark'];
+  body.innerHTML='<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr>'+H.map(h=>'<th>'+h+'</th>').join("")+(canEd?'<th></th>':'')+'</tr></thead><tbody>'
+    +(list.length?list.map(r=>'<tr>'
+      +'<td class="tnum small">'+esc(r.date||"")+'</td><td class="tnum">'+esc(r.id)+'</td><td class="tnum">'+esc(r.challan||"—")+'</td>'
+      +'<td class="tnum">'+r.pcs+'</td><td class="tnum">'+r.mtr+'</td><td class="tnum">'+esc(String(r.weight||""))+'</td>'
+      +'<td>'+esc(r.quality)+'</td><td>'+(r.shade?'<span class="swatch" style="background:'+shadeColor(r.shade,r.quality)+'"></span> ':'')+esc(r.shade||"")+'</td>'
+      +'<td>'+esc(r.design||"")+'</td><td>'+esc(r.party||"")+'</td>'
+      +'<td class="tnum small">'+esc(r.scour||"")+'</td><td class="tnum small">'+esc(r.poly||"")+'</td><td class="tnum small">'+esc(r.cotton||"")+'</td><td class="tnum small">'+esc(r.finish||"")+'</td>'
+      +'<td class="tnum">'+(r.proc===""?"—":r.proc)+'</td><td class="tnum">'+(r.lead===""?"—":r.lead)+'</td><td class="tnum">'+(r.age===""?"—":r.age)+'</td>'
+      +'<td class="small muted">'+esc(r.remark||"")+'</td>'
+      +(canEd?'<td><button class="btn ghost sm" onclick=\'editOrderStatus('+JSON.stringify(r.id)+')\'>Edit</button></td>':'')
+      +'</tr>').join("")
+      :'<tr><td colspan="'+(H.length+(canEd?1:0))+'" style="text-align:center;color:var(--muted);padding:26px">No lots'+(term?' match your search':' yet')+'.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+function editOrderStatus(id){
+  const l=(DB.lots||[]).find(x=>x.id===id); if(!l) return;
+  const ex=document.getElementById("osOverlay"); if(ex) ex.remove();
+  const f=k=>esc(l[k]||"");
+  const o=document.createElement("div"); o.id="osOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:540px;max-width:94vw"><div class="m-h"><h3><span class="material-symbols-rounded">edit_calendar</span>Order status — '+esc(id)+'</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b"><div class="small muted" style="margin:0 0 10px">'+esc(l.quality||"")+' · '+esc(l.customer||"no party")+' · challan '+esc(l.weaverChallanNo||"—")+'</div>'
+    +'<div class="row" style="flex-wrap:wrap;gap:12px">'
+    +'<label class="fld" style="flex:1;min-width:150px">Design no.<input id="os_design" value="'+f("designNo")+'"></label>'
+    +'<label class="fld" style="flex:1;min-width:150px">Shade (to dye)<input id="os_shade" value="'+f("toShade")+'"></label>'
+    +'<label class="fld" style="flex:1;min-width:150px">Scouring date<input id="os_scour" type="date" value="'+f("scourDate")+'"></label>'
+    +'<label class="fld" style="flex:1;min-width:150px">Poly dyeing date<input id="os_poly" type="date" value="'+f("polyDyeDate")+'"></label>'
+    +'<label class="fld" style="flex:1;min-width:150px">Cotton dyeing date<input id="os_cotton" type="date" value="'+f("cottonDyeDate")+'"></label>'
+    +'<label class="fld" style="flex:1;min-width:150px">Finish date<input id="os_finish" type="date" value="'+f("finishDate")+'"></label>'
+    +'<label class="fld" style="flex:1 1 100%">Remark<input id="os_remark" value="'+f("orderRemark")+'"></label>'
+    +'</div></div><div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" onclick="saveOrderStatus('+JSON.stringify(id)+')"><span class="material-symbols-rounded">check</span>Save</button></div></div>';
+  document.body.appendChild(o);
+}
+async function saveOrderStatus(id){
+  const g=x=>document.getElementById(x).value;
+  const fields={designNo:g("os_design"),toShade:g("os_shade"),scourDate:g("os_scour"),polyDyeDate:g("os_poly"),cottonDyeDate:g("os_cotton"),finishDate:g("os_finish"),orderRemark:g("os_remark")};
+  const res=await API._post({op:"orderStatusSave",lotId:id,fields});
+  if(res&&res.error){ toast(res.error); return; }
+  if(res.row){ const i=(DB.lots||[]).findIndex(l=>l.id===id); if(i>=0) DB.lots[i]=res.row; }
+  const ov=document.getElementById("osOverlay"); if(ov) ov.remove();
+  renderOrderStatus(); toast("Saved");
+}
+
+const TABMAP={order:"op_order",orderstatus:"op_orderstatus"};
+boot(()=>{
+  const hasOrder=can("op_order");
+  if(hasOrder){
+    f_cust.innerHTML=DB.customers.map(c=>`<option>${esc(c.name)}</option>`).join("");
+    f_qual.innerHTML=DB.qualities.map(q=>`<option>${esc(q.name)}</option>`).join("");
+    f_qual.addEventListener("change",refreshShadeSelects);
+    addShadeLine();
+  }
+  const allowed=Object.keys(TABMAP).filter(s=>can(TABMAP[s]));
+  document.querySelectorAll('#secTabs button').forEach(b=>{ b.style.display=allowed.includes(b.dataset.s)?"":"none"; });
+  if(!allowed.length){
+    document.querySelector('main').innerHTML='<div class="page-head"><h1>No sales access</h1><p>Your role has no Sales pages assigned. Ask an administrator, or open the <a href="index.html">Operations</a> / <a href="admin.html">Admin</a> console.</p></div>';
+    return;
+  }
+  renderUserBox();
+  if(!allowed.includes('order')) show(allowed[0]);
+});
+</script>
+</body>
+</html>

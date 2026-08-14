@@ -11,7 +11,7 @@
 <body>
 <header class="top">
   <div class="brand"><img class="brand-logo" src="favicon.svg" alt="REL-UNITY logo">REL-UNITY <small>ADMIN</small></div>
-  <nav><a href="index.html">Operations</a><a href="admin.html" class="on">Admin</a></nav>
+  <nav><a href="index.html">Operations</a><a href="sales.html">Sales</a><a href="admin.html" class="on">Admin</a></nav>
   <div class="right">
     <span id="userbox" style="display:flex;align-items:center;gap:8px"></span>
     <span class="envtag">Admin console</span>
@@ -290,7 +290,7 @@ const SCHEMAS={
 };
 /* every page a role can be granted (keys must match server ALL_PAGES) */
 const PAGES=[
-  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_order","New order","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Batch planner","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],
+  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Batch planner","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],["op_order","Sales — order entry","Sales"],["op_orderstatus","Sales — order status","Sales"],
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],
   ["shadeRecipes","Shade recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
