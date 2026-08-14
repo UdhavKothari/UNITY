@@ -1,6 +1,10 @@
-# REL Dyeing ERP — Project Handoff / Memory
+# REL-UNITY (formerly "REL Dyeing ERP") — Project Handoff / Memory
 
 **Purpose:** Attach or paste this file at the start of a new chat when you want to add features to this software. It gives full context so we can pick up without re-explaining.
+
+> **Name:** the product is now **REL-UNITY**. Older sections below still say "REL Dyeing ERP" — same software.
+> **Store now = SQLite** (`mvp/data.sqlite`), not `data.json`. `data.json` is only a one-time legacy import; ignore the "data.json is the only copy" line in the old intro. See the **Aug 2026** update for the current architecture.
+> **The three consoles:** `index.html` (Operations), `sales.html` (Sales), `admin.html` (Admin) — all share `app.js`.
 
 ---
 
@@ -281,3 +285,73 @@ In Mass Planning, if hand-picked takas exceed the assigned machine's `capMax`, t
 
 ### New tests
 `mvp/tests/test_migrate_massplan.py` (server-side `_migrate` backfill of `planDay`/`machine`/`seq` on existing batches), `mvp/tests/test_taka_alloc.js` (taka-level allocation/double-booking guard), `mvp/tests/test_seq.js` (sequence renumbering on reorder and cross-machine move), `mvp/tests/test_manualplan.js` (manual-plan rendering order, capacity block, no auto-split). All pass alongside the existing `mvp/tests/*` suite.
+
+---
+
+## Update — 14 Aug 2026 (consolidated: rename, SQLite scale-up, permissions, challan email pipeline, Sales console)
+
+This block consolidates the work between late July and 14 Aug. Product renamed **REL → REL-UNITY**. All changes are committed on `master`.
+
+### 🔐 Standing security constraints (carry into every session, verbatim)
+- **`mvp/secrets.local.json` is gitignored and MUST NOT be read** by the assistant. It holds external-system creds only (Gmail app password, future SQL Server creds). Template is `mvp/secrets.example.json`.
+- **Gmail needs an APP PASSWORD** (Google Account → Security → 2-step → App passwords), not the normal password.
+- **Never write test data into the live `data.sqlite` / `data.json`.** Test only on temp copies (copy `server.py` + `seed_data.json` + `static/` to `/tmp`, run there). The server auto-reloads on `server.py` edits and re-runs `_migrate` on live data — be aware saving the server file reshapes live data.
+- **There can be NEVER a duplicate LOT no.** Enforced server-side; keep it that way.
+
+### 🗄️ Architecture now: SQLite document store (replaced the single JSON blob)
+- Store is **`mvp/data.sqlite`**. Each logical table = rows of `(id TEXT PRIMARY KEY, data TEXT JSON)`; `_kv` holds settings + `_seq`. `data.json` is imported once on first run then ignored.
+- **Scalability for ~150 concurrent LAN users:** targeted **per-row writes** (snapshot-diff, not full-file rewrite), **gzip** responses, **ETag/304** caching, SQLite `busy_timeout`, and **patch-in-place** on the client (`API.save/del` patch the local `DB` + row instead of reloading everything). `patchLocalRow`/`removeLocalRow` in `app.js`.
+- **Heavy tables excluded from `/api/db`:** `recipes` (≈60k dye recipes), `activityLog`, and `challans` are NOT sent in the bulk snapshot — they load on demand (`challansLoad` op, recipe lookups). `_sanitized(db)` strips password hashes AND blanks `activityLog`/`challans`.
+- **Default pagination:** big tables load **200 rows** then stop (infinite-scroll in the modal for the rest).
+- **Port fallback:** `_bind_server()` tries the preferred port then falls back through `8090,8000,5000,3000,8081,8888` on Windows **WinError 10013** (port blocked/reserved).
+
+### 👤 Per-page view + edit permissions, single-session, operators-as-users
+- Roles now carry **`perms`** (which pages you can *view*) and **`edit`** (subset you can *change*). Server helpers `_edit_perms_for`, `_need_edit`; every mutation is `_need_edit`-gated (403 otherwise). Legacy roles default `edit == view`.
+- **One active session per user** — a new login drops the previous device's token (logs it out).
+- **Operators are login users:** they sign in with username + **PIN** (`operators` table, `pin` compared with `hmac.compare_digest`), get a role + page access like any user. (PINs are intentionally cleartext for now — hashing them is a deferred nicety.)
+- Admin default password unchanged: user **ADMIN** / see `mvp/README.md`.
+
+### 🎨 Shade colour engine (custom hex → family/tone)
+- A shade recipe can take a **custom hex**; `app.js` converts hex → **L\*a\*b\*** and derives **family + tone** automatically so swatches and light→dark ordering still work. "Sync" sets each shade's `program` to its recipe name.
+
+### 📇 Lot import (new EMPIRE/DyeingSM CSV format) + de-dup + idempotent guard
+- **The lot number is `DESPNO`** (not the column literally called "LOT"), and per-taka meters come from **`TakaPendingMts`**. `LotPcs`/`LotMts` are read as cross-check reference.
+- **EMPIRE emits one row per process step**, so a taka repeats many times — the importer **records each taka once** (dedup) and is **idempotent**: it hashes content to a stable id and checks whether an entry already exists before adding, so re-running the same import never creates duplicates or extra entries.
+- **"Clear all lots"** exists but was **moved into Admin → Settings → Data maintenance** (`clearAllLots()`), off the main toolbar. It's admin/edit-gated and logged.
+
+### ⚙️ Operations / batch changes
+- **25 kg batch capacity tolerance** — `capTolerance` so a load slightly over `capMax` isn't falsely blocked.
+- **Dye recipes got a `machine` field (JET / JIGGER);** `dyeStepOf()` = JET if set else JIGGER. `recipeCreate` op builds a recipe (with machine) from a lot; a **"Create Dye Recipe"** button seeds it.
+- **Schedule cursor modal** no longer shows the M/C field.
+- **Batch planner:** drag-to-reorder rows, a **rightmost per-batch notes** column (`mp_remarks`), and **hold-to-save (3 s press)** to commit a reordered sequence (`mpHoldStart`/`mpCommitOrder`) — avoids accidental saves while dragging.
+- **History page** (past/completed batches) was built then **moved into Admin**, permission-gated (`history`).
+- **Import + Export** were **combined into one "Excel" dropdown button** (`dataMenu`) instead of two separate buttons, on every page.
+
+### 📨 Mill-challan email → PDF → ERP pipeline (the big new subsystem)
+Connected mailbox **osbyrel@gmail.com**. Flow: weaver emails a **challan PDF** → we ingest it as an **"inward-pending"** record → ~1 week later EMPIRE issues the **lot no.**, and we **auto-match** the challan to the new lot.
+
+- **`mvp/challan_watch.py`** — Gmail **IMAP** poller. Reads creds from `secrets.local.json` (`gmailUser/gmailAppPassword/gmailFolder/gmailFromFilter/gmailSinceDays` default 5`/gmailPollHours`). Searches a **SINCE date window** (read *and* unread, `BODY.PEEK` so it doesn't mark mail read), dedups via `processed.txt` + attachment SHA-1, writes one JSON per challan to `inbox_challan/`, logs to `challan.log`, prunes stored PDFs to the newest 200. All IMAP/connection errors caught and reported clearly.
+- **`mvp/challan_parser.py`** — **position-based** `pdfplumber` parser (not blind text-split). Builds a column map from the header words' x-centres, extracts labelled fields, and **self-validates each page against the document's own TOTAL TAKA / TOTAL METER control totals**. Layout facts learned from real challans: two shade columns = **OWN SHADE + TO SHADE**; "Process" text = **"Dyeing / RF"**; customer names like **INDIGO**; **one page = one lot**; a taka **weight > 2 kg is real** (`REAL_WEIGHT_MIN=2.0`). Validated 32/32 pages on sample `CHALLAN_R00085`.
+- **Server ingestion:** `_challan_watcher` polls the `inbox_challan/` folder every **45 s** and `_apply_challan` writes each as a challan row with `status:"inward-pending"`, `weaverChallanNo = packingListNo` (challan no. starting **ML…**), stable id `CH-<hash>-<n>`.
+- **Server also re-checks the mailbox itself every 2 hours:** `_challan_email_scheduler` runs `challan_watch.py` as a **subprocess** every `gmailPollHours` (default 2; **0 = off**) so the main server stays dependency-free. (Added because the poller only picked up new mail on restart otherwise.)
+- **Reconciliation `_cl_match(c, lot)`** (quality-bucketed for O(challans + lots)): a challan links to a lot **only if ALL of** — quality matches, **pcs exact**, **total meters** (`abs ≤ max(2, 1%)`), **and per-taka sorted meters** (`abs ≤ max(3, 5%)`). It **auto-links only when exactly one lot matches** (refuses ambiguous), and never falls back to the looser quality+pcs test. On link it fills the lot's weight only if empty and enriches it. This tightening came after a bug where matching on quality+pcs alone **stuck challans to the wrong similar lots**.
+- **UI:** challans are reached via an **"Inward pending" button inside Lots Master** (not a left-nav item). Inward-pending rows are highlighted a **slightly greyer** colour; linked = green. `_migrate` upgrades old `status:"received"` challans to `inward-pending` and backfills `weaverChallanNo`/`lotId`.
+- **Quality-merge guardrails:** an earlier "auto-track width variants" feature accidentally merged *everything* to "5 STAR". The dangerous auto-tick was **removed**; `qualitiesMerge`/`qualitiesDedupe` now show an **impact preview + typed "MERGE" confirm** for risky merges (>4 qualities or >20 lots), and width-suffix dedup (`_normalize_quality` strips trailing `" NN INCH"`) is per-group and safe.
+- Docs: `mvp/docs/CHALLAN_EMAIL.md`.
+
+### 🧾 NEW this session — Sales console (`mvp/static/sales.html`)
+A **third top-level console** alongside Operations and Admin. Header nav on all three is now **Operations | Sales | Admin**.
+- **Tab 1 "Sales"** = the order-entry form **moved out of Operations** (the old Operations "Sales" tab, `v-order`, and its `addShadeLine/refreshShadeSelects/shadeOptions/submitOrder` functions were removed from `index.html`; `sales.html`'s copy of `submitOrder` drops the `draw()`/`S` Gantt dependencies that lived in `index.html`).
+- **Tab 2 "Order status"** = an **18-column tracker** over `DB.lots`: Date (`inDate`), Lot no. (`id`), Challan (`weaverChallanNo`), Pcs (len takas), Mtr (sum takas), Weight, Quality, Shade (`toShade`), Design no., Party (`customer`), Scouring/Poly-dyeing/Cotton-dyeing/Finish dates, **Process time (finish−scour)**, **Lead time (finish−in)**, **Age (today−in, or finish−in if finished)**, Remark. Search + newest-first sort.
+- **Editable manual fields** (`designNo, toShade, scourDate, polyDyeDate, cottonDyeDate, finishDate, orderRemark`) via a per-row Edit modal → new server op **`orderStatusSave`** (whitelists exactly those keys, gated by `_need_edit(("op_orderstatus",))`, 404 on unknown lot). Verified with a live temp-server smoke test: whitelist honoured (an injected `hackField` was rejected), 404 on bad lot.
+- **Permissions:** new page key **`op_orderstatus`** added to server `ALL_PAGES`; `op_order` + `op_orderstatus` appear in Admin → Roles under a new **"Sales"** group (`PAGES` in `admin.html`). A role with neither sees a "No sales access" message.
+
+### 🚚 Deployment gotcha (recurring — READ THIS if "the new feature isn't showing at the factory")
+The factory PC runs a **stale copy** unless you do all of: **(1)** `git pull` in a terminal, **(2)** fully **close the server window and re-run `start_server.bat`** (a running Python process keeps serving old code even after the files change), **(3)** hard-refresh the browser **Ctrl+F5** (static files are cached). The in-app "update" button can't pull a **private** repo without stored GitHub creds. Symptom seen this session: an op returned `403 "no edit permission for None"` purely because the *running* server predated that op. Offered but not yet done: make `start_server.bat` do a clean **pull + restart** itself.
+
+### Still pending / offered, not built
+- Make `start_server.bat` do pull-then-clean-restart; make the in-app updater work for the private repo.
+- Hash operator PINs (currently cleartext, intentional).
+- Lazy-load `lots` + `shadeRecipes` off `/api/db` (Phase 2 of the scale work).
+- "Undo last merge" safety net for the quality merge tool.
+- Push of the two local commits (`a48a802` Sales console + the prior challan-scheduler commit) — the sandbox can't reach GitHub, so **the owner pushes from their own terminal**.
