@@ -34,15 +34,17 @@ New/changed tables, all `(id, data-json)` blobs like the rest of the store.
 `machine` → a machines row/type (jet|jigger|stentor|heatset|…); `pooled=true` → global counter, no machine no.
 
 **workflows (new)** — graph shape only, no times:
-`{ id, name, nodes:[{id,kind,proc?}], edges:[{from,to}], assignedTo:[fabricGroupId] }`
-`kind`: input | proc | output. A DAG with one output node, ≥1 input nodes, joins allowed.
+`{ id, name, nodes:[{id,kind,proc?}], edges:[{from,to}] }`
+`kind`: input | proc | output. A DAG with one output node, ≥1 input nodes, joins allowed. **Assignment to qualities lives on the fabric group (`fabricGroups.workflowId`), not on the workflow** — single source of truth.
 
 **fabricGroups (new)** — assignment + time defaults:
 `{ id, name, workflowId, defaultTimes:{ processTypeId: minutes } }`
 
 **qualities (changed)** — add three fields; keep `step1–4_mc/time` until cutover, then drop:
 `+ fabricGroup, + nodeTimes:{ workflowNodeId: minutes }` (workflow is resolved via the group; a per-quality
-`workflowId` override is allowed but not required).
+`workflowId` override is allowed but not required). `fabricGroups.defaultTimes` is a **coarse seed keyed by
+process type**; `qualities.nodeTimes` is **precise, keyed by workflow node**, so two nodes of the same process
+type in one flow can carry different times.
 
 **batches (new shape)** — one machine-type operation:
 `{ id, processType, machine?, lots:[{lotId,takaNos:[…]}], shade, weightOverride, status, seq, … }`
