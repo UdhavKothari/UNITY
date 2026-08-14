@@ -94,11 +94,23 @@ cut cleaning).
 
 ## 7. Build order
 
-1. **Contained, no migration** — restricted batch edit (§3) + lot-numbers-everywhere (§4).
+1. **Contained, no migration** — restricted batch edit (§3) + lot-numbers-everywhere (§4) + per-user batch-planner rearranging (§9).
 2. **Foundations** — processTypes, fabricGroups, data-driven batch-id generator (§2); seed the process catalog.
 3. **Workflow builder** — integrate the prototype into the admin/master console; build ~15–20 flows; assign via
    fabric groups; enter per-quality node times. `step1–4` kept intact.
 4. **Cutover** — scheduler walks the graph; jigger sheet; retire `step1–4`.
+
+## 9. Batch-planner rearranging (per-user)
+
+Everywhere in the Operations batch maker, arrangement is user-adjustable and saved **per login** via the
+existing `savePrefs` op + `/api/me` delivery (same mechanism as the Order-status column widths):
+
+- **Machine order** — drag machine rows/columns to reorder, plus a one-tap **Sort A→Z**. Saved to
+  `prefs.plannerMachines: [machineId…]`; new/unlisted machines fall to the end in default order.
+- **Batch-table columns** — drag column headers to reorder, on top of the existing resize. Saved to
+  `prefs.<tableKey>ColOrder: [colKey…]` alongside the existing width map.
+- **Per-user everything** — each login keeps its own machine order + column order/width; nothing is shared
+  (confirmed choice). Reuses the self-service, own-record `savePrefs` path; no new permissions.
 
 ## 8. Non-goals (deferred, noted for later)
 
