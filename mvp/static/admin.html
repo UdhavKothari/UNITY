@@ -462,14 +462,12 @@ function render(){
     +'<div class="spacer"></div>'
     +((CUR==="lots" && can("challans")) ? '<button class="btn ghost" onclick="openInwardPending()"><span class="material-symbols-rounded">local_shipping</span>Inward pending</button>' : '')
     +((CUR==="lots" && (canEdit("qualities")||canEdit("shadeRecipes"))) ? '<button class="btn ghost" onclick="syncCatalog()"><span class="material-symbols-rounded">sync</span>Sync qualities &amp; shades</button>' : '')
-    +(mayEdit&&CUR==="lots" ? '<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>' : '')
     +(mayEdit&&CUR==="challans" ? '<button class="btn ghost" onclick="reconcileChallans()"><span class="material-symbols-rounded">link</span>Reconcile now</button>' : '')
-    +(mayEdit&&CUR==="lots" ? '<button class="btn ghost" onclick="openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openMergeQualities()"><span class="material-symbols-rounded">merge</span>Merge</button>' : '')
     +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
     +(mayEdit ? '<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>' : '')
-    +'<button class="btn ghost" onclick="exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export</button></div>'
+    +dataMenu(CUR)+'</div>'
     +'<div class="card"><div class="tbl-wrap"><table><thead><tr>'+sc.cols.map(x=>'<th class="sortable'+(st&&st.k===x[0]?" sort-"+st.dir:"")+'" onclick="toggleSort(\''+x[0]+'\')">'+x[1]
       +(st&&st.k===x[0]?' <span class="material-symbols-rounded sort-ic">'+(st.dir==="asc"?"arrow_upward":"arrow_downward")+'</span>':'')+'</th>').join("")+'<th></th></tr></thead><tbody>'
     +(total?pageRows.map(r=>rowHTML(CUR,sc,mayEdit,r)).join("")
@@ -478,6 +476,20 @@ function render(){
 }
 const PAGE_SIZE=200;                 // load 200 rows per page and stop; page/search for more
 let PAGENO={};                       // current page index per table
+/* one "Excel" button with an Import / Export drop-down (keeps toolbars compact) */
+function dataMenu(cur){
+  const canImp = canEdit(cur) && cur==="lots";      // pages that have an Excel importer
+  return '<div class="ddwrap">'
+    +'<button class="btn ghost" onclick="toggleDD(this)"><span class="material-symbols-rounded">table_view</span>Excel<span class="material-symbols-rounded" style="margin:0 -4px 0 -2px">arrow_drop_down</span></button>'
+    +'<div class="dd-menu">'
+    +(canImp?'<button onclick="closeDD(this);openLotImport()"><span class="material-symbols-rounded">upload_file</span>Import from Excel</button>':'')
+    +'<button onclick="closeDD(this);exportTableToExcel(CUR)"><span class="material-symbols-rounded">download</span>Export to Excel</button>'
+    +'</div></div>';
+}
+function toggleDD(btn){ const m=btn.nextElementSibling, open=m.classList.contains("on");
+  document.querySelectorAll(".dd-menu.on").forEach(x=>x.classList.remove("on")); if(!open) m.classList.add("on"); }
+function closeDD(el){ const m=el.closest(".dd-menu"); if(m) m.classList.remove("on"); }
+document.addEventListener("click",e=>{ if(!e.target.closest(".ddwrap")) document.querySelectorAll(".dd-menu.on").forEach(x=>x.classList.remove("on")); });
 function rowHTML(cur,sc,mayEdit,r){
   return '<tr class="'+((sc.rowClass&&sc.rowClass(r))||"")+'">'+sc.cols.map(x=>'<td>'+cellVal(cur,r,x[0])+'</td>').join("")
     +'<td><div class="rowbtns">'
@@ -1522,6 +1534,11 @@ function renderSettings(c){
      +'<button class="btn" id="sysUpdBtn" onclick="systemUpdate()"><span class="material-symbols-rounded">cloud_download</span>Check for updates &amp; apply</button>'
      +'<button class="btn ghost" onclick="systemRestart()"><span class="material-symbols-rounded">restart_alt</span>Restart server</button></div>'
      +'<pre id="sysOut" style="display:none;margin-top:12px;background:var(--surface-3);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:11.5px;white-space:pre-wrap;max-height:220px;overflow:auto"></pre>'
+     +'</div></div>'):'')
+   +(canEdit("lots")?('<div class="card" style="margin-top:16px"><div class="card-b">'
+     +'<h2 style="margin:0 0 4px;font-size:15px">Data maintenance</h2>'
+     +'<p class="small muted" style="margin:0 0 12px">Destructive — back up first (backup_db.bat). Qualities, shades, recipes and batches are not affected.</p>'
+     +'<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>'
      +'</div></div>'):'');
 }
 async function systemUpdate(){

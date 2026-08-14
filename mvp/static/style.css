@@ -510,6 +510,14 @@ tr.linked td{background:var(--success-soft)}
 .mp-wash{background:var(--info-soft)}
 .mp-wash td{border-bottom-color:#d6e0f5}
 
+/* ---- compact "Excel" import/export drop-down ---- */
+.ddwrap{position:relative;display:inline-block}
+.dd-menu{position:absolute;right:0;top:calc(100% + 5px);min-width:190px;background:var(--surface);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow-lift);padding:5px;display:none;z-index:30}
+.dd-menu.on{display:block}
+.dd-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:0;background:none;border-radius:7px;font:inherit;font-size:13px;color:var(--ink);cursor:pointer;text-align:left}
+.dd-menu button:hover{background:var(--surface-3)}
+.dd-menu .material-symbols-rounded{font-size:18px;color:var(--muted)}
+
 /* ---- table pagination (200 rows per page, then stop) ---- */
 .pager{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-top:1px solid var(--line)}
 .pager .pager-info{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
