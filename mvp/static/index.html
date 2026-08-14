@@ -409,8 +409,8 @@ function renderBatchList(){
   const el=document.getElementById("batchList"), list=(DB.batches||[]).slice().reverse();
   document.getElementById("batchCount").textContent=list.length+" batch(es)";
   if(!list.length){ el.innerHTML='<div class="empty"><span class="material-symbols-rounded">widgets</span><h3>No batches yet</h3><p>Create your first batch above — pick a quality, add its lots, and save.</p></div>'; return; }
-  el.innerHTML='<table><thead><tr><th>Batch</th><th>Status</th><th>Action</th><th>Lots</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th></tr></thead><tbody>'
-    +list.map(b=>`<tr><td><b class="tnum">${esc(b.id)}</b></td><td>${batchStatusPill(b)}</td><td>${batchLifeCell(b)}</td><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td></tr>`).join("")
+  el.innerHTML='<table><thead><tr><th>Lot no(s)</th><th>Status</th><th>Action</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th></tr></thead><tbody>'
+    +list.map(b=>`<tr><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${batchStatusPill(b)}</td><td>${batchLifeCell(b)}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td></tr>`).join("")
     +'</tbody></table>';
 }
 let MP_EDIT = null;   // {machineId} while an inline "new batch" editor is open
@@ -470,7 +470,7 @@ function renderMassPlan(){
         <td colspan="6"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
         <td class="mp-actions">${acts(b)}</td><td></td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
-      return `<tr ${drag}><td class="tnum">${b.seq}</td><td class="tnum">${esc(b.id)}</td><td>${esc(b.quality||"")}</td>
+      return `<tr ${drag}><td class="tnum">${b.seq}</td><td>${(b.lots||[]).map(l=>esc(l.lotId)).join(", ")||"—"}</td><td>${esc(b.quality||"")}</td>
         <td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
         <td class="small muted">${takas||"—"}</td><td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
         <td class="mp-actions">${acts(b)}</td>
@@ -481,7 +481,7 @@ function renderMassPlan(){
           : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="9"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
         : '');
     return `<div class="card mp-machine${editing?' editing':''}" ondragover="mcDragOverCard(event)" ondrop="mcDropCard(event,'${esc(m.id)}')"><div class="card-b">${head}
-      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th data-col="seq">Seq</th><th data-col="batch">Batch</th><th data-col="quality">Quality</th><th data-col="shade">Shade</th><th data-col="takas">Lots · takas</th><th data-col="pcs">Pcs</th><th data-col="mtr">Mtr</th><th data-col="kg">Kg</th><th data-col="status">Status</th><th data-col="remarks">Remarks</th></tr></thead>
+      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th data-col="seq">Seq</th><th data-col="batch">Lot no.</th><th data-col="quality">Quality</th><th data-col="shade">Shade</th><th data-col="takas">Lots · takas</th><th data-col="pcs">Pcs</th><th data-col="mtr">Mtr</th><th data-col="kg">Kg</th><th data-col="status">Status</th><th data-col="remarks">Remarks</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
