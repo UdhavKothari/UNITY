@@ -414,16 +414,34 @@ function renderBatchList(){
     +'</tbody></table>';
 }
 let MP_EDIT = null;   // {machineId} while an inline "new batch" editor is open
+let MC_DRAG=null;
+function orderedMachines(list){
+  const ord=(window.CURRENT_USER&&CURRENT_USER.prefs&&CURRENT_USER.prefs.mpMachineOrder)||[];
+  const base=list.map((m,i)=>({m,i})); const pos={}; ord.forEach((id,i)=>pos[id]=i);
+  base.sort((A,B)=>{ const pa=(pos[A.m.id]==null?1e9:pos[A.m.id]), pb=(pos[B.m.id]==null?1e9:pos[B.m.id]); return (pa-pb)||(A.i-B.i); });
+  return base.map(x=>x.m);
+}
+function mcDragStart(e,id){ MC_DRAG=id; if(e.dataTransfer){e.dataTransfer.effectAllowed="move";} }
+function mcDragOverCard(e){ if(MC_DRAG){ e.preventDefault(); } }
+function mcDropCard(e,overId){ e.preventDefault(); if(!MC_DRAG||MC_DRAG===overId){ MC_DRAG=null; return; }
+  let ids=orderedMachines((DB.machines||[]).slice()).map(m=>m.id);
+  const from=ids.indexOf(MC_DRAG), to=ids.indexOf(overId); MC_DRAG=null;
+  if(from<0||to<0) return; ids.splice(to,0,ids.splice(from,1)[0]); saveMcOrder(ids);
+}
+function sortMachinesAZ(){ const ids=(DB.machines||[]).slice().sort((a,b)=>String(a.id).localeCompare(String(b.id),undefined,{numeric:true})).map(m=>m.id); saveMcOrder(ids); }
+function saveMcOrder(ids){ CURRENT_USER.prefs=CURRENT_USER.prefs||{}; CURRENT_USER.prefs.mpMachineOrder=ids;
+  if(window.API&&API._post){ API._post({op:"savePrefs",prefs:{mpMachineOrder:ids}}).catch(()=>{}); }
+  renderMassPlan(); }
 function renderMassPlan(){
   if(!can("op_massplan")) return;
   const body=document.getElementById("mp_body");
-  const machines=(DB.machines||[]).slice();
+  const machines=orderedMachines((DB.machines||[]).slice());
   if(!machines.length){ body.innerHTML='<div class="empty"><span class="material-symbols-rounded">precision_manufacturing</span><h3>No machines yet</h3><p>Add machines in Admin and they will appear here to plan.</p></div>'; return; }
   let totB=0, totKg=0;
-  body.innerHTML=machines.map(m=>{
+  body.innerHTML='<div class="mp-toolbar" style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'+'<button class="btn ghost sm" onclick="sortMachinesAZ()"><span class="material-symbols-rounded">sort_by_alpha</span>Sort A→Z</button>'+'<span class="small muted">Drag a machine to reorder · saved to your login</span></div>'+machines.map(m=>{
     const rows=planBatches(m.id).filter(b=>b.status!=="done");   // resolved (end-time logged) batches drop to history
     totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
-    const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
+    const head=`<div class="mp-head"><span><span class="mp-mc-drag material-symbols-rounded" draggable="true" title="Drag to reorder machine" ondragstart="mcDragStart(event,'${esc(m.id)}')" ondragend="MC_DRAG=null" style="cursor:grab;color:var(--faint);vertical-align:-4px">drag_indicator</span> <span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
       <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
     const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
@@ -447,7 +465,7 @@ function renderMassPlan(){
           ? `<tr class="mp-editrow"><td colspan="10">${mpEditorHTML(m)}</td></tr>`
           : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="9"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
         : '');
-    return `<div class="card mp-machine${editing?' editing':''}"><div class="card-b">${head}
+    return `<div class="card mp-machine${editing?' editing':''}" ondragover="mcDragOverCard(event)" ondrop="mcDropCard(event,'${esc(m.id)}')"><div class="card-b">${head}
       <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th><th>Remarks</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
