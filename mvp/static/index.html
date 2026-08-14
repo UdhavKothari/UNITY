@@ -432,6 +432,21 @@ function sortMachinesAZ(){ const ids=(DB.machines||[]).slice().sort((a,b)=>Strin
 function saveMcOrder(ids){ CURRENT_USER.prefs=CURRENT_USER.prefs||{}; CURRENT_USER.prefs.mpMachineOrder=ids;
   if(window.API&&API._post){ API._post({op:"savePrefs",prefs:{mpMachineOrder:ids}}).catch(()=>{}); }
   renderMassPlan(); }
+let MPCOL_DRAG=null;
+const MP_COLS=["seq","batch","quality","shade","takas","pcs","mtr","kg","status","remarks"];
+function mpColOrder(){ let o=(window.CURRENT_USER&&CURRENT_USER.prefs&&CURRENT_USER.prefs.mpColOrder)||[]; o=o.filter(k=>MP_COLS.includes(k)); MP_COLS.forEach(k=>{ if(!o.includes(k)) o.push(k); }); return o; }
+function applyMpCols(){
+  const order=mpColOrder(); const perm=order.map(k=>MP_COLS.indexOf(k));
+  document.querySelectorAll("#mp_body table.mp-table").forEach(tbl=>{
+    tbl.querySelectorAll("tr").forEach(tr=>{ const cells=[...tr.children]; if(cells.length!==MP_COLS.length) return; perm.forEach(ci=>tr.appendChild(cells[ci])); });
+    tbl.querySelectorAll("thead th").forEach(th=>{ th.draggable=true; th.style.cursor="grab"; th.title="Drag to reorder column";
+      th.ondragstart=e=>{ MPCOL_DRAG=th.dataset.col; if(e.dataTransfer)e.dataTransfer.effectAllowed="move"; };
+      th.ondragover=e=>{ if(MPCOL_DRAG) e.preventDefault(); };
+      th.ondrop=e=>{ e.preventDefault(); mpColDrop(th.dataset.col); };
+      th.ondragend=()=>{ MPCOL_DRAG=null; }; });
+  });
+}
+function mpColDrop(over){ if(!MPCOL_DRAG||MPCOL_DRAG===over){ MPCOL_DRAG=null; return; } let o=mpColOrder(); const f=o.indexOf(MPCOL_DRAG), t=o.indexOf(over); MPCOL_DRAG=null; if(f<0||t<0)return; o.splice(t,0,o.splice(f,1)[0]); CURRENT_USER.prefs=CURRENT_USER.prefs||{}; CURRENT_USER.prefs.mpColOrder=o; if(window.API&&API._post) API._post({op:"savePrefs",prefs:{mpColOrder:o}}).catch(()=>{}); renderMassPlan(); }
 function renderMassPlan(){
   if(!can("op_massplan")) return;
   const body=document.getElementById("mp_body");
@@ -466,10 +481,11 @@ function renderMassPlan(){
           : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="9"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
         : '');
     return `<div class="card mp-machine${editing?' editing':''}" ondragover="mcDragOverCard(event)" ondrop="mcDropCard(event,'${esc(m.id)}')"><div class="card-b">${head}
-      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th>Seq</th><th>Batch</th><th>Quality</th><th>Shade</th><th>Lots · takas</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Status</th><th>Remarks</th></tr></thead>
+      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th data-col="seq">Seq</th><th data-col="batch">Batch</th><th data-col="quality">Quality</th><th data-col="shade">Shade</th><th data-col="takas">Lots · takas</th><th data-col="pcs">Pcs</th><th data-col="mtr">Mtr</th><th data-col="kg">Kg</th><th data-col="status">Status</th><th data-col="remarks">Remarks</th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
+  applyMpCols();
   if(MP_EDIT) mpInitEditor();
 }
 /* ---- inline batch editor, right inside the machine's table (the Excel-like quick path) ---- */
