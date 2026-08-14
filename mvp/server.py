@@ -622,7 +622,8 @@ class Handler(BaseHTTPRequestHandler):
             if not u:
                 return self._send(401, {"error": "not authenticated"})
             return self._send(200, {"user": {"username": u["username"], "role": u.get("role", ""),
-                                             "perms": perms, "edit": _edit_perms_for(db, u)}})
+                                             "perms": perms, "edit": _edit_perms_for(db, u),
+                                             "prefs": u.get("prefs") or {}}})
         if path == "/api/db":
             # fast path: an unchanged DB + a live session -> 304, with no lock and no full load
             if self.headers.get("If-None-Match") == _etag() and self._session_ok():
@@ -676,7 +677,8 @@ class Handler(BaseHTTPRequestHandler):
                 perms = _perms_for(db, u)
                 _log(db, username, "login", "users", u.get("id", ""), "signed in"); save_db(db)
                 return self._send(200, {"ok": True, "user": {"username": username, "role": u.get("role", ""),
-                                                            "perms": perms, "edit": _edit_perms_for(db, u)}},
+                                                            "perms": perms, "edit": _edit_perms_for(db, u),
+                                                            "prefs": u.get("prefs") or {}}},
                                   cookies=[f"sid={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL}"])
 
             if op == "logout":
@@ -706,6 +708,22 @@ class Handler(BaseHTTPRequestHandler):
                 u["salt"] = _new_salt(); u["passHash"] = _hash_pw(new, u["salt"])
                 _log(db, u["username"], "changePassword", "users", u.get("id", ""), "changed password"); save_db(db)
                 return self._send(200, {"ok": True})
+
+            if op == "savePrefs":
+                # a user saves their OWN ui preferences (e.g. Order-status column widths).
+                # self-service: writes only to the caller's own record, so no page permission is needed.
+                prefs = req.get("prefs")
+                if not isinstance(prefs, dict):
+                    return self._send(400, {"error": "prefs must be an object"})
+                if len(json.dumps(prefs)) > 8000:
+                    return self._send(400, {"error": "prefs too large"})
+                cur = u.get("prefs")
+                if not isinstance(cur, dict):
+                    cur = {}
+                cur.update(prefs)
+                u["prefs"] = cur
+                save_db(db)
+                return self._send(200, {"ok": True, "prefs": cur})
 
             if op == "batchStatus":
                 if _need_edit(("batches", "op_batch")):
@@ -765,7 +783,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "lot not found"})
                 allow = ("designNo", "scourDate", "polyDyeDate", "cottonDyeDate", "finishDate",
                          "orderRemark", "toShade")
-                for k, v in (req.get("fields") or {}).items():
+                fields = req.get("fields")
+                if not isinstance(fields, dict):
+                    return self._send(400, {"error": "fields must be an object"})
+                for k, v in fields.items():
                     if k in allow:
                         lot[k] = v
                 _log(db, u["username"], "orderStatus", "lots", lid, "updated order-status fields")
@@ -946,7 +967,7 @@ class Handler(BaseHTTPRequestHandler):
                 table = req.get("table")
                 if table in ("activityLog",) or table in HEAVY_TABLES:
                     return self._send(403, {"error": "not allowed for this table"})
-                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"]}.get(table, [table])
+                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"], "orders": ["orders", "op_order"]}.get(table, [table])
                 if _need_edit(allowed):
                     return self._send(403, {"error": "forbidden: no edit permission for %s" % table})
                 if table not in db or not isinstance(db.get(table), list):
@@ -968,7 +989,7 @@ class Handler(BaseHTTPRequestHandler):
             if table == "__settings__":
                 allowed = ["settings"]
             else:
-                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"]}.get(table, [table])
+                allowed = {"batches": ["batches", "op_batch"], "storageSlots": ["storageSlots", "op_storage"], "orders": ["orders", "op_order"]}.get(table, [table])
             if _need_edit(allowed):
                 return self._send(403, {"error": f"forbidden: no edit permission for {table}"})
 

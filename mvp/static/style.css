@@ -55,6 +55,14 @@ header.top .right{margin-left:auto;display:flex;align-items:center;gap:10px;colo
 
 /* ---- layout ---- */
 main{max-width:1280px;margin:0 auto;padding:24px}
+/* Sales console: Order Status is a full-width dashboard; keep the order-entry form readable */
+main.sales{max-width:none}
+main.sales #v-order{max-width:1180px}
+main.sales #v-orderstatus table{width:100%;min-width:1700px;table-layout:fixed}
+#v-orderstatus thead th,#v-orderstatus tbody td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#v-orderstatus thead th{position:relative}
+#v-orderstatus .cresz{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;user-select:none;touch-action:none}
+#v-orderstatus .cresz:hover{background:var(--accent-soft)}
 .page-head{margin-bottom:20px}
 .page-head h1{font-size:22px;font-weight:800}
 .page-head p{color:var(--ink-2);margin:4px 0 0;font-size:13.5px;max-width:70ch}
