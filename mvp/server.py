@@ -319,6 +319,12 @@ def _migrate(db):
         want = list(range(1, len(l.get("takas") or []) + 1))
         if l.get("takaNos") != want:
             l["takaNos"] = want; changed = True
+    for c in db.get("challans", []):                        # normalize challans ingested by an older build
+        if c.get("status") == "received":
+            c["status"] = "inward-pending"; changed = True
+        if not c.get("weaverChallanNo") and c.get("packingListNo"):
+            c["weaverChallanNo"] = c["packingListNo"]; changed = True
+        c.setdefault("lotId", "")
     today = time.strftime("%Y-%m-%d")
     seq_by = {}
     for b in db.get("batches", []):
