@@ -468,12 +468,14 @@ function renderMassPlan(){
         <td colspan="8"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
         <td class="mp-actions">${acts(b)}</td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
-      return `<tr ${drag}><td class="tnum">${b.seq}</td><td>${(b.lots||[]).map(l=>esc(l.lotId)).join(", ")||"—"}</td>
-        <td class="tnum">${b.pcs||0}</td><td class="tnum">${b.mtr||0}</td><td class="tnum">${b.weight||0}</td>
-        <td>${esc(b.quality||"")}</td><td><span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}</td>
-        <td class="tnum small">${b.startedAt?esc(b.startedAt.slice(11,16)):"—"}</td><td class="tnum small">${b.completedAt?esc(b.completedAt.slice(11,16)):"—"}</td>
-        <td class="tnum">${esc(b.ph||"")||"—"}</td>
-        <td class="mp-actions">${acts(b)}</td></tr>`;
+      const lots=(b.lots&&b.lots.length)?b.lots:[{lotId:(b.lotIds&&b.lotIds[0])||"—",pcs:b.pcs,mtr:b.mtr,weight:b.weight}];
+      const n=lots.length;
+      const intime=b.startedAt?esc(b.startedAt.slice(11,16)):"—", outtime=b.completedAt?esc(b.completedAt.slice(11,16)):"—";
+      const shadeCell=`<span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}`;
+      return lots.map((l,i)=> i===0
+        ? `<tr ${drag} class="mp-brow mp-btop"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
+        : `<tr ${drag} class="mp-brow mp-lotsub"><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td></tr>`
+      ).join("");
     }).join("") : `<tr><td colspan="11" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (mayEdit ? (editing
           ? `<tr class="mp-editrow"><td colspan="11">${mpEditorHTML(m)}</td></tr>`
@@ -484,7 +486,6 @@ function renderMassPlan(){
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
-  applyMpCols();
   if(MP_EDIT) mpInitEditor();
 }
 /* ---- inline batch editor, right inside the machine's table (the Excel-like quick path) ---- */
