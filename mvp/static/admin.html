@@ -7,6 +7,22 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="style.css">
+<style>
+.wf-qedit{display:flex;flex-direction:column;gap:10px}
+.qwf-sel{max-width:340px}
+.qwf-strip{display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px;padding:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px}
+.qwf-node{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:92px}
+.qwf-tile{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.qwf-tile .material-symbols-rounded{font-size:26px}
+.qwf-nm{font-size:12px;font-weight:600;text-align:center;line-height:1.15;color:var(--ink)}
+.qwf-tin{display:flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--line-2);border-radius:8px;padding:3px 7px}
+.qwf-time{width:50px;border:none;background:transparent;font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:13px;text-align:right;color:var(--ink)}
+.qwf-time:focus{outline:none}
+.qwf-u{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted)}
+.qwf-arrow{align-self:center;margin-top:14px;color:var(--faint);font-size:22px}
+.qwf-empty{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;padding:12px}
+.qwf-empty .material-symbols-rounded{font-size:20px;color:var(--accent)}
+</style>
 </head>
 <body>
 <header class="top">
@@ -76,7 +92,7 @@ const SCHEMAS={
       {k:"maintIntervalDays",l:"Service every (days)",sec:"Maintenance",t:"number",min:0,help:"e.g. a drum every 60 days - the next date fills in automatically"},
       {k:"schedMaint",l:"Next maintenance (auto)",sec:"Maintenance",t:"readonly",help:"Calculated from last maintenance + interval"}]},
   qualities:{label:"Qualities",single:"quality",
-    cols:[["name","Quality"],["fabricGroup","Fabric group"],["gsm","GSM"],["route","Route (4 steps)"],["dyeStep","Dye @"],["maxBatch","Max kg"]],
+    cols:[["name","Quality"],["fabricGroup","Fabric group"],["gsm","GSM"],["route","Process flow"],["maxBatch","Max kg"]],
     search:["name"],
     fields:[
       {k:"name",l:"Quality name",sec:"Fabric",req:true},
@@ -86,19 +102,7 @@ const SCHEMAS={
       {k:"maxBatch",l:"Max batch (kg)",sec:"Fabric",t:"number",req:true,min:1},
       {k:"loadMin",l:"Loading time (min)",sec:"Fabric",t:"number",min:0,help:"Falls back to the Settings default if left blank"},
       {k:"unloadMin",l:"Unloading time (min)",sec:"Fabric",t:"number",min:0,help:"Falls back to the Settings default if left blank"},
-      {k:"step1_mc",l:"Step 1 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
-      {k:"step1_time",l:"Step 1 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0,showIf:{k:"step1_mc",ne:"stentor"}},
-      {k:"step1_speed",l:"Step 1 speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Time = meters ÷ speed + setup",showIf:{k:"step1_mc",eq:"stentor"}},
-      {k:"step2_mc",l:"Step 2 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
-      {k:"step2_time",l:"Step 2 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0,showIf:{k:"step2_mc",ne:"stentor"}},
-      {k:"step2_speed",l:"Step 2 speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Time = meters ÷ speed + setup",showIf:{k:"step2_mc",eq:"stentor"}},
-      {k:"step3_mc",l:"Step 3 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES},
-      {k:"step3_time",l:"Step 3 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0,showIf:{k:"step3_mc",ne:"stentor"}},
-      {k:"step3_speed",l:"Step 3 speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Time = meters ÷ speed + setup",showIf:{k:"step3_mc",eq:"stentor"}},
-      {k:"step4_mc",l:"Step 4 machine",sec:"Route - 4 machine steps in order",t:"select",o:MCTYPES,help:"Stentor normally sits here, after dyeing"},
-      {k:"step4_time",l:"Step 4 time (min)",sec:"Route - 4 machine steps in order",t:"number",min:0,showIf:{k:"step4_mc",ne:"stentor"}},
-      {k:"step4_speed",l:"Step 4 speed (m/min)",sec:"Route - 4 machine steps in order",t:"number",min:0,help:"Time = meters ÷ speed + setup",showIf:{k:"step4_mc",eq:"stentor"}},
-      {k:"dyeStep",l:"Which step is the dyeing step?",sec:"Route - 4 machine steps in order",t:"number",req:true,min:1,max:4,help:"Light-to-dark campaign and wash rules apply to this step only"}]},
+      {k:"workflowId",l:"Process flow",sec:"Process flow",t:"workflow",help:"Pick the process flow this quality runs, then set the time for each machine step. Build/edit flows with the Workflows button in the toolbar."}]},
   shadeRecipes:{label:"Shade recipes",single:"shade recipe",preview:"shade",
     cols:[["sw","."],["quality","Quality"],["shade","Shade"],["family","Family"],["tone","Tone"],["program","Program"],["specL","L*"],["speca","a*"],["specb","b*"]],
     search:["quality","shade","family","program"],
@@ -358,6 +362,7 @@ function cellVal(table,r,k){
   if(k==="plc") return r.plc?"Yes":"";
   if(k==="active") return r.active?'<span class="pill run">Active</span>':'<span class="pill free">Disabled</span>';
   if(k==="route"){
+    if(r.workflowId){ const w=(DB.workflows||[]).find(x=>x.id===r.workflowId); return w?('<span class="tnum">'+esc(w.name||"flow")+'</span>'):'<span class="muted">missing flow</span>'; }
     const p=[]; for(let i=1;i<=4;i++){ const mc=r["step"+i+"_mc"]; if(!mc) continue;
       const sp=+r["step"+i+"_speed"]||0, lbl=esc(mc)+(mc==="stentor"&&sp?(' <span class="muted">'+sp+'m/min</span>'):'');
       p.push((i===(+r.dyeStep||3))?'<b>'+lbl+'</b>':lbl); }
@@ -942,6 +947,7 @@ function fieldInput(f,val){
     return '<div class="lotbox" id="lotBox">'+sel.map(v=>lotRow(v,ids)).join("")+'</div>'
       +'<div class="taka-ctl"><button type="button" class="btn ghost sm" onclick="addLotRow()"><span class="material-symbols-rounded">add</span>Add lot</button><span class="taka-count" id="lotCount"></span></div>';
   }
+  if(f.t==="workflow") return '<div class="wf-qedit" id="qwf"></div>';
   let opts=null;
   if(f.t==="select") opts=f.o;
   if(f.t==="qsel") opts=DB.qualities.map(q=>q.name);
@@ -955,6 +961,35 @@ function fieldInput(f,val){
   if(opts) return '<select data-k="'+f.k+'">'+opts.map(o=>'<option'+(o===val?" selected":"")+'>'+esc(o)+'</option>').join("")+'</select>';
   return '<input type="text" value="'+esc(val==null?"":val)+'" data-k="'+f.k+'">';
 }
+function qwfMcMeta(){ return {jet:"water_drop",jigger:"waves",stentor:"compress",heatset:"local_fire_department",drum:"cyclone",hydro:"mode_fan",rope:"timeline"}; }
+function wfTopoProcNodes(wf){
+  const nodes=wf.nodes||[],edges=wf.edges||[],adj={},indeg={};
+  nodes.forEach(n=>{adj[n.id]=[];indeg[n.id]=0;});
+  edges.forEach(e=>{ if(adj[e.from]){adj[e.from].push(e.to);indeg[e.to]=(indeg[e.to]||0)+1;} });
+  const rank={},q=nodes.filter(n=>indeg[n.id]===0).map(n=>n.id); q.forEach(id=>rank[id]=0);
+  const d={...indeg},queue=[...q];
+  while(queue.length){ const id=queue.shift(); (adj[id]||[]).forEach(t=>{ rank[t]=Math.max(rank[t]??0,(rank[id]||0)+1); if(--d[t]===0) queue.push(t); }); }
+  return nodes.filter(n=>n.kind==="proc").sort((a,b)=>(rank[a.id]||0)-(rank[b.id]||0));
+}
+function wireQualityWorkflow(row){
+  const box=document.getElementById("qwf"); if(!box) return;
+  box.innerHTML='<select class="qwf-sel" data-k="workflowId" onchange="qwfRender(this.value)"><option value="">— no process flow —</option>'
+    +(DB.workflows||[]).map(w=>'<option value="'+esc(w.id)+'"'+(w.id===row.workflowId?" selected":"")+'>'+esc(w.name||"(unnamed)")+'</option>').join("")
+    +'</select><div class="qwf-strip" id="qwfStrip"></div>';
+  qwfRender(row.workflowId||"");
+}
+function qwfRender(wfId){
+  const strip=document.getElementById("qwfStrip"); if(!strip) return;
+  const wf=(DB.workflows||[]).find(w=>w.id===wfId);
+  if(!wf){ strip.innerHTML='<div class="qwf-empty"><span class="material-symbols-rounded">account_tree</span><span>Pick a process flow — or build one with the <b>Workflows</b> button in the toolbar.</span></div>'; return; }
+  const nodes=wfTopoProcNodes(wf), icons=qwfMcMeta(), saved=(editRow&&editRow.nodeTimes)||{};
+  if(!nodes.length){ strip.innerHTML='<div class="qwf-empty"><span class="material-symbols-rounded">info</span><span>This flow has no machine steps yet.</span></div>'; return; }
+  strip.innerHTML=nodes.map((n,i)=>{ const p=(DB.processTypes||[]).find(x=>x.id===n.proc)||{}, ic=icons[p.machine]||"help";
+    const t=(saved[n.id]!=null)?saved[n.id]:(+p.defTime||0);
+    return (i>0?'<span class="qwf-arrow material-symbols-rounded">arrow_forward</span>':'')
+      +'<div class="qwf-node"><div class="qwf-tile"><span class="material-symbols-rounded">'+ic+'</span></div><div class="qwf-nm">'+esc(p.name||"?")+'</div>'
+      +'<div class="qwf-tin"><input class="qwf-time" type="number" min="0" data-node="'+esc(n.id)+'" value="'+esc(String(t))+'"><span class="qwf-u">min</span></div></div>'; }).join("");
+}
 function openModal(table,id){
   editTable=table; const sc=SCHEMAS[table];
   editRow = id!=null ? JSON.parse(JSON.stringify(DB[table].find(r=>r.id===id)||{})) : {};
@@ -964,7 +999,7 @@ function openModal(table,id){
   sc.fields.forEach(f=>{ if(f.sec!==cur){cur=f.sec;secs.push({t:cur,fields:[]});} secs[secs.length-1].fields.push(f); });
   let html = (table==="shadeRecipes")?'<div class="previewbox"><div class="bigsw" id="pvSw"></div><div class="pv-meta" id="pvMeta"></div></div>':"";
   html += secs.map(s=>'<div class="form-sec"><h4>'+s.t+'</h4><div class="grid2">'
-    +s.fields.map(f=>'<label class="fld"'+((f.t==="perms"||f.t==="textarea")?' style="grid-column:1/-1"':'')
+    +s.fields.map(f=>'<label class="fld"'+((f.t==="perms"||f.t==="textarea"||f.t==="workflow")?' style="grid-column:1/-1"':'')
       +(f.showIf?' data-show-k="'+f.showIf.k+'"'+(f.showIf.eq!=null?' data-show-eq="'+esc(f.showIf.eq)+'"':'')+(f.showIf.ne!=null?' data-show-ne="'+esc(f.showIf.ne)+'"':''):'')
       +'>'+f.l+(f.req?'<span class="req">*</span>':'')+fieldInput(f,editRow[f.k])
       +(f.help?'<span class="help">'+f.help+'</span>':'')+'<span class="err">Required</span></label>').join("")+'</div></div>').join("");
@@ -977,6 +1012,7 @@ function openModal(table,id){
   if(table==="shadeRecipes"){ ["family","tone","shade","quality","specL","speca","specb","hex"].forEach(k=>{const el=document.querySelector('#mBody [data-k="'+k+'"]'); if(el){el.addEventListener("input",updateShadePreview);el.addEventListener("change",updateShadePreview);}}); updateShadePreview(); }
   if(table==="lots"){ const el=document.querySelector('#mBody [data-k="lotNo"]');   // lot number is the identity: editable on create, locked on edit
     if(el && id!=null){ el.value=editRow.id||""; el.readOnly=true; el.style.background="var(--surface-2)"; el.style.color="var(--ink-2)"; } }
+  if(editTable==="qualities") wireQualityWorkflow(editRow);
   updateTakaCount(); updateLotCount(); updateAuxCount(); wireLotRows(); syncLotTotals();
   document.getElementById("mBody").onchange=evalConditionalFields; evalConditionalFields();
   document.getElementById("modalBg").classList.add("on");
@@ -1045,6 +1081,11 @@ async function saveModal(){
       return;
     }
     if(f.t==="batchTotal") return;   // derived/display-only, nothing to read back
+    if(f.t==="workflow"){
+      const sel=document.querySelector('#mBody [data-k="workflowId"]'); row.workflowId=sel?sel.value:"";
+      const times={}; document.querySelectorAll('#mBody .qwf-time').forEach(inp=>{ if(inp.dataset.node) times[inp.dataset.node]=(inp.value===""?0:+inp.value); });
+      row.nodeTimes=times; return;
+    }
     const el=document.querySelector('#mBody [data-k="'+f.k+'"]'); if(!el)return;
     let v = f.t==="bool"?el.checked : (f.t==="number"? (el.value===""?"":+el.value) : el.value);
     const lab=el.closest(".fld"); const err=lab.querySelector(".err");

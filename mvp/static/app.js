@@ -440,7 +440,25 @@ function dyeStepOf(q){
   for(let i=1;i<=4;i++) if(String(q["step"+i+"_mc"]||"").toLowerCase()==="jigger") return i;
   return +q.dyeStep||3;
 }
+function _routeFromWorkflow(q, meters){
+  if(!q||!q.workflowId) return null;
+  const wf=(DB.workflows||[]).find(w=>w.id===q.workflowId); if(!wf||!wf.nodes) return null;
+  const nodes=wf.nodes,edges=wf.edges||[],adj={},indeg={};
+  nodes.forEach(n=>{adj[n.id]=[];indeg[n.id]=0;});
+  edges.forEach(e=>{ if(adj[e.from]){adj[e.from].push(e.to);indeg[e.to]=(indeg[e.to]||0)+1;} });
+  const rank={},q0=nodes.filter(n=>indeg[n.id]===0).map(n=>n.id); q0.forEach(id=>rank[id]=0);
+  const d={...indeg},queue=[...q0];
+  while(queue.length){ const id=queue.shift(); (adj[id]||[]).forEach(t=>{ rank[t]=Math.max(rank[t]??0,(rank[id]||0)+1); if(--d[t]===0) queue.push(t); }); }
+  const procs=nodes.filter(n=>n.kind==="proc").sort((a,b)=>(rank[a.id]||0)-(rank[b.id]||0));
+  const nt=q.nodeTimes||{};
+  const steps=procs.map((n,i)=>{ const p=(DB.processTypes||[]).find(x=>x.id===n.proc)||{}; const t=(nt[n.id]!=null?+nt[n.id]:(+p.defTime||0)); return {idx:i+1,mc:p.machine||"jet",time:+t||0,isDye:false,node:n.id}; }).filter(st=>st.time>0);
+  if(!steps.length) return null;
+  let dye=steps.findIndex(st=>st.mc==="jet"); if(dye<0) dye=steps.findIndex(st=>st.mc==="jigger"); if(dye<0) dye=steps.length-1;
+  steps.forEach((st,i)=>st.isDye=(i===dye));
+  return steps;
+}
 function routeOf(q, meters){
+  const wfr=_routeFromWorkflow(q, meters); if(wfr) return wfr;   // workflow-assigned qualities use their flow
   const out=[]; const dye=dyeStepOf(q);
   for(let i=1;i<=4;i++){
     const mc=q["step"+i+"_mc"]||""; if(!mc) continue;
