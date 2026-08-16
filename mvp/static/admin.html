@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="style.css">
 <style>
 .wf-qedit{display:flex;flex-direction:column;gap:10px}
+.qwf-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .qwf-sel{max-width:340px}
 .qwf-strip{display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px;padding:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px}
 .qwf-node{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:92px}
@@ -973,9 +974,9 @@ function wfTopoProcNodes(wf){
 }
 function wireQualityWorkflow(row){
   const box=document.getElementById("qwf"); if(!box) return;
-  box.innerHTML='<select class="qwf-sel" data-k="workflowId" onchange="qwfRender(this.value)"><option value="">— no process flow —</option>'
+  box.innerHTML='<div class="qwf-top"><select class="qwf-sel" data-k="workflowId" onchange="qwfRender(this.value)"><option value="">— no process flow —</option>'
     +(DB.workflows||[]).map(w=>'<option value="'+esc(w.id)+'"'+(w.id===row.workflowId?" selected":"")+'>'+esc(w.name||"(unnamed)")+'</option>').join("")
-    +'</select><div class="qwf-strip" id="qwfStrip"></div>';
+    +'</select>'+(can("op_workflows")?'<button type="button" class="btn ghost sm" onclick="qwfOpenBuilder()"><span class="material-symbols-rounded">account_tree</span>New / edit flows</button>':'')+'</div><div class="qwf-strip" id="qwfStrip"></div>';
   qwfRender(row.workflowId||"");
 }
 function qwfRender(wfId){
@@ -990,6 +991,10 @@ function qwfRender(wfId){
       +'<div class="qwf-node"><div class="qwf-tile"><span class="material-symbols-rounded">'+ic+'</span></div><div class="qwf-nm">'+esc(p.name||"?")+'</div>'
       +'<div class="qwf-tin"><input class="qwf-time" type="number" min="0" data-node="'+esc(n.id)+'" value="'+esc(String(t))+'"><span class="qwf-u">min</span></div></div>'; }).join("");
 }
+function qwfOpenBuilder(){ if(typeof openWorkflowsModal!=="function"){ toast("Workflow builder not loaded"); return; } window.WF_ON_CLOSE=qwfRefreshOptions; openWorkflowsModal(); }
+function qwfRefreshOptions(){ const sel=document.querySelector('#qwf .qwf-sel'); if(!sel) return; const cur=sel.value;
+  sel.innerHTML='<option value="">— no process flow —</option>'+(DB.workflows||[]).map(w=>'<option value="'+esc(w.id)+'"'+(w.id===cur?" selected":"")+'>'+esc(w.name||"(unnamed)")+'</option>').join("");
+  qwfRender(cur); }
 function openModal(table,id){
   editTable=table; const sc=SCHEMAS[table];
   editRow = id!=null ? JSON.parse(JSON.stringify(DB[table].find(r=>r.id===id)||{})) : {};

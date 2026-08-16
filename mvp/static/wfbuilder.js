@@ -271,7 +271,7 @@ function openWorkflowsModal(){
   const first=(DB.workflows||[])[0]; if(first) loadFlow(first.id); else newFlow();
   syncFlows();
 }
-function closeModal(){ const m=$("wfModal"); if(m) m.remove(); closeSheet(); closeNp(); }
+function closeModal(){ const m=$("wfModal"); if(m) m.remove(); closeSheet(); closeNp(); if(window.WF_ON_CLOSE){ var cb=window.WF_ON_CLOSE; window.WF_ON_CLOSE=null; try{cb();}catch(e){} } }
 
 window.openWorkflowsModal=openWorkflowsModal;
 window.WF={ newFlow, loadFlow, onAssign, delFlow, saveFlow, delNode, addInput, setTime, npSync, npPool, closeNp, saveNp, close:closeModal };
