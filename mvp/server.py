@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
+MOBILE = os.path.normpath(os.path.join(HERE, "..", "UNITY-MOBILE"))   # REL-UNITY floor PWA, served under /m/
 DB_PATH = os.path.join(HERE, "data.sqlite")
 JSON_PATH = os.path.join(HERE, "data.json")   # legacy store - imported once into SQLite if present
 SECRETS_PATH = os.path.join(HERE, "secrets.local.json")   # user-owned, gitignored, never logged
@@ -578,7 +579,7 @@ def recipes_clear():
 # ---------------------------------------------------------------- HTTP
 CT = {".html":"text/html",".js":"application/javascript",".css":"text/css",
       ".json":"application/json",".svg":"image/svg+xml",".ico":"image/x-icon",
-      ".woff2":"font/woff2",".woff":"font/woff"}
+      ".woff2":"font/woff2",".woff":"font/woff",".webmanifest":"application/manifest+json"}
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json", cookies=None, extra=None, cache=None):
@@ -653,6 +654,19 @@ class Handler(BaseHTTPRequestHandler):
             if not u:
                 return self._send(401, {"error": "login required"})
             return self._send(200, _sanitized(db), cache="no-cache", extra=[("ETag", _etag())])
+        # REL-UNITY mobile PWA (served from ../UNITY-MOBILE under /m/)
+        if path == "/m" or path.startswith("/m/"):
+            rel = path[len("/m"):].lstrip("/")     # "/m" and "/m/" -> "" -> index.html
+            if rel == "":
+                rel = "index.html"
+            mp = os.path.normpath(os.path.join(MOBILE, rel))
+            if not mp.startswith(MOBILE) or not os.path.isfile(mp):
+                mp = os.path.join(MOBILE, "index.html")   # SPA fallback so deep links resolve
+                if not os.path.isfile(mp):
+                    return self._send(404, {"error":"not found"})
+            mext = os.path.splitext(mp)[1]
+            with open(mp, "rb") as f:
+                return self._send(200, f.read(), CT.get(mext, "application/octet-stream"))
         # static files
         if path == "/" or path == "":
             path = "/index.html"
