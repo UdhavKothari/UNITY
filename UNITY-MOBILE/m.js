@@ -5,8 +5,16 @@ const app = () => $("app");
 function svg(n, px){ const g = ICON[n] || ""; return '<span class="ic"'+(px?' style="font-size:'+px+'px"':'')+'><svg viewBox="0 -960 960 960" aria-hidden="true">'+g+'</svg></span>'; }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 const MC_ICON = t => ({jet:"water_drop",jigger:"waves",drum:"cyclone",stentor:"compress",hydro:"mode_fan",rope:"timeline"}[t] || "precision_manufacturing");
+function empty(icon, title, desc){   // teaching empty state: icon + what's going on + what fixes it
+  return '<div class="empty">'+svg(icon)+'<b>'+esc(title)+'</b>'+(desc?'<span>'+esc(desc)+'</span>':'')+'</div>';
+}
 
 let USER = null, DB = null, OFFLINE = false, TOASTT = null;
+
+/* ---- permissions (mirror the web app: role -> viewable pages + editable subset) ---- */
+function can(p){ return !!USER && (USER.perms||[]).includes(p); }
+function canEdit(p){ return !!USER && (USER.edit||[]).includes(p); }
+function canBatch(){ return canEdit("batches") || canEdit("op_batch"); }   // may start/finish batches
 
 function toast(m){ const t = $("toast"); t.textContent = m; t.classList.add("on"); clearTimeout(TOASTT); TOASTT = setTimeout(()=>t.classList.remove("on"), 2400); }
 function pad(n){ return String(n).padStart(2,"0"); }
@@ -49,7 +57,12 @@ function statusPill(b){
 }
 
 /* ---------------- shell ---------------- */
-const TABS = [["/", "grid_view", "Floor"], ["/plan", "calendar_view_week", "Plan"], ["/alerts", "notifications", "Alerts"], ["/me", "person", "Me"]];
+const TABS = [["/", "grid_view", "Floor", "op_floor"], ["/plan", "calendar_view_week", "Plan", "op_massplan"],
+              ["/alerts", "notifications", "Alerts", null], ["/me", "person", "Me", null]];
+function tabAllowed(t){ return !t[3] || can(t[3]); }               // null perm = always visible (Alerts, Me)
+function allowedTabs(){ return TABS.filter(tabAllowed); }
+function firstTab(){ const t = allowedTabs()[0]; return t ? t[0] : "/me"; }
+const NEEDS = h => (h==="/"||h===""||h.startsWith("/machine/")) ? "op_floor" : (h==="/plan" ? "op_massplan" : null);
 function shell(opts){
   const { title, body, tab, back, action } = opts;
   let ab = '<header class="appbar">';
@@ -59,7 +72,7 @@ function shell(opts){
   ab += '</header>';
   const off = OFFLINE ? '<div class="offline-chip">'+svg("wifi_off")+'Offline — showing last synced</div>' : '';
   let tabs = '<nav class="tabs">';
-  TABS.forEach(([h,ic,lb]) => {
+  allowedTabs().forEach(([h,ic,lb]) => {
     const on = (tab===h) ? " on" : "";
     const dot = (h==="/alerts" && alertsCount()>0) ? '<span class="dot"></span>' : "";
     tabs += '<button class="tab'+on+'" onclick="location.hash=\''+h+'\'">'+dot+svg(ic)+'<span>'+lb+'</span></button>';
@@ -146,6 +159,11 @@ function renderMe(){
     + '<div><div class="mc-id" style="font-size:18px">'+esc(USER.username)+'</div><div class="mc-type">'+esc(USER.role||"")+' · '+perms+' pages</div></div></div>'
     + '<div class="me-row">'+svg(OFFLINE?"wifi_off":"sync")+'<div class="t"><b>'+(OFFLINE?"Offline":"Live")+'</b><span>'+(OFFLINE?"Showing last synced data":"Connected to the factory server")+'</span></div>'
     + '<button class="btn sm ghost" onclick="refresh()">'+svg("refresh")+'Sync</button></div>'
+    + '<div class="sec-label">Your access</div>'
+    + '<div class="card" style="display:flex;flex-direction:column;gap:8px">'
+    +   TABS.filter(t=>t[3]).map(t=>'<div class="kv" style="padding:6px 2px"><span class="k">'+t[2]+'</span><span class="v">'+(can(t[3])?svg("check_circle",18)+' Yes':'<span style="color:var(--muted)">No</span>')+'</span></div>').join("")
+    +   '<div class="kv" style="padding:6px 2px"><span class="k">Start / finish batches</span><span class="v">'+(canBatch()?svg("check_circle",18)+' Yes':'<span style="color:var(--muted)">No</span>')+'</span></div>'
+    + '</div>'
     + '<button class="btn ghost" style="margin-top:4px" onclick="signOut()">'+svg("logout")+'Sign out</button>'
     + '<div class="empty" style="padding:22px 24px"><span style="font-size:12px">REL-UNITY floor app · v1 · add to home screen for full-screen use</span></div>';
   shell({ title:"Me", body, tab:"/me" });
@@ -158,11 +176,16 @@ function openBatch(id){
   const running = b.status==="running";
   const kv = (k,v)=>'<div class="kv"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>';
   let acts;
-  if(b.wash) acts = running ? '<button class="btn success" onclick="act(\'finish\')">'+svg("check")+'Wash done</button>'
-                            : '<button class="btn accent" onclick="act(\'start\')">'+svg("play_arrow")+'Start wash</button>';
-  else acts = running
-    ? '<button class="btn success" onclick="act(\'finish\')">'+svg("check_circle")+'Finish batch</button>'
-    : '<button class="btn accent" onclick="act(\'start\')">'+svg("play_arrow")+'Start batch</button>';
+  if(!canBatch()){
+    acts = '<div class="empty" style="padding:16px 8px 6px">'+svg("verified")+'<b>View only</b><span>Your role can’t start or finish batches.</span></div>';
+  } else if(b.wash){
+    acts = running ? '<button class="btn success" onclick="act(\'finish\')">'+svg("check")+'Wash done</button>'
+                   : '<button class="btn accent" onclick="act(\'start\')">'+svg("play_arrow")+'Start wash</button>';
+  } else {
+    acts = running
+      ? '<button class="btn success" onclick="act(\'finish\')">'+svg("check_circle")+'Finish batch</button>'
+      : '<button class="btn accent" onclick="act(\'start\')">'+svg("play_arrow")+'Start batch</button>';
+  }
   const html = '<div class="sheet" onclick="event.stopPropagation()"><div class="grab"></div>'
     + '<h2>'+svg(b.wash?"cleaning_services":"layers",22)+' '+esc(b.wash?"Machine wash":batchLots(b))+'</h2>'
     + '<div style="margin:2px 2px 10px">'+statusPill(b)+' <span class="pill free">'+esc(b.machine||"")+'</span></div>'
@@ -180,12 +203,12 @@ function openBatch(id){
 function closeSheet(){ const sc = $("sheetScrim"); if(sc){ sc.classList.remove("on"); setTimeout(()=>sc.remove(), 240); } SHEET_B = null; }
 async function act(kind){
   const b = SHEET_B; if(!b) return;
-  const row = Object.assign({}, b);
-  if(kind==="start"){ row.startedAt = nowStamp(); row.status = "running"; }
-  if(kind==="finish"){ row.completedAt = nowStamp(); row.status = "done"; }
-  const res = await apiPost({op:"upsert", table:"batches", row});
+  // batchStatus is server-side permission-checked (batches/op_batch edit) and audit-logged with who+when
+  const to = kind==="start" ? "running" : "done";
+  const res = await apiPost({op:"batchStatus", id:b.id, to}).catch(()=>({error:"No connection"}));
   if(res && res.error){ toast(res.error); return; }
-  const i = (DB.batches||[]).findIndex(x=>x.id===b.id); if(i>=0) DB.batches[i] = res.row || row;
+  const nb = res.row || Object.assign({}, b, {status:to});
+  const i = (DB.batches||[]).findIndex(x=>x.id===b.id); if(i>=0) DB.batches[i] = nb;
   closeSheet(); route(); toast(kind==="start" ? "Batch started" : "Batch finished");
 }
 
@@ -220,11 +243,21 @@ async function refresh(){ await loadDB(); route(); toast(OFFLINE ? "Offline — 
 function route(){
   if(!USER){ return renderLogin(); }
   const h = (location.hash.slice(1) || "/");
+  const needs = NEEDS(h);
+  if(needs && !can(needs)){                 // this role can't see this page -> bounce to one it can
+    const ft = firstTab();
+    if(ft !== h && !((ft==="/"||ft==="") && (h==="/"||h===""))){ location.hash = ft; return; }
+    return renderNoAccess();
+  }
   if(h.startsWith("/machine/")) return renderMachine(decodeURIComponent(h.split("/")[2]||""));
   if(h==="/plan") return renderPlan();
   if(h==="/alerts") return renderAlerts();
   if(h==="/me") return renderMe();
   return renderFloor();
+}
+function renderNoAccess(){
+  shell({ title:"REL-UNITY", tab:"/me",
+    body: empty("person", "No floor access yet", "Your account doesn't have access to the floor or plan. Ask an admin to grant your role the pages you need in the web console.") });
 }
 window.addEventListener("hashchange", route);
 async function boot(){

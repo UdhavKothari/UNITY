@@ -12,13 +12,26 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 MOBILE = os.path.normpath(os.path.join(HERE, "..", "UNITY-MOBILE"))   # REL-UNITY floor PWA, served under /m/
+
+# LAN-only lock: the whole ERP (web + mobile) is a factory-network tool. When on (default), the server
+# refuses any request whose client IP isn't private/loopback/link-local, so only devices on the factory
+# Wi-Fi/LAN can reach it and nothing off-site can. Turn OFF for a public deployment: set REL_LAN_ONLY=0.
+LAN_ONLY = os.environ.get("REL_LAN_ONLY", "1") != "0"
+def _client_is_lan(addr):
+    try:
+        ip = ipaddress.ip_address(addr)
+        if getattr(ip, "ipv4_mapped", None):   # ::ffff:192.168.x.x -> treat as the embedded IPv4
+            ip = ip.ipv4_mapped
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except Exception:
+        return False
 DB_PATH = os.path.join(HERE, "data.sqlite")
 JSON_PATH = os.path.join(HERE, "data.json")   # legacy store - imported once into SQLite if present
 SECRETS_PATH = os.path.join(HERE, "secrets.local.json")   # user-owned, gitignored, never logged
@@ -635,7 +648,16 @@ class Handler(BaseHTTPRequestHandler):
             return None, None
         return u, _perms_for(db, u)
 
+    def _lan_guard(self):
+        """returns True and sends a 403 when LAN_ONLY is on and the caller is off-network"""
+        if LAN_ONLY and not _client_is_lan(self.client_address[0]):
+            self._send(403, {"error": "This system is only available on the factory network."})
+            return True
+        return False
+
     def do_GET(self):
+        if self._lan_guard():
+            return
         path = self.path.split("?")[0]
         if path == "/api/me":
             with LOCK:
@@ -678,6 +700,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, f.read(), CT.get(ext, "application/octet-stream"))
 
     def do_POST(self):
+        if self._lan_guard():
+            return
         if self.path.split("?")[0] != "/api":
             return self._send(404, {"error":"unknown endpoint"})
         n = int(self.headers.get("Content-Length", 0))
