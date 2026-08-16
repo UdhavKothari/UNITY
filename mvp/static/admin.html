@@ -11,7 +11,7 @@
 <body>
 <header class="top">
   <div class="brand"><img class="brand-logo" src="favicon.svg" alt="REL-UNITY logo">REL-UNITY <small>ADMIN</small></div>
-  <nav><a href="index.html">Operations</a><a href="sales.html">Sales</a><a href="admin.html" class="on">Admin</a><a href="workflows.html">Workflows</a></nav>
+  <nav><a href="index.html">Operations</a><a href="sales.html">Sales</a><a href="admin.html" class="on">Admin</a></nav>
   <div class="right">
     <span id="userbox" style="display:flex;align-items:center;gap:8px"></span>
     <span class="envtag">Admin console</span>
@@ -33,6 +33,7 @@
 
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="app.js"></script>
+<script src="wfbuilder.js"></script>
 <script>
 const MTYPES=["drum","jigger","jet","stentor","hydro","rope"];
 const PTYPES=["","drum","jigger","jet"];
@@ -465,6 +466,7 @@ function render(){
     +(mayEdit&&CUR==="challans" ? '<button class="btn ghost" onclick="reconcileChallans()"><span class="material-symbols-rounded">link</span>Reconcile now</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openQualityQuickAdd()"><span class="material-symbols-rounded">playlist_add</span>Quick add</button>' : '')
     +(mayEdit&&CUR==="qualities" ? '<button class="btn ghost" onclick="openMergeQualities()"><span class="material-symbols-rounded">merge</span>Merge</button>' : '')
+    +(CUR==="qualities" && can("op_workflows") ? '<button class="btn ghost" onclick="openWorkflowsModal()"><span class="material-symbols-rounded">account_tree</span>Workflows</button>' : '')
     +(mayEdit&&BULK_ADD_TABLES.includes(CUR) ? '<button class="btn ghost" onclick="openBulkAdd(\''+CUR+'\')"><span class="material-symbols-rounded">playlist_add</span>Bulk add</button>' : '')
     +(mayEdit ? '<button class="btn" onclick="openModal(CUR,null)">+ Add '+sc.single+'</button>' : '')
     +dataMenu(CUR)+'</div>'
