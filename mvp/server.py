@@ -105,11 +105,14 @@ def _next_seq_id(db, table):
     return "%s-%04d" % (prefix, n)
 
 MC_LETTER = {"jet": "T", "jigger": "R", "stentor": "S", "drum": "D", "hydro": "Y", "rope": "P"}
-MC_POOLED = {"jigger": True}   # jets are numbered per-machine; jiggers share one pooled counter
+# Jiggers are scheduled from a pooled queue but ALLOTED to a specific machine by the software, so their
+# batch code now carries the machine number just like jets (traceable to the exact jigger). A type is
+# only pooled (no machine number in the code) if listed here.
+MC_POOLED = {}
 
 def _batch_id(db, row):
-    """structured batch id B{letter}{machineNo?}{seq}/{MMYY}; letter+pooling from the machine type.
-    Per-machine (jet): BT05200/0826.  Pooled (jigger): BR200/0826.  Sequence resets monthly."""
+    """structured batch id B{letter}{machineNo}{seq}/{MMYY}; letter from the machine type.
+    Per-machine (jet): BT05200/0826.  Alloted jigger: BR03200/0826.  Sequence resets monthly."""
     mid = str(row.get("machine", "") or "")
     m = next((x for x in db.get("machines", []) if x.get("id") == mid), None)
     mtype = str((m or {}).get("type", "") or "")
