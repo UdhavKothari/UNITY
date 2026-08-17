@@ -1,0 +1,47 @@
+# REL-UNITY — Caddy reverse proxy (HTTPS for the factory LAN)
+# ---------------------------------------------------------------------------
+# Caddy terminates HTTPS and forwards to the Python server on localhost:8080.
+# This is what makes the mobile app installable and offline-capable, because
+# browsers only run the service worker on a secure (https) origin.
+#
+# LAN-only is enforced here too: only private-network clients get through;
+# anything else gets a plain 403. (The Python server keeps its own LAN guard
+# as a second layer — Caddy reaches it from 127.0.0.1, which is allowed.)
+#
+# ---- CHOOSE ONE cert method, then edit the site address below -------------
+#
+#  A) LOCAL CA (recommended for an offline-first factory app, no domain needed)
+#     - Replace 192.168.1.50 with THIS PC's fixed LAN IP.
+#     - `tls internal` makes Caddy issue its own certificate.
+#     - One-time: install Caddy's root CA on each phone/terminal (see DEPLOYMENT.md).
+#     - Operators use   https://192.168.1.50/       and  https://192.168.1.50/m/
+#
+#  B) REAL DOMAIN + auto Let's Encrypt (zero cert install on devices, needs a
+#     domain you control + a DNS provider Caddy can use for the DNS-01 challenge)
+#     - Replace the site line with your hostname, e.g.  rel.yourcompany.com
+#     - Point that hostname's DNS A record at this PC's LAN IP.
+#     - Delete `tls internal` and add your DNS provider block (see DEPLOYMENT.md).
+#     - Operators use   https://rel.yourcompany.com/  and  .../m/
+# ---------------------------------------------------------------------------
+
+{
+	# Global options
+	admin off
+	# email you@yourcompany.com   # uncomment for method B (Let's Encrypt account)
+}
+
+192.168.1.50 {
+
+	# --- method A: local certificate authority (comment out for method B) ---
+	tls internal
+
+	# --- LAN-only gate --------------------------------------------------------
+	@lan remote_ip 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 127.0.0.1/8 ::1
+	handle @lan {
+		encode zstd gzip
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond "REL-UNITY is only available on the factory network." 403
+	}
+}
