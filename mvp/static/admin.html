@@ -509,13 +509,27 @@ function rowHTML(cur,sc,mayEdit,r){
 }
 function pagerHTML(cur,total,pages,p,start,endi){
   if(!total) return '';
-  return '<div class="pager">'
+  let h = '<div class="pager">'
     +'<button class="btn ghost sm" '+(p<=0?'disabled':'')+' onclick="pageStep(\''+cur+'\',-1)"><span class="material-symbols-rounded">chevron_left</span>Prev</button>'
     +'<span class="pager-info">Showing '+(start+1)+'–'+endi+' of '+total+' &middot; Page '+(p+1)+' / '+pages+'</span>'
-    +'<button class="btn ghost sm" '+(p>=pages-1?'disabled':'')+' onclick="pageStep(\''+cur+'\',1)">Next<span class="material-symbols-rounded">chevron_right</span></button>'
-    +'</div>';
+    +'<button class="btn ghost sm" '+(p>=pages-1?'disabled':'')+' onclick="pageStep(\''+cur+'\',1)">Next<span class="material-symbols-rounded">chevron_right</span></button>';
+  if(pages>1){                    // jump straight to any page number
+    h += '<span class="pager-jump" style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;font-size:13px;color:var(--muted)">Go to'
+      + '<input type="number" min="1" max="'+pages+'" value="'+(p+1)+'" aria-label="Page number"'
+      + ' style="width:64px;padding:6px 8px;border:1px solid var(--line-2,#dbe1ea);border-radius:8px;font-family:\'IBM Plex Mono\',monospace;text-align:center"'
+      + ' onkeydown="if(event.key===\'Enter\'){pageGo(\''+cur+'\',this.value,'+pages+');event.preventDefault();}"'
+      + ' onchange="pageGo(\''+cur+'\',this.value,'+pages+')">'
+      + '<span>/ '+pages+'</span></span>';
+  }
+  return h + '</div>';
 }
 function pageStep(cur,d){ PAGENO[cur]=(PAGENO[cur]||0)+d; render(); const m=document.querySelector('main'); if(m) m.scrollTop=0; window.scrollTo({top:0}); }
+function pageGo(cur,val,pages){    // 1-based input -> 0-based page index, clamped
+  let n=parseInt(val,10); if(isNaN(n)) return;
+  n=Math.max(1,Math.min(pages,n));
+  PAGENO[cur]=n-1; render();
+  const m=document.querySelector('main'); if(m) m.scrollTop=0; window.scrollTo({top:0});
+}
 
 /* ---- activity log (console history): every event, newest first, searchable ---- */
 const ACTION_LABEL={login:"signed in",logout:"signed out",create:"created",update:"updated",
@@ -1587,7 +1601,39 @@ function renderSettings(c){
      +'<h2 style="margin:0 0 4px;font-size:15px">Data maintenance</h2>'
      +'<p class="small muted" style="margin:0 0 12px">Destructive — back up first (backup_db.bat). Qualities, shades, recipes and batches are not affected.</p>'
      +'<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>'
-     +'</div></div>'):'');
+     +'</div></div>'):'')
+   +'<div class="card" style="margin-top:16px"><div class="card-b">'
+     +'<div style="display:flex;align-items:center;gap:8px;margin:0 0 8px">'
+       +'<h2 style="margin:0;font-size:15px">Server log</h2>'
+       +'<span id="termDot" style="width:8px;height:8px;border-radius:50%;background:var(--success,#2e9e6b);box-shadow:0 0 0 3px rgba(46,158,107,.18)"></span>'
+       +'<span class="small muted" id="termInfo">last 40 lines · live</span>'
+       +'<span style="flex:1"></span>'
+       +'<button class="btn ghost sm" onclick="termlogFetch(true)"><span class="material-symbols-rounded">refresh</span>Refresh</button>'
+     +'</div>'
+     +'<p class="small muted" style="margin:0 0 10px">What the server is printing right now — startup, lot &amp; challan imports, restarts and errors. Live tail; the full history is under Activity.</p>'
+     +'<pre id="termLog" style="margin:0;background:var(--surface-3);border:1px solid var(--line);border-radius:10px;padding:12px;font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;max-height:300px;overflow:auto;color:var(--ink)">Loading…</pre>'
+   +'</div></div>';
+  termlogStart();
+}
+let _termTimer=null;
+async function termlogFetch(manual){
+  const pre=document.getElementById("termLog"); if(!pre) return;   // left the Settings page
+  try{
+    const r=await fetch("/api/termlog?n=40",{credentials:"same-origin"});
+    if(!r.ok){ pre.textContent=(r.status===403?"You don't have permission to view the server log.":"Log unavailable ("+r.status+")."); return; }
+    const d=await r.json();
+    const pinned = manual || (pre.scrollTop+pre.clientHeight >= pre.scrollHeight-10);   // keep newest in view unless scrolled up
+    pre.textContent=(d.lines||[]).join("\n")||"(no output yet)";
+    if(pinned) pre.scrollTop=pre.scrollHeight;
+  }catch(e){ pre.textContent="Log unavailable — no connection to the server."; }
+}
+function termlogStart(){
+  if(_termTimer){ clearInterval(_termTimer); _termTimer=null; }
+  termlogFetch(true);
+  _termTimer=setInterval(()=>{
+    if(document.getElementById("termLog")) termlogFetch(false);
+    else { clearInterval(_termTimer); _termTimer=null; }        // stop polling once off Settings
+  },5000);
 }
 async function systemUpdate(){
   const out=document.getElementById("sysOut"), btn=document.getElementById("sysUpdBtn");

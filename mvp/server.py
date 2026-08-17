@@ -12,7 +12,7 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -32,6 +32,35 @@ def _client_is_lan(addr):
         return ip.is_private or ip.is_loopback or ip.is_link_local
     except Exception:
         return False
+
+# Terminal log mirror: everything the server prints (startup, imports, restarts, tracebacks) is
+# captured into a rolling buffer and surfaced in the Settings page (last 40 lines) so an admin can
+# see what's going on without opening the server window. The buffer lives in this process only and
+# resets on restart/auto-reload — that's fine, it's a live tail, not an audit trail (that's activityLog).
+TERM_LOG = collections.deque(maxlen=400)
+class _TeeStream:
+    """wraps stdout/stderr: writes through to the real stream AND appends whole lines to TERM_LOG."""
+    def __init__(self, stream):
+        self._s = stream; self._buf = ""
+    def write(self, s):
+        try: self._s.write(s)
+        except Exception: pass
+        try:
+            self._buf += s
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                TERM_LOG.append((time.strftime("%H:%M:%S ") + line) if line.strip() else "")
+        except Exception:
+            pass
+    def flush(self):
+        try: self._s.flush()
+        except Exception: pass
+    def isatty(self): return False
+def _install_termlog():
+    if not isinstance(sys.stdout, _TeeStream):
+        sys.stdout = _TeeStream(sys.stdout)
+    if not isinstance(sys.stderr, _TeeStream):
+        sys.stderr = _TeeStream(sys.stderr)
 DB_PATH = os.path.join(HERE, "data.sqlite")
 JSON_PATH = os.path.join(HERE, "data.json")   # legacy store - imported once into SQLite if present
 SECRETS_PATH = os.path.join(HERE, "secrets.local.json")   # user-owned, gitignored, never logged
@@ -676,6 +705,22 @@ class Handler(BaseHTTPRequestHandler):
             if not u:
                 return self._send(401, {"error": "login required"})
             return self._send(200, _sanitized(db), cache="no-cache", extra=[("ETag", _etag())])
+        if path == "/api/termlog":
+            # last N lines of the server's own console output — shown at the bottom of Settings.
+            with LOCK:
+                db = load_db(); u, perms = self._auth(db)
+            if not u:
+                return self._send(401, {"error": "login required"})
+            if "settings" not in (perms or []):
+                return self._send(403, {"error": "forbidden"})
+            n = 40
+            q = self.path.split("?", 1)[1] if "?" in self.path else ""
+            for part in q.split("&"):
+                if part.startswith("n="):
+                    try: n = int(part[2:])
+                    except Exception: n = 40
+            n = max(1, min(n, 400))
+            return self._send(200, {"lines": list(TERM_LOG)[-n:]}, cache="no-cache")
         # REL-UNITY mobile PWA (served from ../UNITY-MOBILE under /m/)
         if path == "/m" or path.startswith("/m/"):
             rel = path[len("/m"):].lstrip("/")     # "/m" and "/m/" -> "" -> index.html
@@ -1512,6 +1557,7 @@ def _bind_server(preferred):
     sys.exit(1)
 
 if __name__ == "__main__":
+    _install_termlog()   # mirror console output into the Settings log panel
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     load_db()  # ensure the database exists
     threading.Thread(target=_watch_and_reload, daemon=True).start()
