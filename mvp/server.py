@@ -1556,6 +1556,134 @@ def _bind_server(preferred):
     print("Fix: run as Administrator, free the port, or pass one explicitly:  python server.py 8090")
     sys.exit(1)
 
+# ---------------------------------------------------------------- PLC live poll (MySQL, every 10s)
+# Each machine carries a `plcTable` (e.g. jet_mch_1_rtd) in one MySQL database. Every 10s we read that
+# machine's single current-state row, decode it, reconcile it to the batch our plan says is running on
+# the machine, and raise a maintenance alert if the temperature drifts past tolerance. The connection
+# lives in secrets.local.json under "plc" (host/port/user/password/database) — never committed, never
+# logged. If no config or no pymysql, the poller stays idle and the PLC_Inbox folder is the fallback.
+PLC_STEPS = {1:"FILL NORMAL",2:"DRAIN NORMAL",3:"HEAT",4:"RUN",5:"CHEMICAL IN",6:"LOAD",7:"FILL RECO",
+             8:"DRAIN RECO",9:"COOL",10:"RUNWASH",11:"COLOR PASS",12:"MAAL UNLOAD",13:"STOP",
+             14:"DRAIN DISCHARGE",15:"SAMPLE",16:"RUNWASH-2",17:"AUXILIARY",18:"ACK"}
+PLC_COLS = ["id","Date","Time","Batch_Name","MC_Status","Auto_Manual","Step_Name","Step_Number",
+            "Running_Pgm_No","Set_Temp","Act_Temp","Act_MV_Litre","Max_MV_LTR","LiqRatio_SetLitre_Sel",
+            "Curr_Batch_Time","Remain_Time","Alarm_1","Alarm_2","Alarm_3"]
+PLC_POLL_SECS = 10
+_PLC_TBL_RE = re.compile(r"^[A-Za-z0-9_]+$")   # table names can't be parameterized — allow only safe identifiers
+
+def _plc_num(v):
+    try: return float(v)
+    except Exception: return 0.0
+
+def _plc_decode(row):
+    """raw PLC row (dict keyed by PLC_COLS) -> decoded, unit-corrected values"""
+    step = int(_plc_num(row.get("Step_Name")))
+    running = str(row.get("MC_Status") or "0").strip() not in ("0", "") and step != 13   # 13 = STOP
+    return {
+        "program": str(row.get("Batch_Name") or "").strip(),
+        "step": step, "stepName": PLC_STEPS.get(step, str(step)),
+        "stepNo": int(_plc_num(row.get("Step_Number"))), "pgmNo": int(_plc_num(row.get("Running_Pgm_No"))),
+        "auto": str(row.get("Auto_Manual") or "") == "1",
+        "setTemp": round(_plc_num(row.get("Set_Temp")) / 10.0, 1),     # tenths of a degree -> C
+        "actTemp": round(_plc_num(row.get("Act_Temp")) / 10.0, 1),
+        "litre": round(_plc_num(row.get("Act_MV_Litre"))), "liqRatio": _plc_num(row.get("LiqRatio_SetLitre_Sel")),
+        "alarms": [int(_plc_num(row.get("Alarm_1"))), int(_plc_num(row.get("Alarm_2"))), int(_plc_num(row.get("Alarm_3")))],
+        "battime": int(_plc_num(row.get("Curr_Batch_Time"))), "remain": int(_plc_num(row.get("Remain_Time"))),
+        "running": running,
+        "at": (str(row.get("Date") or "") + " " + str(row.get("Time") or "")).strip(),
+    }
+
+def _plc_running_batch(db, machine_id):
+    """the batch our plan associates with this machine: the running one, else the first planned (lowest seq)"""
+    rows = [b for b in db.get("batches", []) if b.get("machine") == machine_id and not b.get("wash") and b.get("status") != "done"]
+    rows.sort(key=lambda b: (0 if b.get("status") == "running" else 1, _plc_num(b.get("seq"))))
+    return rows[0] if rows else None
+
+def _plc_alert(db, machine_id, kind, message):
+    """append a de-duplicated PLC/maintenance alert (surfaced in the app; MNTC push comes later)"""
+    al = db.setdefault("plcAlerts", []); now = time.time()
+    for a in al:
+        if a.get("machine") == machine_id and a.get("kind") == kind and not a.get("cleared") and (now - a.get("_ts", 0)) < 900:
+            a["message"] = message; a["_ts"] = now; a["ts"] = time.strftime("%Y-%m-%d %H:%M:%S"); return
+    al.append({"id": "AL-" + uuid.uuid4().hex[:8], "machine": machine_id, "kind": kind, "message": message,
+               "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "_ts": now, "cleared": False})
+    if len(al) > 500: del al[:len(al) - 500]
+
+def _plc_apply(db, machine, dec, tol):
+    """write a reading onto the machine (live snapshot), auto-catalogue the program, reconcile the batch,
+    and raise temperature / alarm alerts."""
+    mid = machine.get("id")
+    machine["plcLive"] = {k: dec[k] for k in ("stepName", "step", "setTemp", "actTemp", "litre", "liqRatio",
+                          "program", "pgmNo", "running", "remain", "battime", "alarms", "at")}
+    machine["plcLive"]["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if dec["program"]:                                   # universal programs catalogue (auto-filled)
+        progs = db.setdefault("programs", [])
+        if not any((p.get("name") or "").upper() == dec["program"].upper() for p in progs):
+            progs.append({"id": "PGM-" + uuid.uuid4().hex[:6], "name": dec["program"], "firstSeen": time.strftime("%Y-%m-%d %H:%M")})
+    b = _plc_running_batch(db, mid)
+    if b:
+        if dec["running"] and dec["step"] != 6 and not b.get("plcIn"):        # started running (past LOAD)
+            b["plcIn"] = dec["at"] or time.strftime("%Y-%m-%d %H:%M:%S")
+            if dec["program"]: b["plcProgram"] = dec["program"]
+        if b.get("plcIn") and not b.get("plcOut") and (not dec["running"] or dec["step"] in (12, 13)):  # unload / stop
+            b["plcOut"] = dec["at"] or time.strftime("%Y-%m-%d %H:%M:%S")
+        b["plcStep"] = dec["stepName"]; b["plcActTemp"] = dec["actTemp"]; b["plcSetTemp"] = dec["setTemp"]
+        b["plcLitre"] = dec["litre"]; b["plcUpdated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if dec["running"] and dec["setTemp"] > 0 and abs(dec["actTemp"] - dec["setTemp"]) > tol:
+        _plc_alert(db, mid, "temp", "%s temperature %.1f°C vs set %.1f°C (tolerance ±%g)" % (mid, dec["actTemp"], dec["setTemp"], tol))
+    if any(dec["alarms"]):
+        _plc_alert(db, mid, "alarm", "%s PLC alarm: %s" % (mid, "/".join(str(a) for a in dec["alarms"] if a)))
+
+def _plc_cycle(pymysql, cfg):
+    with LOCK:
+        db = load_db()
+        machines = [dict(id=m.get("id"), plcTable=(m.get("plcTable") or "").strip())
+                    for m in db.get("machines", []) if (m.get("plcTable") or "").strip()]
+        tol = float((db.get("settings", {}) or {}).get("tempToleranceC", cfg.get("tempToleranceC", 3)) or 3)
+    if not machines:
+        return
+    conn = pymysql.connect(host=cfg.get("host"), port=int(cfg.get("port", 3306)), user=cfg.get("user"),
+                           password=cfg.get("password"), database=cfg.get("database"),
+                           connect_timeout=5, read_timeout=5, cursorclass=pymysql.cursors.DictCursor)
+    try:
+        cur = conn.cursor()
+        for m in machines:
+            tbl = m["plcTable"]
+            if not _PLC_TBL_RE.match(tbl):
+                print("[plc] skipping unsafe table name:", tbl, flush=True); continue
+            q = "SELECT " + ",".join("`%s`" % c for c in PLC_COLS) + " FROM `%s` ORDER BY `id` DESC LIMIT 1" % tbl
+            try:
+                cur.execute(q); row = cur.fetchone()
+            except Exception as e:
+                print("[plc]", tbl, "query error:", e, flush=True); continue
+            if not row:
+                continue
+            dec = _plc_decode(row)
+            with LOCK:
+                db = load_db()
+                mm = next((x for x in db.get("machines", []) if x.get("id") == m["id"]), None)
+                if mm:
+                    _plc_apply(db, mm, dec, tol); save_db(db)
+    finally:
+        conn.close()
+
+def _plc_poller():
+    cfg = load_secrets().get("plc")
+    if not cfg or not cfg.get("host"):
+        print("[plc] no 'plc' block in secrets.local.json — live poll disabled (PLC_Inbox fallback only).", flush=True); return
+    try:
+        import pymysql, pymysql.cursors
+    except Exception:
+        print("[plc] pymysql not installed — run:  pip install pymysql --break-system-packages", flush=True); return
+    print("[plc] live poll every %ds -> %s/%s" % (PLC_POLL_SECS, cfg.get("host"), cfg.get("database")), flush=True)
+    while True:
+        wait = ((3 - time.localtime().tm_sec) % 10) or 10       # wake on the :03/:13/:23... second
+        time.sleep(wait)
+        try:
+            _plc_cycle(pymysql, load_secrets().get("plc") or cfg)
+        except Exception as e:
+            print("[plc] cycle error:", e, flush=True); time.sleep(2)
+
 if __name__ == "__main__":
     _install_termlog()   # mirror console output into the Settings log panel
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
@@ -1564,6 +1692,7 @@ if __name__ == "__main__":
     threading.Thread(target=_inbox_watcher, daemon=True).start()
     threading.Thread(target=_challan_watcher, daemon=True).start()
     threading.Thread(target=_challan_email_scheduler, daemon=True).start()
+    threading.Thread(target=_plc_poller, daemon=True).start()
     srv, port = _bind_server(port)
     print(f"REL-UNITY server running:")
     print(f"   local:   http://localhost:{port}/")

@@ -284,3 +284,31 @@ probably wrong.
 **Web console works on the PC (`localhost`) but not from other machines.**
 That's the firewall or the IP. `localhost` bypasses both. Test from another
 machine using the actual IP over `https://`.
+
+---
+
+## 11. PLC live data (jet machines)
+
+The server polls the PLC's MySQL database every 10 seconds and pulls each jet's
+current reading (temperature, step, program, alarms), reconciles real in/out
+times against what operators typed, and raises a maintenance alert when a
+running machine's temperature drifts past the tolerance set in Settings
+(default 3°C).
+
+Setup on the office PC:
+
+1. Install the MySQL driver once: `pip install pymysql --break-system-packages`
+   (this is the server's only outside dependency).
+2. Connection lives in `mvp/secrets.local.json` under a `"plc"` block
+   (host, port, user, password, database) — this file is gitignored and is
+   never committed. It's already filled in for the jet_machines database.
+3. On each machine record (Admin → Machines), set the **PLC table** field to
+   that machine's table, e.g. `jet_mch_1_rtd` for jet 1. Machines with the
+   field blank are simply skipped by the poller.
+4. Set **Temperature tolerance (°C)** in Settings (defaults to 3).
+
+The poller only reads (SELECT) and only accepts plain identifier table names,
+so it can't be used to alter the PLC database. If pymysql isn't installed or the
+`plc` block is missing, the poller stays idle and the `PLC_Inbox` folder remains
+available as a manual Excel-export fallback. Live alerts appear on the mobile
+app's Alerts tab.

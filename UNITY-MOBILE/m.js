@@ -146,10 +146,18 @@ function renderPlan(){
   shell({ title:"Plan", body, tab:"/plan" });
 }
 
-function alertsCount(){ return 0; }   // wired to PLC monitoring later
+function alertsCount(){ return (DB && DB.plcAlerts) ? DB.plcAlerts.filter(a=>!a.cleared).length : 0; }
 function renderAlerts(){
-  shell({ title:"Alerts", tab:"/alerts",
-    body: empty("notifications", "No alerts", "Temperature and cycle-time alerts appear here once PLC monitoring is connected. MNTC-tagged users get pushed the maintenance ones.") });
+  const al = ((DB && DB.plcAlerts) || []).filter(a=>!a.cleared).slice().reverse();   // newest first
+  let body;
+  if(!al.length){ body = empty("notifications", "No alerts", "Temperature drift and machine alarms from the PLC show up here. All clear right now."); }
+  else body = al.map(a=>{
+    const ic = a.kind==="temp" ? "local_fire_department" : "warning";
+    return '<div class="brow"><span class="mc-tile" style="width:40px;height:40px;background:var(--danger-soft);color:var(--danger)">'+svg(ic,22)+'</span>'
+      + '<div style="min-width:0;flex:1"><div class="lot">'+esc(a.machine||"")+'</div><div class="q">'+esc(a.message||"")+'</div></div>'
+      + '<div class="r"><span class="q tnum">'+esc((a.ts||"").slice(11,16))+'</span></div></div>';
+  }).join("");
+  shell({ title:"Alerts", body, tab:"/alerts" });
 }
 
 function renderMe(){

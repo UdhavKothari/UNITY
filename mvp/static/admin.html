@@ -88,6 +88,7 @@ const SCHEMAS={
       {k:"capMax",l:"Capacity max (kg)",sec:"Capacity & process",t:"number",req:true,min:1,help:"Max fabric load the machine holds"},
       {k:"wash",l:"Wash cycle (min)",sec:"Capacity & process",t:"number",min:0,help:"Time to boil-out between incompatible shades"},
       {k:"plc",l:"PLC connected",sec:"Capacity & process",t:"bool"},
+      {k:"plcTable",l:"PLC table",sec:"Capacity & process",help:"MySQL table with this machine's live PLC data, e.g. jet_mch_1_rtd. Leave blank if this machine has no PLC."},
       {k:"shadeFamilies",l:"Preferred shade families",sec:"Capacity & process",t:"famsel",help:"Scheduler prefers this machine for these families when it's free — a soft preference, not a hard restriction"},
       {k:"lastMaint",l:"Last maintenance done",sec:"Maintenance",t:"date"},
       {k:"maintIntervalDays",l:"Service every (days)",sec:"Maintenance",t:"number",min:0,help:"e.g. a drum every 60 days - the next date fills in automatically"},
@@ -1580,6 +1581,7 @@ function renderSettings(c){
    +'<label class="fld">Default unloading time (min)<input id="s_unload" type="number" value="'+s.unloadMin+'"><span class="help">Used only when a quality has no unloading time of its own</span></label>'
    +'<label class="fld">Family preference penalty (min)<input id="s_fampen" type="number" value="'+(s.familyPreferencePenaltyMins||120)+'"><span class="help">A non-preferred machine only wins over a preferred one if it finishes at least this much sooner</span></label>'
    +'<label class="fld">Batch capacity tolerance (kg)<input id="s_captol" type="number" min="0" value="'+(s.capToleranceKg==null?25:s.capToleranceKg)+'"><span class="help">Batches may go this much over a machine\'s max capacity before being blocked</span></label>'
+   +'<label class="fld">Temperature tolerance (°C)<input id="s_temptol" type="number" min="0" step="0.5" value="'+(s.tempToleranceC==null?3:s.tempToleranceC)+'"><span class="help">PLC raises a maintenance alert when a running machine\'s actual temperature drifts this far from its set point</span></label>'
    +'</div></div></div>'
    +'<div class="card" style="margin-top:16px"><div class="card-b">'
    +'<h2 style="margin:0 0 10px;font-size:15px">Batch completion</h2>'
@@ -1653,7 +1655,7 @@ async function systemRestart(){
   toast("Server restarting…");
 }
 async function saveSettings(){
-  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,capToleranceKg:+document.getElementById("s_captol").value||0,completionMode:document.getElementById("s_cmode").value};
+  const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,capToleranceKg:+document.getElementById("s_captol").value||0,tempToleranceC:+document.getElementById("s_temptol").value||3,completionMode:document.getElementById("s_cmode").value};
   await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"upsert",table:"__settings__",row:st})});
   await API.db(); toast("Settings saved");
 }
