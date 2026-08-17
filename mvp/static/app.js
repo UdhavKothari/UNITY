@@ -293,6 +293,60 @@ function takaSelectionTotals(lot, nos){
   return {pcs:takaNos.length, mtr:Math.round(takas.reduce((a,b)=>a+b,0)), takas, takaNos};
 }
 
+/* ===== workflow-stage lot tracking =====
+   A lot walks its quality's workflow in order (Scour -> Dye -> Stentor ...). Each batch performs ONE
+   stage (batch.stepNode = the workflow node, batch.proc = its process type) for a set of takas (pieces).
+   Availability is tracked per STEP by stable taka number, so a taka that was scoured is still available
+   to be dyed. Only affects qualities that HAVE a workflow; everything else keeps the legacy behaviour. */
+function wfStepsFull(q){                     // ordered proc-steps of a quality's workflow (no time filter)
+  const qual = (typeof q==="string") ? (DB.qualities||[]).find(x=>x.name===q||x.id===q) : q;
+  if(!qual || !qual.workflowId) return [];
+  const wf=(DB.workflows||[]).find(w=>w.id===qual.workflowId); if(!wf||!wf.nodes) return [];
+  const nodes=wf.nodes, edges=wf.edges||[], adj={}, indeg={};
+  nodes.forEach(n=>{adj[n.id]=[];indeg[n.id]=0;});
+  edges.forEach(e=>{ if(adj[e.from]){adj[e.from].push(e.to);indeg[e.to]=(indeg[e.to]||0)+1;} });
+  const rank={}, d={...indeg}, queue=nodes.filter(n=>indeg[n.id]===0).map(n=>n.id);
+  queue.forEach(id=>rank[id]=0);
+  while(queue.length){ const id=queue.shift(); (adj[id]||[]).forEach(t=>{ rank[t]=Math.max(rank[t]??0,(rank[id]||0)+1); if(--d[t]===0) queue.push(t); }); }
+  return nodes.filter(n=>n.kind==="proc").sort((a,b)=>(rank[a.id]||0)-(rank[b.id]||0))
+    .map((n,i)=>{ const p=(DB.processTypes||[]).find(x=>x.id===n.proc)||{};
+      return {seq:i+1, node:n.id, proc:n.proc, name:p.name||n.proc||("Step "+(i+1)), mc:p.machine||"", icon:p.icon||""}; });
+}
+function hasWorkflow(q){ return wfStepsFull(q).length>0; }
+function lotNos(lotId){ const l=(DB.lots||[]).find(x=>x.id===lotId)||{}; const lens=(l.takas||[]).map(Number);
+  return (l.takaNos&&l.takaNos.length)?l.takaNos.map(Number):lens.map((_,i)=>i+1); }
+function lotNoMeters(lotId){ const l=(DB.lots||[]).find(x=>x.id===lotId)||{}; const lens=(l.takas||[]).map(Number);
+  const nos=(l.takaNos&&l.takaNos.length)?l.takaNos.map(Number):lens.map((_,i)=>i+1);
+  const m={}; nos.forEach((n,i)=>m[n]=lens[i]||0); return m; }
+/* taka numbers of a lot already committed to a batch AT this step (planned or beyond), excl. one batch */
+function _nosAtStep(lotId, node, excludeId){
+  const set=new Set();
+  (DB.batches||[]).forEach(b=>{ if(b.wash||(b.stepNode||"")!==node||b.id===excludeId) return;
+    (b.lots||[]).forEach(r=>{ if(r.lotId!==lotId) return;
+      const nos=(r.takaNos&&r.takaNos.length)?r.takaNos.map(Number):null;
+      if(nos) nos.forEach(n=>set.add(n));
+      else lotNos(lotId).slice(0, +r.pcs||0).forEach(n=>set.add(n)); }); });   // legacy batch w/o nos: first pcs
+  return set;
+}
+/* nos that have CLEARED the step before `node` (first step => the whole greige lot is eligible) */
+function nosClearedFor(lotId, q, node, excludeId){
+  const steps=wfStepsFull(q), idx=steps.findIndex(s=>s.node===node);
+  if(idx<=0) return new Set(lotNos(lotId));
+  return _nosAtStep(lotId, steps[idx-1].node, excludeId);
+}
+/* nos still open to ADD to `node` = all the lot's takas minus those already used at this step */
+function nosOpenForStep(lotId, node, excludeId){ const used=_nosAtStep(lotId,node,excludeId); return lotNos(lotId).filter(n=>!used.has(n)); }
+/* of a chosen set, which nos have NOT cleared the previous step (=> "unplanned prior") */
+function nosUnclearedFor(lotId, q, node, chosenNos, excludeId){
+  const cleared=nosClearedFor(lotId,q,node,excludeId); return (chosenNos||[]).filter(n=>!cleared.has(+n));
+}
+/* pick whole takas (by number) up to wantMeters from an ordered list of available nos */
+function pickNos(availNos, meterOf, wantMeters){
+  let tot=0; const nos=[], mts=[];
+  for(const n of availNos){ if(tot>=wantMeters) break; nos.push(+n); mts.push(+meterOf[n]||0); tot+=+meterOf[n]||0; }
+  return {takaNos:nos, takas:mts, pcs:nos.length, total:Math.round(tot), short: tot<wantMeters};
+}
+
 /* ---------- searchable lot picker (250+ open lots — a plain <select> stops scaling fast) ---------- */
 /* Renders as a text input + filtered dropdown instead of a giant <select>. The picked lot id
    lives in the root element's data-val (read it with lotPickVal()) — nothing else changes about

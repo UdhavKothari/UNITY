@@ -492,8 +492,9 @@ function renderMassPlan(){
 function mpEditorHTML(m){
   return `<div class="mp-editor">
     <div class="mp-ed-grid">
-      <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorSync()"></select></label>
+      <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></label>
       <label class="mp-ed-f">Shade<select id="mp_sh"></select></label>
+      <label class="mp-ed-f" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
       <div class="mp-ed-actions">
         <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${(MP_EDIT&&MP_EDIT.editId)?"Save changes":"Save batch"}</button>
         <button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button>
@@ -521,14 +522,15 @@ function mpInitEditor(){
   const ed=(MP_EDIT&&MP_EDIT.editId)?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
   if(ed){                                        // edit mode: quality + lots are locked; shade/takas/weight editable
     qs.value=ed.quality||""; qs.disabled=true; qs.classList.add("locked");
-    mpEditorRefreshShades();
+    mpEditorRefreshShades(); mpEditorRefreshSteps();
+    const stp=document.getElementById("mp_step"); if(stp && ed.stepNode){ stp.value=ed.stepNode; stp.disabled=true; stp.classList.add("locked"); }
     const sh=document.getElementById("mp_sh"); if(sh) sh.value=ed.shadeNo||"";
     const rm=document.getElementById("mp_remarks"); if(rm) rm.value=ed.notes||"";
     const phi=document.getElementById("mp_ph"); if(phi) phi.value=ed.ph||"";
     (ed.lots||[]).forEach(l=>mpAddEditorLot({lotId:l.lotId, takaNos:l.takaNos||[], takas:l.takas||[], pcs:l.pcs||0, mtr:l.mtr||0, weight:l.weight||0}));
     if(!(ed.lots||[]).length) mpAddEditorLot();
   } else {
-    mpEditorRefreshShades();
+    mpEditorRefreshShades(); mpEditorRefreshSteps();
     if(!document.querySelector('#mp_lots .lotqrow')) mpAddEditorLot();
   }
   document.getElementById("mp_lots").addEventListener("input", mpEditorSync);
@@ -539,10 +541,35 @@ function mpEditorRefreshShades(){
   const list=q?shadesForQuality(q):[];
   sh.innerHTML=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
 }
+/* --- workflow step selector (only for qualities that have a process flow) --- */
+function mpMachineType(){ const m=(DB.machines||[]).find(x=>x.id===(MP_EDIT&&MP_EDIT.machineId)); return m?(m.type||""):""; }
+function mpWfSteps(){ const q=(document.getElementById("mp_q")||{}).value||""; if(!q) return [];
+  const mt=mpMachineType(); return wfStepsFull(q).filter(s=>!s.mc || !mt || s.mc===mt); }   // steps this machine can run
+function mpEditorRefreshSteps(){
+  const wrap=document.getElementById("mp_step_wrap"), sel=document.getElementById("mp_step"); if(!wrap||!sel) return;
+  const q=(document.getElementById("mp_q")||{}).value||"";
+  const anyFlow=hasWorkflow(q), steps=mpWfSteps();
+  if(!anyFlow){ wrap.style.display="none"; sel.innerHTML=""; return; }   // no flow -> legacy behaviour
+  wrap.style.display="";
+  const prev=sel.value;
+  if(!steps.length){ sel.innerHTML='<option value="">— this machine runs no step of this flow —</option>'; return; }
+  sel.innerHTML=steps.map(s=>`<option value="${esc(s.node)}">${esc(s.name)}</option>`).join("");
+  if(steps.some(s=>s.node===prev)) sel.value=prev;                       // keep selection if still valid
+}
+function mpStepChanged(){                                                // step changed -> re-snap every lot to the new step
+  document.querySelectorAll('#mp_lots .lotqrow').forEach(r=>{ if(!r.classList.contains('lot-locked')){ mpPrefillRow(r); } });
+  mpEditorSync();
+}
+function mpWfActive(){ const wrap=document.getElementById("mp_step_wrap"); return !!(wrap && wrap.style.display!=="none" && mpStepNode()); }
+function mpStepNode(){ const s=document.getElementById("mp_step"); return s?(s.value||""):""; }
+function mpStepProc(){ const n=mpStepNode(); const s=mpWfSteps().find(x=>x.node===n); return s?s.proc:""; }
+function mpPriorName(){ const q=(document.getElementById("mp_q")||{}).value||""; const steps=wfStepsFull(q); const i=steps.findIndex(s=>s.node===mpStepNode()); return i>0?steps[i-1].name:""; }
 function mpLotFilter(l, row){
   const qv=(document.getElementById("mp_q")||{}).value||"";
   if(qv && !sameFabric(l.quality, qv)) return false;
-  if(lotAllocation(l.id).blocked) return false;
+  if(mpWfActive()){                                    // step-aware: only lots with takas still open for THIS step
+    if(nosOpenForStep(l.id, mpStepNode(), MP_EDIT&&MP_EDIT.editId).length<=0) return false;
+  } else if(lotAllocation(l.id).blocked) return false; // legacy: hide fully-used lots
   // a lot already chosen in another line of this batch is hidden from the list (can't add it twice)
   const mine=row && row.querySelector(".b-lot");
   const taken=[...document.querySelectorAll('#mp_lots .b-lot')].filter(s=>s!==mine).map(s=>lotPickVal(s));
@@ -577,8 +604,15 @@ function mpAddEditorLot(pf){
   mpEditorSync();
 }
 function mpPrefillRow(row){                       // start from what is still LEFT in the lot, then snap to takas
-  const id=lotPickVal(row.querySelector(".b-lot")), a=id?lotAllocation(id):null;
-  if(!a) return;
+  const id=lotPickVal(row.querySelector(".b-lot")); if(!id) return;
+  if(mpWfActive()){                               // step-aware: what's still open for this step
+    const nos=nosOpenForStep(id, mpStepNode(), MP_EDIT&&MP_EDIT.editId), mo=lotNoMeters(id);
+    const rem=Math.round(nos.reduce((a,n)=>a+(+mo[n]||0),0));
+    const mtr=row.querySelector(".b-mtr"); mtr.value=rem||""; mtr.max=rem||undefined;
+    row.querySelector(".b-pcs").max=nos.length||undefined;
+    mpSnapRow(row); return;
+  }
+  const a=lotAllocation(id); if(!a) return;
   row.querySelector(".b-mtr").value=a.remaining||"";
   row.querySelector(".b-mtr").max=a.remaining||undefined;
   row.querySelector(".b-pcs").max=a.remainingPcs||undefined;
@@ -588,6 +622,22 @@ function mpSnapRow(row){                           // a taka cannot be cut: roun
   const id=lotPickVal(row.querySelector(".b-lot")), out=row.querySelector(".taka-pick");
   const want=+row.querySelector(".b-mtr").value||0;
   if(!id||!want){ row.dataset.takas="[]"; delete row.dataset.takaNos; if(out) out.innerHTML=""; return; }
+  if(mpWfActive()){                                // step-aware pick: choose specific takas open for this step
+    const nos=nosOpenForStep(id, mpStepNode(), MP_EDIT&&MP_EDIT.editId), mo=lotNoMeters(id);
+    const pk=pickNos(nos, mo, want);
+    row.dataset.takas=JSON.stringify(pk.takas); row.dataset.takaNos=JSON.stringify(pk.takaNos);
+    row.querySelector(".b-pcs").value=pk.pcs; row.querySelector(".b-mtr").value=pk.total;
+    mpEditorSuggestWeight(row);
+    if(out){
+      const q=(document.getElementById("mp_q")||{}).value||"";
+      const unc=nosUnclearedFor(id,q,mpStepNode(),pk.takaNos,MP_EDIT&&MP_EDIT.editId);
+      if(!pk.takas.length){ out.innerHTML='<span class="flag">nothing available for this step</span>'; }
+      else out.innerHTML='<span class="material-symbols-rounded">straighten</span> <b>'+pk.pcs+'</b> takas &middot; <b class="tnum">'+pk.total+' m</b>'
+        +(pk.short?' <span class="flag">short by '+(want-pk.total)+' m — nothing more available</span>':'')
+        +(unc.length?' <span class="flag"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-3px">priority_high</span>'+unc.length+' taka(s) not yet '+esc(mpPriorName()||'processed')+' — that step is unplanned</span>':'');
+    }
+    return;
+  }
   const pick=pickTakas(lotRemainingTakas(id), want);
   row.dataset.takas=JSON.stringify(pick.takas);
   delete row.dataset.takaNos;                      // re-snapped by meters; the taka picker re-sets precise Sr. Nos. if used
@@ -632,9 +682,13 @@ function mpEditorSync(){
   const cap=((DB.machines.find(x=>x.id===MP_EDIT.machineId)||{}).capMax)||0;
   const over=cap && wt>cap;
   const custs=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId);return l&&l.customer;}).filter(Boolean))];
+  let warn=0;                                       // takas being planned whose previous step isn't even planned yet
+  if(mpWfActive()){ const q=(document.getElementById("mp_q")||{}).value||"";
+    rows.forEach(r=>{ warn += nosUnclearedFor(r.lotId,q,mpStepNode(),r.takaNos,MP_EDIT&&MP_EDIT.editId).length; }); }
   el.innerHTML=`<b class="tnum">${pcs}</b> pcs · <b class="tnum">${mtr}</b> m · <b class="tnum">${wt}</b> kg`
     + (over?` <span class="flag">exceeds ${cap} kg — remove takas or pick a bigger machine</span>`:'')
-    + (custs.length>1?` <span class="flag">mixes ${custs.length} customers — one per batch</span>`:'');
+    + (custs.length>1?` <span class="flag">mixes ${custs.length} customers — one per batch</span>`:'')
+    + (warn?` <span class="flag"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-3px">priority_high</span>${warn} taka(s) not yet ${esc(mpPriorName()||'processed')} — that step is unplanned (you can still save)</span>`:'');
 }
 async function mpSaveNew(machineId){
   const q=(document.getElementById("mp_q")||{}).value||"";
@@ -642,7 +696,10 @@ async function mpSaveNew(machineId){
   const editing=MP_EDIT&&MP_EDIT.editId; const ex=editing?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
   const rows=mpEditorRows();
   if(!rows.length){ toast("Add at least one lot"); return; }
-  if(!editing) for(const r of rows){ const a=lotAllocation(r.lotId);
+  const wfOn=mpWfActive();
+  if(hasWorkflow(q) && !mpWfSteps().length){ toast(machineId+" can't run any step of "+q+"'s process flow — plan this on the right machine type."); return; }
+  if(hasWorkflow(q) && !mpStepNode()){ toast("Pick a process step"); return; }
+  if(!editing && !wfOn) for(const r of rows){ const a=lotAllocation(r.lotId);   // legacy consumption guard (non-workflow only)
     if(a.blocked){ toast(r.lotId+" is fully used"); return; }
     if(r.mtr>a.remaining){ toast(r.lotId+" has only "+a.remaining+" m left"); return; } }
   const quals=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId);return l&&l.quality;}).filter(Boolean))];
@@ -654,11 +711,14 @@ async function mpSaveNew(machineId){
   if(!mpCapacityOk(machineId, tot.weight)){
     const cap=(DB.machines.find(x=>x.id===machineId)||{}).capMax;
     toast(machineId+" holds "+cap+" kg (+"+capTolerance()+" kg tolerance) — this "+tot.weight+" kg batch is too heavy."); return; }
+  const stepNode = wfOn?mpStepNode():((ex&&ex.stepNode)||"");
+  const proc = wfOn?mpStepProc():((ex&&ex.proc)||"");
   const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
     machine:machineId, mcPin:machineId, seq: ex?ex.seq:nextSeq(machineId),
     notes:((document.getElementById("mp_remarks")||{}).value||"").trim(),
     ph:((document.getElementById("mp_ph")||{}).value||"").trim(),
     pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight, status: ex?(ex.status||"planned"):"planned" };
+  if(stepNode){ row.stepNode=stepNode; row.proc=proc; }   // which workflow stage this batch performs
   if(ex){ row.id=ex.id; if(ex.startedAt) row.startedAt=ex.startedAt; if(ex.planDay) row.planDay=ex.planDay; }
   const res=await API.save("batches", row);
   if(res && res.error){ toast(res.error); return; }
