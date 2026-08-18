@@ -123,6 +123,16 @@ function agoText(ts){
   if(s<60) return s+"s ago"; const m=Math.floor(s/60); if(m<60) return m+"m ago"; return Math.floor(m/60)+"h ago";
 }
 function plcStaleSecs(ts){ const t=new Date(String(ts||"").replace(" ","T")); return isNaN(t)?1e9:Math.round((Date.now()-t.getTime())/1000); }
+function plcSparkM(hist){
+  const pts=(hist||[]).filter(p=>p.act!=null); if(pts.length<2) return "";
+  const w=300,h=48,pad=6, acts=pts.map(p=>+p.act), sets=pts.map(p=>+p.set||0);
+  const lo=Math.min.apply(null,acts.concat(sets)), hi=Math.max.apply(null,acts.concat(sets)), rng=(hi-lo)||1;
+  const X=i=>pad+i*(w-2*pad)/(pts.length-1), Y=v=>h-pad-((v-lo)/rng)*(h-2*pad);
+  const poly=(arr,col,dash)=>'<polyline fill="none" stroke="'+col+'" stroke-width="1.6"'+(dash?' stroke-dasharray="3 3"':'')
+    +' points="'+arr.map((v,i)=>X(i).toFixed(1)+","+Y(v).toFixed(1)).join(" ")+'"/>';
+  return '<svg viewBox="0 0 '+w+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="none" style="display:block">'
+    +poly(sets,'var(--faint)',true)+poly(acts,'var(--accent)',false)+'</svg>';
+}
 function plcPanel(m){
   const p = (DB.plcLive||{})[m.id];
   if(!p){
@@ -161,6 +171,15 @@ function plcPanel(m){
         + (p.pgmNo?'<span>Program no. <b class="tnum">'+p.pgmNo+'</b></span>':'')
         + (p.liqRatio?'<span>LiqRatio sel <b class="tnum">'+p.liqRatio+'</b></span>':'')
       + '</div>'
+      + (function(){
+          const hist=(DB.plcHistory||{})[m.id]||[], spark=plcSparkM(hist), bt=currentBatch(m.id); let x='';
+          if(spark) x+='<div><div class="sec-label" style="margin:2px 0 4px">Last 5 min · temperature</div>'+spark
+            +'<div class="mc-sub" style="margin-top:2px">actual (blue) vs set (grey)</div></div>';
+          if(bt && (bt.actInTime||bt.actOutTime)) x+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div><div class="sec-label" style="margin:0 0 2px">ACT in</div><div class="tnum" style="font-weight:700">'+esc(bt.actInTime||'—')+'</div></div>'
+            +'<div><div class="sec-label" style="margin:0 0 2px">ACT out</div><div class="tnum" style="font-weight:700">'+esc(bt.actOutTime||'—')+'</div></div></div>';
+          return x;
+        })()
       + (hot?'<div class="pill maint">'+svg("local_fire_department",14)+' Temp '+drift.toFixed(1)+'° past ±'+tol+'° tolerance</div>':'')
       + (alarms.length?'<div class="pill maint">'+svg("warning",14)+' PLC ALARM: '+esc(alarms.join(' / '))+'</div>':'')
     + '</div>';

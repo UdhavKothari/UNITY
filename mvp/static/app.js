@@ -781,6 +781,21 @@ function agoWeb(ts){
   let s=Math.max(0,Math.round((Date.now()-t.getTime())/1000));
   if(s<60) return s+"s ago"; const m=Math.floor(s/60); if(m<60) return m+"m ago"; return Math.floor(m/60)+"h ago";
 }
+function _mcBatch(mid){   // the batch our plan associates with this machine (running first, else next planned)
+  const rows=(DB.batches||[]).filter(b=>b.machine===mid && !b.wash && b.status!=="done");
+  rows.sort((a,b)=>((a.status==="running"?0:1)-(b.status==="running"?0:1)) || (+a.seq||0)-(+b.seq||0));
+  return rows[0];
+}
+function plcSpark(hist){   // last-5-min temperature: actual (accent) vs set (dashed grey)
+  const pts=(hist||[]).filter(p=>p.act!=null); if(pts.length<2) return "";
+  const w=240,h=46,pad=5, acts=pts.map(p=>+p.act), sets=pts.map(p=>+p.set||0);
+  const lo=Math.min.apply(null,acts.concat(sets)), hi=Math.max.apply(null,acts.concat(sets)), rng=(hi-lo)||1;
+  const X=i=>pad+i*(w-2*pad)/(pts.length-1), Y=v=>h-pad-((v-lo)/rng)*(h-2*pad);
+  const poly=(arr,col,dash)=>'<polyline fill="none" stroke="'+col+'" stroke-width="1.6"'+(dash?' stroke-dasharray="3 3"':'')
+    +' points="'+arr.map((v,i)=>X(i).toFixed(1)+","+Y(v).toFixed(1)).join(" ")+'"/>';
+  return '<svg viewBox="0 0 '+w+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="none">'
+    +poly(sets,'var(--faint,#9aa4b4)',true)+poly(acts,'var(--accent,#3a63c4)',false)+'</svg>';
+}
 function plcModalBody(m){
   const p=(DB.plcLive||{})[m.id];
   const bx='background:var(--surface-2,#f8fafc);border:1px solid var(--line,#e6eaf1);border-radius:12px;padding:14px';
@@ -818,6 +833,15 @@ function plcModalBody(m){
       +kv('PLC clock', esc(p.at||'—'))
       +kv('Source table', esc(m.plcTable||'—'))
     +'</div>'
+    +(function(){
+      const hist=(DB.plcHistory||{})[m.id]||[], spark=plcSpark(hist), bt=_mcBatch(m.id); let x='';
+      if(spark) x+='<div style="margin-top:14px"><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Last 5 minutes — temperature</div>'
+        +spark+'<div class="muted" style="font-size:12px;margin-top:4px">actual (blue) vs set (grey) · now '+(p.diff>0?'+':'')+(p.diff!=null?p.diff:0)+'° from set</div></div>';
+      if(bt && (bt.actInTime||bt.actOutTime)) x+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">'
+        +'<div style="'+bx+'"><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">ACT in-time</div><div class="tnum" style="font-weight:700;margin-top:2px">'+esc(bt.actInTime||'—')+'</div></div>'
+        +'<div style="'+bx+'"><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">ACT out-time</div><div class="tnum" style="font-weight:700;margin-top:2px">'+esc(bt.actOutTime||'—')+'</div></div></div>';
+      return x;
+    })()
     +(alarms.length?'<div class="pill maint" style="margin-top:12px"><span class="material-symbols-rounded">warning</span> PLC alarm: '+esc(alarms.join(' / '))+'</div>':'');
 }
 function openMachinePlc(id){
