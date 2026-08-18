@@ -116,14 +116,76 @@ function machineCard(m){
     + '<div class="mc-f">'+svg("layers")+(q.length ? (q.length+' batch(es) planned') : 'nothing queued')+'<span class="chev" style="margin-left:auto">'+svg("chevron_right")+'</span></div></div>';
 }
 
+function agoText(ts){
+  if(!ts) return "";
+  const t = new Date(String(ts).replace(" ","T")); if(isNaN(t)) return "";
+  let s = Math.max(0, Math.round((Date.now()-t.getTime())/1000));
+  if(s<60) return s+"s ago"; const m=Math.floor(s/60); if(m<60) return m+"m ago"; return Math.floor(m/60)+"h ago";
+}
+function plcStaleSecs(ts){ const t=new Date(String(ts||"").replace(" ","T")); return isNaN(t)?1e9:Math.round((Date.now()-t.getTime())/1000); }
+function plcPanel(m){
+  const p = m.plcLive;
+  if(!p){
+    return '<div class="sec-label">Live · PLC</div>'
+      + '<div class="card">'+empty("sync","No live data yet","No PLC reading for "+esc(m.id)+" yet. Set its PLC table in Admin → Machines, then check the Server log in Settings.").replace('class="empty"','class="empty" style="padding:22px 16px"')+'</div>';
+  }
+  const tol = (DB.settings && DB.settings.tempToleranceC!=null) ? +DB.settings.tempToleranceC : 3;
+  const drift = Math.abs((+p.actTemp||0)-(+p.setTemp||0));
+  const hot = p.running && (+p.setTemp>0) && drift>tol;
+  const stale = plcStaleSecs(p.updated) > 40;
+  const dot = p.running ? (hot?'var(--danger)':'var(--success)') : 'var(--faint)';
+  const alarms = (p.alarms||[]).filter(Boolean);
+  const tile = (bg,label,big,sub,bigcol)=>'<div style="background:'+bg+';border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0">'
+    + '<div class="sec-label" style="margin:0 0 4px">'+label+'</div>'
+    + '<div style="font-weight:800;'+(bigcol?'color:'+bigcol+';':'')+'">'+big+'</div>'
+    + '<div class="mc-sub" style="margin-top:2px">'+sub+'</div></div>';
+  return '<div class="sec-label">Live · PLC</div>'
+    + '<div class="card" style="display:flex;flex-direction:column;gap:12px">'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+        + '<span style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex:none"></span>'
+        + '<b>'+(p.running?'Running':'Idle')+'</b>'
+        + (p.program?'<span class="pill free">'+esc(p.program)+'</span>':'')
+        + '<span style="flex:1"></span>'
+        + '<span class="tnum" style="font-size:12px;color:'+(stale?'var(--warning)':'var(--muted)')+'">'+(stale?'stale · ':'')+esc(agoText(p.updated))+'</span>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+        + tile(hot?'var(--danger-soft)':'var(--surface-2)', 'Temperature',
+               '<span class="tnum" style="font-size:26px">'+(p.actTemp!=null?p.actTemp:'—')+'°</span>',
+               'set '+(p.setTemp!=null?p.setTemp+'°':'—')+(hot?' · +'+drift.toFixed(1)+'° over':''), hot?'var(--danger)':'')
+        + tile('var(--surface-2)', 'Current step',
+               '<span style="font-size:17px">'+esc(p.stepName||'—')+'</span>',
+               p.remain?('~'+p.remain+' min left'):(p.battime?('running '+p.battime+' min'):' '), '')
+      + '</div>'
+      + '<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)">'
+        + '<span>'+svg("water_drop",16)+' <b class="tnum">'+(p.litre||0)+'</b> L</span>'
+        + (p.pgmNo?'<span>Program no. <b class="tnum">'+p.pgmNo+'</b></span>':'')
+        + (p.liqRatio?'<span>LiqRatio sel <b class="tnum">'+p.liqRatio+'</b></span>':'')
+      + '</div>'
+      + (hot?'<div class="pill maint">'+svg("local_fire_department",14)+' Temp '+drift.toFixed(1)+'° past ±'+tol+'° tolerance</div>':'')
+      + (alarms.length?'<div class="pill maint">'+svg("warning",14)+' PLC ALARM: '+esc(alarms.join(' / '))+'</div>':'')
+    + '</div>';
+}
+let _mcLiveTimer = null;
+function stopMachineLive(){ if(_mcLiveTimer){ clearInterval(_mcLiveTimer); _mcLiveTimer=null; } }
+function startMachineLive(id){        // refresh the machine view every 10s so PLC values stay live
+  stopMachineLive();
+  const want = "#/machine/"+encodeURIComponent(id);
+  _mcLiveTimer = setInterval(async ()=>{
+    if(location.hash!==want){ stopMachineLive(); return; }
+    await loadDB();
+    if(location.hash===want && USER) renderMachine(id);
+  }, 10000);
+}
 function renderMachine(id){
   const m = (DB.machines||[]).find(x=>x.id===id);
   if(!m){ shell({title:"Machine", body: empty("precision_manufacturing","Machine not found",""), tab:"/", back:"/"}); return; }
   const rows = machineBatches(id);
   let body = machineCard(m);
+  body += plcPanel(m);
   body += '<div class="sec-label">Batches on '+esc(id)+'</div>';
   body += rows.length ? rows.map(batchRow).join("") : empty("done_all","All clear","No planned batches on this machine.");
   shell({ title:esc(id), body, tab:"/", back:"/" });
+  startMachineLive(id);
 }
 function batchRow(b){
   const sub = b.wash ? "Machine wash" : (esc(b.quality||"")+" · "+ (b.pcs||0) +" pcs · "+ (b.weight||0) +" kg");
@@ -249,6 +311,7 @@ async function loadDB(){
 }
 async function refresh(){ await loadDB(); route(); toast(OFFLINE ? "Offline — couldn't sync" : "Synced"); }
 function route(){
+  stopMachineLive();                    // leaving a machine view stops its live refresh
   if(!USER){ return renderLogin(); }
   const h = (location.hash.slice(1) || "/");
   const needs = NEEDS(h);
