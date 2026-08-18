@@ -725,8 +725,10 @@ class Handler(BaseHTTPRequestHandler):
             n = max(1, min(n, 400))
             return self._send(200, {"lines": list(TERM_LOG)[-n:]}, cache="no-cache")
         # REL-UNITY mobile PWA (served from ../UNITY-MOBILE under /m/)
-        if path == "/m" or path.startswith("/m/"):
-            rel = path[len("/m"):].lstrip("/")     # "/m" and "/m/" -> "" -> index.html
+        if path == "/m":                            # canonicalise: /m -> /m/ so relative assets resolve
+            self.send_response(301); self.send_header("Location", "/m/"); self.end_headers(); return
+        if path.startswith("/m/"):
+            rel = path[len("/m"):].lstrip("/")     # "/m/" -> "" -> index.html
             if rel == "":
                 rel = "index.html"
             mp = os.path.normpath(os.path.join(MOBILE, rel))
