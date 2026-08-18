@@ -1619,21 +1619,33 @@ def _plc_apply(db, machine, dec, tol):
     clobber admin edits like the PLC-table field), auto-catalogue the program, reconcile the batch,
     and raise temperature / alarm alerts."""
     mid = machine.get("id")
+    now = dec["at"] or time.strftime("%Y-%m-%d %H:%M:%S")
     live = {k: dec[k] for k in ("stepName", "step", "setTemp", "actTemp", "litre", "liqRatio",
                                 "program", "pgmNo", "running", "remain", "battime", "alarms", "at")}
     live["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    live["diff"] = round(dec["actTemp"] - dec["setTemp"], 1) if (dec["running"] and dec["setTemp"] > 0) else 0
     db.setdefault("plcLive", {})[mid] = live          # keyed by machine id; the machines table is untouched
+    # rolling last-5-minutes trend per machine (poll is every 10s -> ~30 points)
+    hist = db.setdefault("plcHistory", {}).setdefault(mid, [])
+    hist.append({"t": live["updated"], "act": dec["actTemp"], "set": dec["setTemp"],
+                 "diff": live["diff"], "step": dec["step"], "run": dec["running"]})
+    if len(hist) > 30:
+        del hist[:len(hist) - 30]
     if dec["program"]:                                   # universal programs catalogue (auto-filled)
         progs = db.setdefault("programs", [])
         if not any((p.get("name") or "").upper() == dec["program"].upper() for p in progs):
             progs.append({"id": "PGM-" + uuid.uuid4().hex[:6], "name": dec["program"], "firstSeen": time.strftime("%Y-%m-%d %H:%M")})
     b = _plc_running_batch(db, mid)
     if b:
-        if dec["running"] and dec["step"] != 6 and not b.get("plcIn"):        # started running (past LOAD)
-            b["plcIn"] = dec["at"] or time.strftime("%Y-%m-%d %H:%M:%S")
-            if dec["program"]: b["plcProgram"] = dec["program"]
-        if b.get("plcIn") and not b.get("plcOut") and (not dec["running"] or dec["step"] in (12, 13)):  # unload / stop
-            b["plcOut"] = dec["at"] or time.strftime("%Y-%m-%d %H:%M:%S")
+        # ACT IN time: the LOAD step (6) is the real load moment; if we join mid-run, the first running read stands in
+        if not b.get("actInTime"):
+            if dec["step"] == 6 or dec["running"]:
+                b["actInTime"] = now
+                if dec["program"]: b["plcProgram"] = dec["program"]
+        # ACT OUT time: the first MAAL UNLOAD (12) or STOP (13) after loading
+        if b.get("actInTime") and not b.get("actOutTime") and dec["step"] in (12, 13):
+            b["actOutTime"] = now
+        b["plcIn"] = b.get("actInTime"); b["plcOut"] = b.get("actOutTime")   # keep the old field names in sync
         b["plcStep"] = dec["stepName"]; b["plcActTemp"] = dec["actTemp"]; b["plcSetTemp"] = dec["setTemp"]
         b["plcLitre"] = dec["litre"]; b["plcUpdated"] = time.strftime("%Y-%m-%d %H:%M:%S")
     if dec["running"] and dec["setTemp"] > 0 and abs(dec["actTemp"] - dec["setTemp"]) > tol:
@@ -1641,7 +1653,29 @@ def _plc_apply(db, machine, dec, tol):
     if any(dec["alarms"]):
         _plc_alert(db, mid, "alarm", "%s PLC alarm: %s" % (mid, "/".join(str(a) for a in dec["alarms"] if a)))
 
-_PLC_STATE = {"warned_no_tbl": False, "last": ""}
+_PLC = {"conn": None, "warned_no_tbl": False, "last": ""}
+def _plc_drop_conn():
+    c = _PLC.get("conn")
+    if c is not None:
+        try: c.close()
+        except Exception: pass
+    _PLC["conn"] = None
+def _plc_get_conn(pymysql, cfg):
+    """ONE long-lived connection, reused every cycle (ping + reconnect if dropped). Re-opening a MySQL
+    connection every 10s can wedge against a constrained PLC MySQL — the first connect works, later ones
+    hang ('data only at startup'). A persistent connection avoids that entirely."""
+    c = _PLC.get("conn")
+    if c is not None:
+        try:
+            c.ping(reconnect=True); return c
+        except Exception:
+            _plc_drop_conn()
+    _PLC["conn"] = pymysql.connect(host=cfg.get("host"), port=int(cfg.get("port", 3306)), user=cfg.get("user"),
+                                   password=cfg.get("password"), database=cfg.get("database"),
+                                   connect_timeout=5, read_timeout=5, write_timeout=5, autocommit=True,
+                                   cursorclass=pymysql.cursors.DictCursor)
+    return _PLC["conn"]
+
 def _plc_cycle(pymysql, cfg):
     with LOCK:
         db = load_db()
@@ -1649,42 +1683,34 @@ def _plc_cycle(pymysql, cfg):
                     for m in db.get("machines", []) if (m.get("plcTable") or "").strip()]
         tol = float((db.get("settings", {}) or {}).get("tempToleranceC", cfg.get("tempToleranceC", 3)) or 3)
     if not machines:
-        if not _PLC_STATE["warned_no_tbl"]:
+        if not _PLC["warned_no_tbl"]:
             print("[plc] connected OK, but NO machine has a 'PLC table' set — nothing to poll. "
                   "Set it in Admin -> Machines (e.g. jet_mch_1_rtd) for each jet.", flush=True)
-            _PLC_STATE["warned_no_tbl"] = True
+            _PLC["warned_no_tbl"] = True
         return
-    _PLC_STATE["warned_no_tbl"] = False
-    conn = pymysql.connect(host=cfg.get("host"), port=int(cfg.get("port", 3306)), user=cfg.get("user"),
-                           password=cfg.get("password"), database=cfg.get("database"),
-                           connect_timeout=5, read_timeout=5, cursorclass=pymysql.cursors.DictCursor)
+    _PLC["warned_no_tbl"] = False
+    conn = _plc_get_conn(pymysql, cfg)
     seen = []
-    try:
-        cur = conn.cursor()
-        for m in machines:
-            tbl = m["plcTable"]
-            if not _PLC_TBL_RE.match(tbl):
-                seen.append("%s:BAD-TABLE(%s)" % (m["id"], tbl)); continue
-            q = "SELECT " + ",".join("`%s`" % c for c in PLC_COLS) + " FROM `%s` ORDER BY `id` DESC LIMIT 1" % tbl
-            try:
-                cur.execute(q); row = cur.fetchone()
-            except Exception as e:
-                seen.append("%s:ERR(%s)" % (m["id"], str(e)[:60])); continue
-            if not row:
-                seen.append("%s:no-row" % m["id"]); continue
-            dec = _plc_decode(row)
-            seen.append("%s:%s%s" % (m["id"], (dec["stepName"] if dec["running"] else "idle"),
-                                     (" %.1f°" % dec["actTemp"] if dec["running"] else "")))
-            with LOCK:
-                db = load_db()
-                mm = next((x for x in db.get("machines", []) if x.get("id") == m["id"]), None)
-                if mm:
-                    _plc_apply(db, mm, dec, tol); save_db(db)
-    finally:
-        conn.close()
+    cur = conn.cursor()
+    for m in machines:
+        tbl = m["plcTable"]
+        if not _PLC_TBL_RE.match(tbl):
+            seen.append("%s:BAD-TABLE(%s)" % (m["id"], tbl)); continue
+        q = "SELECT " + ",".join("`%s`" % c for c in PLC_COLS) + " FROM `%s` ORDER BY `id` DESC LIMIT 1" % tbl
+        cur.execute(q); row = cur.fetchone()        # a read/connection error propagates -> poller reconnects
+        if not row:
+            seen.append("%s:no-row" % m["id"]); continue
+        dec = _plc_decode(row)
+        seen.append("%s:%s%s" % (m["id"], (dec["stepName"] if dec["running"] else "idle"),
+                                 (" %.1f°" % dec["actTemp"] if dec["running"] else "")))
+        with LOCK:
+            db = load_db()
+            mm = next((x for x in db.get("machines", []) if x.get("id") == m["id"]), None)
+            if mm:
+                _plc_apply(db, mm, dec, tol); save_db(db)
     summary = "[plc] " + ", ".join(seen)            # only log when it changes (avoids flooding the console)
-    if summary != _PLC_STATE["last"]:
-        print(summary, flush=True); _PLC_STATE["last"] = summary
+    if summary != _PLC["last"]:
+        print(summary, flush=True); _PLC["last"] = summary
 
 def _plc_poller():
     cfg = load_secrets().get("plc")
@@ -1694,33 +1720,26 @@ def _plc_poller():
         import pymysql, pymysql.cursors
     except Exception:
         print("[plc] pymysql not installed — run:  pip install pymysql --break-system-packages", flush=True); return
-    print("[plc] live poll every %ds -> %s/%s" % (PLC_POLL_SECS, cfg.get("host"), cfg.get("database")), flush=True)
-
-    def _run_cycle_bounded():
-        # Run one cycle in a throwaway worker with a hard time ceiling. The DB calls happen OUTSIDE the
-        # global LOCK, so if the MySQL read hangs (flaky LAN link) we abandon that worker and try again
-        # next tick instead of freezing the poller forever. This is what makes it self-heal from "stale".
-        holder = {}
-        def work():
-            try: _plc_cycle(pymysql, load_secrets().get("plc") or cfg)
-            except Exception as e: holder["err"] = e
-        th = threading.Thread(target=work, daemon=True); th.start(); th.join(8)
-        if th.is_alive():
-            raise TimeoutError("PLC cycle exceeded 8s — DB read is hanging (check the link to %s)" % cfg.get("host"))
-        if holder.get("err"): raise holder["err"]
-
+    print("[plc] live poll every %ds -> %s/%s (persistent connection)" % (PLC_POLL_SECS, cfg.get("host"), cfg.get("database")), flush=True)
     last_beat = 0.0
     while True:                                                 # this loop must never exit — it IS the poller
         try:
             wait = ((3 - time.localtime().tm_sec) % 10) or 10   # wake on the :03/:13/:23... second
             time.sleep(wait)
             t0 = time.time()
-            _run_cycle_bounded()
+            wd = threading.Timer(8.0, _plc_drop_conn)           # hard ceiling: if a read wedges, close the
+            wd.daemon = True; wd.start()                        # socket from another thread so the read errors out
+            try:
+                _plc_cycle(pymysql, load_secrets().get("plc") or cfg)
+            finally:
+                wd.cancel()
             if time.time() - last_beat > 30:                    # periodic proof-of-life in the Server log
                 print("[plc] heartbeat — last cycle %.0f ms" % ((time.time() - t0) * 1000), flush=True)
                 last_beat = time.time()
         except Exception as e:
-            print("[plc] cycle error:", repr(e), flush=True); time.sleep(3)
+            print("[plc] cycle error:", repr(e), flush=True)
+            _plc_drop_conn()                                    # force a fresh connection next cycle
+            time.sleep(3)
 
 if __name__ == "__main__":
     _install_termlog()   # mirror console output into the Settings log panel
