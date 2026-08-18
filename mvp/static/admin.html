@@ -243,7 +243,7 @@ const SCHEMAS={
       {k:"contactNo",l:"Contact number",sec:"Operator"},
       {k:"shift",l:"Shift",sec:"Operator",t:"select",o:["Day","Night"],help:"Day shift or night shift"},
       {k:"username",l:"Login username",sec:"Login & access",t:"readonly",help:"FirstnameLastname — generated automatically. The operator logs in with this + their PIN."},
-      {k:"pin",l:"Login PIN",sec:"Login & access",t:"readonly",help:"A random 6-digit PIN, generated automatically — share it with the operator. Used as their password."},
+      {k:"pin",l:"Login PIN",sec:"Login & access",help:"The operator's mobile-app PIN — share it with them. Auto-generated if left blank; type a new value here to change it."},
       {k:"role",l:"Role",sec:"Login & access",t:"rolesel",help:"Which pages this operator can see when they log in. Leave blank for no access."},
       {k:"active",l:"Active (can log in)",sec:"Login & access",t:"bool"},
       {k:"auth1",l:"Machine auth 1",sec:"Machine authorisations",t:"select",o:AUTHS},

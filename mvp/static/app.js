@@ -759,7 +759,7 @@ function renderFloor(el,S,clockH){
               +'<span class="mc-plan-n tnum">'+b.pcs+' pcs &middot; '+b.meters+' m &middot; '+b.kg+' kg</span></li>'; }).join("")
         + '</ol></details>';
     }
-    const pl=m.plcLive, plHot=(function(){ if(!pl||!pl.running) return false; const tl=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3; return (+pl.setTemp>0)&&Math.abs((+pl.actTemp||0)-(+pl.setTemp||0))>tl; })();
+    const pl=(DB.plcLive||{})[m.id], plHot=(function(){ if(!pl||!pl.running) return false; const tl=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3; return (+pl.setTemp>0)&&Math.abs((+pl.actTemp||0)-(+pl.setTemp||0))>tl; })();
     const plBadge = pl ? (' &middot; <span class="tnum" style="color:'+(plHot?'var(--danger)':'var(--accent)')+'">'+(pl.running?(pl.actTemp+'°'):'PLC idle')+'</span>') : (m.plc?" &middot; PLC":"");
     html+='<div class="mc rise" style="animation-delay:'+(i*35)+'ms">'
       +'<div class="mc-top" style="cursor:pointer" title="Live PLC data" onclick="openMachinePlc(\''+esc(m.id)+'\')"><div class="mc-ic"><span class="material-symbols-rounded">'+mcIcon(m.type)+'</span></div>'
@@ -782,7 +782,7 @@ function agoWeb(ts){
   if(s<60) return s+"s ago"; const m=Math.floor(s/60); if(m<60) return m+"m ago"; return Math.floor(m/60)+"h ago";
 }
 function plcModalBody(m){
-  const p=m.plcLive;
+  const p=(DB.plcLive||{})[m.id];
   const bx='background:var(--surface-2,#f8fafc);border:1px solid var(--line,#e6eaf1);border-radius:12px;padding:14px';
   if(!p){
     return '<div class="empty" style="padding:26px 16px"><span class="material-symbols-rounded">sync</span>'

@@ -1615,12 +1615,14 @@ def _plc_alert(db, machine_id, kind, message):
     if len(al) > 500: del al[:len(al) - 500]
 
 def _plc_apply(db, machine, dec, tol):
-    """write a reading onto the machine (live snapshot), auto-catalogue the program, reconcile the batch,
+    """store the reading in the separate live-map (NOT on the machine record, so the 10s poll can never
+    clobber admin edits like the PLC-table field), auto-catalogue the program, reconcile the batch,
     and raise temperature / alarm alerts."""
     mid = machine.get("id")
-    machine["plcLive"] = {k: dec[k] for k in ("stepName", "step", "setTemp", "actTemp", "litre", "liqRatio",
-                          "program", "pgmNo", "running", "remain", "battime", "alarms", "at")}
-    machine["plcLive"]["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    live = {k: dec[k] for k in ("stepName", "step", "setTemp", "actTemp", "litre", "liqRatio",
+                                "program", "pgmNo", "running", "remain", "battime", "alarms", "at")}
+    live["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    db.setdefault("plcLive", {})[mid] = live          # keyed by machine id; the machines table is untouched
     if dec["program"]:                                   # universal programs catalogue (auto-filled)
         progs = db.setdefault("programs", [])
         if not any((p.get("name") or "").upper() == dec["program"].upper() for p in progs):

@@ -124,7 +124,7 @@ function agoText(ts){
 }
 function plcStaleSecs(ts){ const t=new Date(String(ts||"").replace(" ","T")); return isNaN(t)?1e9:Math.round((Date.now()-t.getTime())/1000); }
 function plcPanel(m){
-  const p = m.plcLive;
+  const p = (DB.plcLive||{})[m.id];
   if(!p){
     return '<div class="sec-label">Live · PLC</div>'
       + '<div class="card">'+empty("sync","No live data yet","No PLC reading for "+esc(m.id)+" yet. Set its PLC table in Admin → Machines, then check the Server log in Settings.").replace('class="empty"','class="empty" style="padding:22px 16px"')+'</div>';
@@ -287,8 +287,8 @@ function renderLogin(){
   app().className = "";
   app().innerHTML = '<form class="login" onsubmit="doLogin(event)">'
     + '<div class="brand"><img src="icon.svg" alt=""><b>REL-UNITY</b><span>Factory floor</span></div>'
-    + '<div class="fld"><label>Username</label><input id="lu" autocomplete="username" autocapitalize="characters" required></div>'
-    + '<div class="fld"><label>Password / PIN</label><input id="lp" type="password" inputmode="numeric" autocomplete="current-password" required></div>'
+    + '<div class="fld"><label>Username</label><input id="lu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>'
+    + '<div class="fld"><label>Password / PIN</label><input id="lp" type="password" autocomplete="current-password" autocapitalize="none" required></div>'
     + '<button class="btn primary" type="submit" id="lbtn">'+svg("check")+'Sign in</button>'
     + '<div class="empty" style="padding:14px"><span style="font-size:12px">On the factory Wi-Fi only</span></div></form>';
 }
