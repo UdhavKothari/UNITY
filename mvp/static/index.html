@@ -982,6 +982,11 @@ boot(()=>{
   if(!allowed.includes('floor')) show(allowed[0]);
   // keep the board live: re-anchor the plan to the wall clock every few minutes so it moves forward
   setInterval(()=>{ if(document.getElementById("gantt")) draw(); }, 3*60000);
+  startAutoSync(function(){                        // ~4s live sync of the active view (skips storage + any open editor)
+    const on=document.querySelector('#secTabs button.on'); const s=on?on.dataset.s:'floor';
+    if(s==='massplan') renderMassPlan();
+    else if(s!=='storage') draw();                // floor / sched
+  });
 });
 </script>
 </body>

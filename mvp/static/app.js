@@ -759,16 +759,105 @@ function renderFloor(el,S,clockH){
               +'<span class="mc-plan-n tnum">'+b.pcs+' pcs &middot; '+b.meters+' m &middot; '+b.kg+' kg</span></li>'; }).join("")
         + '</ol></details>';
     }
+    const pl=m.plcLive, plHot=(function(){ if(!pl||!pl.running) return false; const tl=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3; return (+pl.setTemp>0)&&Math.abs((+pl.actTemp||0)-(+pl.setTemp||0))>tl; })();
+    const plBadge = pl ? (' &middot; <span class="tnum" style="color:'+(plHot?'var(--danger)':'var(--accent)')+'">'+(pl.running?(pl.actTemp+'°'):'PLC idle')+'</span>') : (m.plc?" &middot; PLC":"");
     html+='<div class="mc rise" style="animation-delay:'+(i*35)+'ms">'
-      +'<div class="mc-top"><div class="mc-ic"><span class="material-symbols-rounded">'+mcIcon(m.type)+'</span></div>'
+      +'<div class="mc-top" style="cursor:pointer" title="Live PLC data" onclick="openMachinePlc(\''+esc(m.id)+'\')"><div class="mc-ic"><span class="material-symbols-rounded">'+mcIcon(m.type)+'</span></div>'
       +'<div style="min-width:0;flex:1"><div class="mc-name">'+m.id+' <span class="pill '+status+'">'+label+'</span></div>'
-      +'<div class="mc-type">'+esc(m.type)+(m.plc?" &middot; PLC":"")+' &middot; '+m.capMax+' kg</div></div></div>'
+      +'<div class="mc-type">'+esc(m.type)+plBadge+' &middot; '+m.capMax+' kg</div></div>'
+      +'<span class="material-symbols-rounded" style="color:var(--faint);align-self:center">chevron_right</span></div>'
       +'<div class="mc-body"><div class="vat'+vatCls+'"><div class="fill" style="height:'+fillPct+'%;background:'+fillBg+'"></div>'
       +(fillPct?'<div class="pct">'+fillPct+'%</div>':'')+'</div>'+info+'</div>'
       +'<div class="mc-foot"><span class="lbl">Queue</span><span class="tnum" style="font-weight:600">'+queue+' <span class="muted" style="font-weight:400">waiting</span></span></div>'
       +moreHtml+'</div>';
   });
   el.innerHTML=html;
+}
+
+/* ---------- machine PLC modal (click a machine on the floor) ---------- */
+function agoWeb(ts){
+  if(!ts) return "";
+  const t=new Date(String(ts).replace(" ","T")); if(isNaN(t)) return "";
+  let s=Math.max(0,Math.round((Date.now()-t.getTime())/1000));
+  if(s<60) return s+"s ago"; const m=Math.floor(s/60); if(m<60) return m+"m ago"; return Math.floor(m/60)+"h ago";
+}
+function plcModalBody(m){
+  const p=m.plcLive;
+  const bx='background:var(--surface-2,#f8fafc);border:1px solid var(--line,#e6eaf1);border-radius:12px;padding:14px';
+  if(!p){
+    return '<div class="empty" style="padding:26px 16px"><span class="material-symbols-rounded">sync</span>'
+      +'<h3>No live PLC data</h3><p>'+(m.plcTable
+        ? ('Waiting for the first reading from <b>'+esc(m.plcTable)+'</b>. Check the Server log in Settings.')
+        : ('No PLC table set for '+esc(m.id)+'. Set it in Admin → Machines (e.g. jet_mch_1_rtd).'))+'</p></div>';
+  }
+  const tol=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3;
+  const drift=Math.abs((+p.actTemp||0)-(+p.setTemp||0)), hot=p.running&&(+p.setTemp>0)&&drift>tol;
+  const alarms=(p.alarms||[]).filter(Boolean);
+  const kv=(k,v)=>'<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line,#e6eaf1)"><span class="muted">'+k+'</span><span class="tnum" style="font-weight:600;text-align:right">'+v+'</span></div>';
+  return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'
+      +'<span class="pill '+(p.running?'run':'free')+'">'+(p.running?'Running':'Idle')+'</span>'
+      +(p.program?'<span class="pill">'+esc(p.program)+'</span>':'')
+      +'<span class="muted" style="margin-left:auto;font-size:12px">'+(p.updated?'updated '+esc(agoWeb(p.updated)):'')+'</span>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">'
+      +'<div style="'+bx+(hot?';background:var(--danger-soft,#fbeaea);border-color:#f2c9c9':'')+'">'
+        +'<div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">Temperature</div>'
+        +'<div class="tnum" style="font-size:30px;font-weight:800;color:'+(hot?'var(--danger,#d64545)':'var(--ink,#18233b)')+'">'+(p.actTemp!=null?p.actTemp:'—')+'°</div>'
+        +'<div class="muted">set '+(p.setTemp!=null?p.setTemp+'°':'—')+(hot?' · +'+drift.toFixed(1)+'° over':'')+'</div></div>'
+      +'<div style="'+bx+'">'
+        +'<div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">Current step</div>'
+        +'<div style="font-size:20px;font-weight:800;margin-top:4px">'+esc(p.stepName||'—')+'</div>'
+        +'<div class="muted">'+(p.remain?('~'+p.remain+' min left'):(p.battime?(p.battime+' min run'):''))+'</div></div>'
+    +'</div>'
+    +'<div>'
+      +kv('Program', esc(p.program||'—')+(p.pgmNo?(' · no. '+p.pgmNo):''))
+      +kv('Water (main volume)', (p.litre||0)+' L')
+      +kv('LiqRatio sel', (p.liqRatio!=null?p.liqRatio:'—'))
+      +kv('Batch time', (p.battime||0)+' min')
+      +kv('Remaining', (p.remain||0)+' min')
+      +kv('PLC clock', esc(p.at||'—'))
+      +kv('Source table', esc(m.plcTable||'—'))
+    +'</div>'
+    +(alarms.length?'<div class="pill maint" style="margin-top:12px"><span class="material-symbols-rounded">warning</span> PLC alarm: '+esc(alarms.join(' / '))+'</div>':'');
+}
+function openMachinePlc(id){
+  const m=(DB.machines||[]).find(x=>x.id===id); if(!m) return;
+  const bg=document.createElement("div"); bg.className="modal-bg"; bg.dataset.plc=id;
+  bg.innerHTML='<div class="modal"><div class="m-h"><h3><span class="material-symbols-rounded">'+mcIcon(m.type)+'</span>'
+    +esc(m.id)+' · Live PLC</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b" id="plcModalBody">'+plcModalBody(m)+'</div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
+  bg.addEventListener("click",e=>{ if(e.target===bg) bg.remove(); });
+  document.body.appendChild(bg);
+}
+function refreshPlcModal(){
+  const bg=document.querySelector('.modal-bg[data-plc]'); if(!bg) return;
+  const m=(DB.machines||[]).find(x=>x.id===bg.dataset.plc); const b=bg.querySelector('#plcModalBody');
+  if(m&&b) b.innerHTML=plcModalBody(m);
+}
+
+/* ---------- live auto-sync: refresh the current view every few seconds without disturbing edits ---------- */
+let _autoSyncTimer=null, _dbEtag=null;
+async function _syncFetch(){
+  try{
+    const r=await fetch("/api/db",{headers:_dbEtag?{"If-None-Match":_dbEtag}:{}});
+    if(r.status===304) return false;                 // nothing changed since last tick
+    const et=r.headers.get("ETag"); if(et) _dbEtag=et;
+    const d=await r.json(); if(d && !d.error){ DB=d; return true; }
+    return false;
+  }catch(e){ return false; }
+}
+function startAutoSync(renderFn){
+  if(_autoSyncTimer) clearInterval(_autoSyncTimer);
+  _autoSyncTimer=setInterval(async ()=>{
+    const ae=document.activeElement;
+    if(ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)) return;   // don't yank data out from under typing
+    const changed=await _syncFetch();
+    if(document.querySelector('.modal-bg[data-plc]')){ if(changed) refreshPlcModal(); return; }  // PLC modal open: just refresh it
+    if(document.querySelector('.modal-bg')) return;                  // another modal open: leave the page alone
+    if(!changed || window.MP_EDIT) return;                           // no change, or a batch editor is open
+    try{ renderFn && renderFn(); }catch(e){}
+  }, 4000);
 }
 
 /* ---------- small ui utils ---------- */

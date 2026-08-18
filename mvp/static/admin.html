@@ -1706,6 +1706,9 @@ boot(()=>{
   CUR = can("dashboard") ? "dashboard" : firstAllowedPage();
   const rb=document.getElementById("resetBtn"); if(rb) rb.style.display = can("settings") ? "" : "none";
   renderNav(); render();
+  startAutoSync(function(){                        // ~4s live sync — only the live pages, never the data tables/forms
+    if(CUR==="dashboard" || CUR==="plan") render();
+  });
 });
 </script>
 </body>
