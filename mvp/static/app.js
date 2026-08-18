@@ -879,7 +879,8 @@ function startAutoSync(renderFn){
     const changed=await _syncFetch();
     if(document.querySelector('.modal-bg[data-plc]')){ if(changed) refreshPlcModal(); return; }  // PLC modal open: just refresh it
     if(document.querySelector('.modal-bg')) return;                  // another modal open: leave the page alone
-    if(!changed || window.MP_EDIT) return;                           // no change, or a batch editor is open
+    if(!changed) return;                                             // nothing changed on the server
+    if(document.querySelector('.mp-editor')) return;                 // a batch editor is open — never rebuild under it
     try{ renderFn && renderFn(); }catch(e){}
   }, 4000);
 }
