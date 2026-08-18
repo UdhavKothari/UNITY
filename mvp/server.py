@@ -1693,13 +1693,32 @@ def _plc_poller():
     except Exception:
         print("[plc] pymysql not installed — run:  pip install pymysql --break-system-packages", flush=True); return
     print("[plc] live poll every %ds -> %s/%s" % (PLC_POLL_SECS, cfg.get("host"), cfg.get("database")), flush=True)
-    while True:
-        wait = ((3 - time.localtime().tm_sec) % 10) or 10       # wake on the :03/:13/:23... second
-        time.sleep(wait)
+
+    def _run_cycle_bounded():
+        # Run one cycle in a throwaway worker with a hard time ceiling. The DB calls happen OUTSIDE the
+        # global LOCK, so if the MySQL read hangs (flaky LAN link) we abandon that worker and try again
+        # next tick instead of freezing the poller forever. This is what makes it self-heal from "stale".
+        holder = {}
+        def work():
+            try: _plc_cycle(pymysql, load_secrets().get("plc") or cfg)
+            except Exception as e: holder["err"] = e
+        th = threading.Thread(target=work, daemon=True); th.start(); th.join(8)
+        if th.is_alive():
+            raise TimeoutError("PLC cycle exceeded 8s — DB read is hanging (check the link to %s)" % cfg.get("host"))
+        if holder.get("err"): raise holder["err"]
+
+    last_beat = 0.0
+    while True:                                                 # this loop must never exit — it IS the poller
         try:
-            _plc_cycle(pymysql, load_secrets().get("plc") or cfg)
+            wait = ((3 - time.localtime().tm_sec) % 10) or 10   # wake on the :03/:13/:23... second
+            time.sleep(wait)
+            t0 = time.time()
+            _run_cycle_bounded()
+            if time.time() - last_beat > 30:                    # periodic proof-of-life in the Server log
+                print("[plc] heartbeat — last cycle %.0f ms" % ((time.time() - t0) * 1000), flush=True)
+                last_beat = time.time()
         except Exception as e:
-            print("[plc] cycle error:", e, flush=True); time.sleep(2)
+            print("[plc] cycle error:", repr(e), flush=True); time.sleep(3)
 
 if __name__ == "__main__":
     _install_termlog()   # mirror console output into the Settings log panel
