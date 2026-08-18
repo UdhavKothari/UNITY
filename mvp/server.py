@@ -1639,6 +1639,7 @@ def _plc_apply(db, machine, dec, tol):
     if any(dec["alarms"]):
         _plc_alert(db, mid, "alarm", "%s PLC alarm: %s" % (mid, "/".join(str(a) for a in dec["alarms"] if a)))
 
+_PLC_STATE = {"warned_no_tbl": False, "last": ""}
 def _plc_cycle(pymysql, cfg):
     with LOCK:
         db = load_db()
@@ -1646,24 +1647,32 @@ def _plc_cycle(pymysql, cfg):
                     for m in db.get("machines", []) if (m.get("plcTable") or "").strip()]
         tol = float((db.get("settings", {}) or {}).get("tempToleranceC", cfg.get("tempToleranceC", 3)) or 3)
     if not machines:
+        if not _PLC_STATE["warned_no_tbl"]:
+            print("[plc] connected OK, but NO machine has a 'PLC table' set — nothing to poll. "
+                  "Set it in Admin -> Machines (e.g. jet_mch_1_rtd) for each jet.", flush=True)
+            _PLC_STATE["warned_no_tbl"] = True
         return
+    _PLC_STATE["warned_no_tbl"] = False
     conn = pymysql.connect(host=cfg.get("host"), port=int(cfg.get("port", 3306)), user=cfg.get("user"),
                            password=cfg.get("password"), database=cfg.get("database"),
                            connect_timeout=5, read_timeout=5, cursorclass=pymysql.cursors.DictCursor)
+    seen = []
     try:
         cur = conn.cursor()
         for m in machines:
             tbl = m["plcTable"]
             if not _PLC_TBL_RE.match(tbl):
-                print("[plc] skipping unsafe table name:", tbl, flush=True); continue
+                seen.append("%s:BAD-TABLE(%s)" % (m["id"], tbl)); continue
             q = "SELECT " + ",".join("`%s`" % c for c in PLC_COLS) + " FROM `%s` ORDER BY `id` DESC LIMIT 1" % tbl
             try:
                 cur.execute(q); row = cur.fetchone()
             except Exception as e:
-                print("[plc]", tbl, "query error:", e, flush=True); continue
+                seen.append("%s:ERR(%s)" % (m["id"], str(e)[:60])); continue
             if not row:
-                continue
+                seen.append("%s:no-row" % m["id"]); continue
             dec = _plc_decode(row)
+            seen.append("%s:%s%s" % (m["id"], (dec["stepName"] if dec["running"] else "idle"),
+                                     (" %.1f°" % dec["actTemp"] if dec["running"] else "")))
             with LOCK:
                 db = load_db()
                 mm = next((x for x in db.get("machines", []) if x.get("id") == m["id"]), None)
@@ -1671,6 +1680,9 @@ def _plc_cycle(pymysql, cfg):
                     _plc_apply(db, mm, dec, tol); save_db(db)
     finally:
         conn.close()
+    summary = "[plc] " + ", ".join(seen)            # only log when it changes (avoids flooding the console)
+    if summary != _PLC_STATE["last"]:
+        print(summary, flush=True); _PLC_STATE["last"] = summary
 
 def _plc_poller():
     cfg = load_secrets().get("plc")
