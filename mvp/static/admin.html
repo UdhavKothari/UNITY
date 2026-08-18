@@ -1604,6 +1604,11 @@ function renderSettings(c){
      +'<p class="small muted" style="margin:0 0 12px">Destructive — back up first (backup_db.bat). Qualities, shades, recipes and batches are not affected.</p>'
      +'<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>'
      +'</div></div>'):'')
+   +(canEdit("settings")?('<div class="card" style="margin-top:16px"><div class="card-b">'
+     +'<h2 style="margin:0 0 4px;font-size:15px">PLC live import</h2>'
+     +'<p class="small muted" style="margin:0 0 12px">'+((s.plcEnabled!==false)?'Reading each jet\'s PLC database every 10 seconds.':'Paused — no PLC data is being collected right now.')+'</p>'
+     +'<button class="btn '+((s.plcEnabled!==false)?'danger':'')+'" onclick="togglePlc()"><span class="material-symbols-rounded">'+((s.plcEnabled!==false)?'stop_circle':'play_arrow')+'</span>'+((s.plcEnabled!==false)?'Stop PLC import':'Start PLC import')+'</button>'
+     +'</div></div>'):'')
    +'<div class="card" style="margin-top:16px"><div class="card-b">'
      +'<div style="display:flex;align-items:center;gap:8px;margin:0 0 8px">'
        +'<h2 style="margin:0;font-size:15px">Server log</h2>'
@@ -1653,6 +1658,13 @@ async function systemRestart(){
   if(res&&res.error){ toast(res.error); return; }
   if(out) out.textContent="Server is restarting. Wait a few seconds, then refresh this page.";
   toast("Server restarting…");
+}
+async function togglePlc(){
+  const s=cfg(), on=s.plcEnabled!==false;
+  const next=Object.assign({}, s, {plcEnabled: !on});   // preserve all other settings
+  const r=await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"upsert",table:"__settings__",row:next})});
+  const j=await r.json().catch(()=>({})); if(j&&j.error){ toast(j.error); return; }
+  await API.db(); render(); toast(on?"PLC import stopped":"PLC import started");
 }
 async function saveSettings(){
   const st={widthDefault:+s_w.value,minMeters:+s_min.value,stentorSetupMins:+s_sten.value,buffer:+s_buf.value,loadMin:+s_load.value,unloadMin:+s_unload.value,familyPreferencePenaltyMins:+s_fampen.value,capToleranceKg:+document.getElementById("s_captol").value||0,tempToleranceC:+document.getElementById("s_temptol").value||3,completionMode:document.getElementById("s_cmode").value};

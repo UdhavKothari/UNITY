@@ -1653,7 +1653,7 @@ def _plc_apply(db, machine, dec, tol):
     if any(dec["alarms"]):
         _plc_alert(db, mid, "alarm", "%s PLC alarm: %s" % (mid, "/".join(str(a) for a in dec["alarms"] if a)))
 
-_PLC = {"conn": None, "warned_no_tbl": False, "last": ""}
+_PLC = {"conn": None, "warned_no_tbl": False, "last": "", "paused": False}
 def _plc_drop_conn():
     c = _PLC.get("conn")
     if c is not None:
@@ -1676,12 +1676,45 @@ def _plc_get_conn(pymysql, cfg):
                                    cursorclass=pymysql.cursors.DictCursor)
     return _PLC["conn"]
 
+_PLC_ERR = {}   # machine id -> consecutive read-error count (a good read resets it)
+def _plc_conn_error(pymysql, e):
+    """True for connection-level failures (reconnect), False for table-level ones (skip that machine)."""
+    err = getattr(pymysql, "err", None)
+    try:
+        if err and isinstance(e, err.InterfaceError): return True
+        if err and isinstance(e, err.OperationalError):
+            code = e.args[0] if e.args else 0
+            return code in (0, 2002, 2003, 2006, 2013, 2055)   # connect / server-gone / lost-connection
+    except Exception:
+        pass
+    return False
+def _plc_bump_err(mid, tbl, why):
+    """count a per-machine read failure; after 30 in a row, clear that machine's PLC table so one bad
+    table can't keep breaking the poll (and the admin doesn't have to remove it by hand)."""
+    n = _PLC_ERR.get(mid, 0) + 1
+    _PLC_ERR[mid] = n
+    if n >= 30:
+        with LOCK:
+            db = load_db()
+            mm = next((x for x in db.get("machines", []) if x.get("id") == mid), None)
+            if mm and (mm.get("plcTable") or "").strip():
+                mm["plcTable"] = ""; save_db(db)
+                print("[plc] %s: cleared its PLC table '%s' after 30 failed reads (%s)" % (mid, tbl, why), flush=True)
+        _PLC_ERR[mid] = 0
+
 def _plc_cycle(pymysql, cfg):
     with LOCK:
         db = load_db()
+        enabled = (db.get("settings", {}) or {}).get("plcEnabled", True) is not False
         machines = [dict(id=m.get("id"), plcTable=(m.get("plcTable") or "").strip())
-                    for m in db.get("machines", []) if (m.get("plcTable") or "").strip()]
+                    for m in db.get("machines", []) if (m.get("plcTable") or "").strip()] if enabled else []
         tol = float((db.get("settings", {}) or {}).get("tempToleranceC", cfg.get("tempToleranceC", 3)) or 3)
+    if not enabled:                                   # paused from Settings -> drop the connection, do nothing
+        if not _PLC.get("paused"):
+            print("[plc] import PAUSED from Settings.", flush=True); _PLC["paused"] = True
+        _plc_drop_conn(); return
+    if _PLC.get("paused"):
+        print("[plc] import RESUMED.", flush=True); _PLC["paused"] = False
     if not machines:
         if not _PLC["warned_no_tbl"]:
             print("[plc] connected OK, but NO machine has a 'PLC table' set — nothing to poll. "
@@ -1693,19 +1726,26 @@ def _plc_cycle(pymysql, cfg):
     seen = []
     cur = conn.cursor()
     for m in machines:
-        tbl = m["plcTable"]
+        mid, tbl = m["id"], m["plcTable"]
         if not _PLC_TBL_RE.match(tbl):
-            seen.append("%s:BAD-TABLE(%s)" % (m["id"], tbl)); continue
+            seen.append("%s:BAD-NAME" % mid); _plc_bump_err(mid, tbl, "unsafe table name"); continue
         q = "SELECT " + ",".join("`%s`" % c for c in PLC_COLS) + " FROM `%s` ORDER BY `id` DESC LIMIT 1" % tbl
-        cur.execute(q); row = cur.fetchone()        # a read/connection error propagates -> poller reconnects
+        try:
+            cur.execute(q); row = cur.fetchone()
+        except Exception as e:
+            if _plc_conn_error(pymysql, e):
+                raise                                # connection dropped -> let the poller reconnect
+            seen.append("%s:ERR(%s)" % (mid, str(e)[:45]))   # table-level (missing table etc.) -> skip this one
+            _plc_bump_err(mid, tbl, str(e)[:80]); continue
+        _PLC_ERR.pop(mid, None)                      # a good read clears the error count
         if not row:
-            seen.append("%s:no-row" % m["id"]); continue
+            seen.append("%s:no-row" % mid); continue
         dec = _plc_decode(row)
-        seen.append("%s:%s%s" % (m["id"], (dec["stepName"] if dec["running"] else "idle"),
+        seen.append("%s:%s%s" % (mid, (dec["stepName"] if dec["running"] else "idle"),
                                  (" %.1f°" % dec["actTemp"] if dec["running"] else "")))
         with LOCK:
             db = load_db()
-            mm = next((x for x in db.get("machines", []) if x.get("id") == m["id"]), None)
+            mm = next((x for x in db.get("machines", []) if x.get("id") == mid), None)
             if mm:
                 _plc_apply(db, mm, dec, tol); save_db(db)
     summary = "[plc] " + ", ".join(seen)            # only log when it changes (avoids flooding the console)
