@@ -905,13 +905,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "No batches could be created — check the machine names and lots."})
                 sid = "PS-" + time.strftime("%y%m%d") + "-" + uuid.uuid4().hex[:6]
                 files = []
-                for suffix, img in zip(("L", "R"), (req.get("images") or [])):
+                for idx, img in enumerate(req.get("images") or []):   # 2 photos (one spread) or many (queue mode)
                     s = str(img or "")
                     if "," in s and s.strip().lower().startswith("data:"): s = s.split(",", 1)[1]
                     if not s.strip(): continue
                     try:
                         raw = base64.b64decode(s, validate=False)
-                        fn = "%s_%s.jpg" % (sid, suffix)
+                        fn = "%s_%02d.jpg" % (sid, idx + 1)
                         with open(os.path.join(PROGRAM_SCANS_DIR, fn), "wb") as f: f.write(raw)
                         files.append(fn)
                     except Exception as e:

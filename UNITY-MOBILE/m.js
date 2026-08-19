@@ -331,10 +331,15 @@ async function doLogin(e){
 async function signOut(){ await apiPost({op:"logout"}).catch(()=>{}); USER = null; DB = null; renderLogin(); }
 
 /* ================= Program scan: photograph the register -> review -> punch batches ================= */
-let SCAN = {imgs:[null,null], program:null, reading:false, error:null, secs:0, committing:false};
-function scanReset(){ SCAN = {imgs:[null,null], program:null, reading:false, error:null, secs:0, committing:false}; renderScan(); }
-function scanBackToCapture(){ SCAN.program = null; renderScan(); }
-function scanPick(i){ const el = document.getElementById("scan_in_"+i); if(el) el.click(); }
+let SCAN = {pairs:[{imgs:[null,null]}], reading:false, progress:{done:0,total:0}, program:null, errors:[], committing:false, allImages:[]};
+function scanNewPair(){ return {imgs:[null,null]}; }
+function scanFreshState(){ return {pairs:[scanNewPair()], reading:false, progress:{done:0,total:0}, program:null, errors:[], committing:false, allImages:[]}; }
+function scanReset(){ SCAN = scanFreshState(); renderScan(); }
+function scanBackToCapture(){ SCAN.program = null; renderScan(); }         // keep the photos; go tweak/re-read
+function scanAddPair(){ SCAN.pairs.push(scanNewPair()); renderScan(); }
+function scanRemovePair(pi){ SCAN.pairs.splice(pi,1); if(!SCAN.pairs.length) SCAN.pairs.push(scanNewPair()); renderScan(); }
+function scanValidPairs(){ return SCAN.pairs.filter(pr => pr.imgs[0]); }
+function scanPick(pi,si){ const el = document.getElementById("scan_in_"+pi+"_"+si); if(el) el.click(); }
 function scanDownscale(file, cb){
   const rd = new FileReader();
   rd.onload = () => { const img = new Image();
@@ -346,39 +351,60 @@ function scanDownscale(file, cb){
     img.onerror = () => cb(null); img.src = rd.result; };
   rd.onerror = () => cb(null); rd.readAsDataURL(file);
 }
-function scanFile(i, input){
+function scanFile(pi, si, input){
   const f = input.files && input.files[0]; if(!f){ return; }
-  scanDownscale(f, url => { if(url){ SCAN.imgs[i] = url; SCAN.error = null; renderScan(); } else toast("Couldn't read that photo"); });
+  scanDownscale(f, url => { if(url){ SCAN.pairs[pi].imgs[si] = url; SCAN.errors = []; renderScan(); } else toast("Couldn't read that photo"); });
   input.value = "";
 }
 function renderScan(){
   if(!can("op_scan")) return renderNoAccess();
   if(SCAN.program) return renderScanPreview();
-  const slot = (i, label) => { const img = SCAN.imgs[i];
-    return '<div class="scan-slot'+(img?' has':'')+'"><div class="scan-slot-h">'+label+(i===0?' <b class="req">required</b>':'')+'</div>'
-      + (img ? '<img class="scan-thumb" src="'+img+'" alt=""><button class="btn ghost sm scan-retake" onclick="scanPick('+i+')">'+svg("photo_camera")+'Retake</button>'
-             : '<button class="scan-drop" onclick="scanPick('+i+')">'+svg("photo_camera")+'<span>Take / choose photo</span></button>')
-      + '<input type="file" accept="image/*" capture="environment" id="scan_in_'+i+'" style="display:none" onchange="scanFile('+i+',this)"></div>'; };
-  const ready = !!SCAN.imgs[0];
-  let body = '<div class="card"><div class="sec-label">Photograph the register</div>'
-    + '<div class="scan-hint">'+svg("qr_code_scanner")+'<span>Snap the <b>left page</b> (lot · pcs · mtr · weight · quality · shade) and the <b>right page</b> (page no · in/out · pH · remarks) of one 2-page spread. Keep it flat and straight, and fill the frame.</span></div>'
-    + '<div class="scan-slots">'+slot(0,"Left page")+slot(1,"Right page")+'</div>';
-  if(SCAN.error) body += '<div class="scan-err">'+svg("warning")+'<span>'+esc(SCAN.error)+'</span></div>';
-  if(SCAN.reading) body += '<div class="scan-reading">'+svg("hourglass_top")+'<div><b>Reading the pages…</b><span>The on-site reader is transcribing — this can take up to a minute.</span></div></div>';
-  else body += '<button class="btn primary lg scan-go" '+(ready?'':'disabled')+' onclick="scanDoRead()">'+svg("bolt")+'Read pages</button>';
-  body += '</div>';
+  if(SCAN.reading) return renderScanReading();
+  const slot = (pi, si, label) => { const img = SCAN.pairs[pi].imgs[si];
+    return '<div class="scan-slot'+(img?' has':'')+'"><div class="scan-slot-h">'+label+(si===0?' <b class="req">req</b>':'')+'</div>'
+      + (img ? '<img class="scan-thumb" src="'+img+'" alt=""><button class="btn ghost sm scan-retake" onclick="scanPick('+pi+','+si+')">'+svg("photo_camera")+'Retake</button>'
+             : '<button class="scan-drop" onclick="scanPick('+pi+','+si+')">'+svg("photo_camera")+'<span>Photo</span></button>')
+      + '<input type="file" accept="image/*" capture="environment" id="scan_in_'+pi+'_'+si+'" style="display:none" onchange="scanFile('+pi+','+si+',this)"></div>'; };
+  const pairCard = (pr, pi) => '<div class="card sp-pair"><div class="sp-pair-h"><b>Spread '+(pi+1)+'</b>'
+      + (SCAN.pairs.length>1 ? '<button class="sp-rm" title="remove spread" onclick="scanRemovePair('+pi+')">'+svg("delete")+'</button>' : '')+'</div>'
+      + '<div class="scan-slots">'+slot(pi,0,"Left page")+slot(pi,1,"Right page")+'</div></div>';
+  const valid = scanValidPairs().length;
+  let body = '<div class="scan-hint">'+svg("qr_code_scanner")+'<span>Photograph each 2-page spread — <b>left page</b> then <b>right page</b>. Add as many spreads as you like; they\'re read one after another, then reviewed together. Keep pages flat and fill the frame.</span></div>'
+    + SCAN.pairs.map(pairCard).join("")
+    + '<button class="btn ghost scan-addpair" onclick="scanAddPair()">'+svg("add")+'Add another spread</button>';
+  if(SCAN.errors && SCAN.errors.length) body += '<div class="scan-err">'+svg("warning")+'<span>'+SCAN.errors.map(e=>(e.spread?'Spread '+e.spread+': ':'')+esc(e.error)).join('<br>')+'</span></div>';
+  body += '<button class="btn primary lg scan-go" '+(valid?'':'disabled')+' onclick="scanDoReadAll()">'+svg("bolt")+'Read '+(valid||'')+' spread'+(valid!=1?'s':'')+'</button>';
   shell({ title:"Scan program", body, tab:"/scan" });
 }
-async function scanDoRead(){
-  if(!SCAN.imgs[0]){ toast("Add the left-page photo first"); return; }
-  SCAN.reading = true; SCAN.error = null; renderScan();
-  let res; try{ res = await apiPost({op:"scanRead", images: SCAN.imgs.filter(Boolean)}); }
-  catch(e){ res = {ok:false, error:"Couldn't reach the server."}; }
-  SCAN.reading = false;
-  if(!res || res.ok===false || res.error){ SCAN.error = (res && res.error) || "Reading failed."; return renderScan(); }
-  const prog = scanNormalize(res.program); SCAN.secs = res.secs || 0;
-  if(!prog.machines.length){ SCAN.error = "No program rows were found. Try clearer, straighter photos."; return renderScan(); }
-  SCAN.program = prog; renderScan();
+function renderScanReading(){
+  const p = SCAN.progress, pct = p.total ? Math.round(p.done/p.total*100) : 0, cur = Math.min(p.done+1, p.total);
+  const body = '<div class="card scan-reading-card">'+svg("hourglass_top")
+    + '<div class="srr-t"><b>Reading spread '+cur+' of '+p.total+'…</b><span>The on-site reader is transcribing each spread — about a minute each. Keep the app open.</span></div>'
+    + '<div class="srr-bar"><div class="srr-fill" style="width:'+pct+'%"></div></div>'
+    + '<div class="srr-count tnum">'+p.done+' / '+p.total+' done'+((SCAN.errors&&SCAN.errors.length)?(' · '+SCAN.errors.length+' failed'):'')+'</div></div>';
+  shell({ title:"Reading…", body, tab:"/scan" });
+}
+async function scanDoReadAll(){
+  const valid = scanValidPairs();
+  if(!valid.length){ toast("Add at least the left page of one spread"); return; }
+  SCAN.reading = true; SCAN.errors = []; SCAN.progress = {done:0, total:valid.length};
+  const machines = [], allImages = [];
+  renderScan();
+  for(let i=0;i<valid.length;i++){
+    SCAN.progress.done = i; renderScan();
+    await new Promise(r=>setTimeout(r, 30));                 // let the progress bar paint before the long call
+    const imgs = valid[i].imgs.filter(Boolean);
+    let res; try{ res = await apiPost({op:"scanRead", images: imgs}); }
+    catch(e){ res = {ok:false, error:"Couldn't reach the server."}; }
+    if(res && res.ok!==false && !res.error){
+      scanNormalize(res.program).machines.forEach(m => machines.push(m));
+      imgs.forEach(im => allImages.push(im));
+    } else { SCAN.errors.push({spread:i+1, error:(res&&res.error)||"read failed"}); }
+    SCAN.progress.done = i+1; renderScan();
+  }
+  SCAN.reading = false; SCAN.allImages = allImages;
+  if(!machines.length){ SCAN.program = null; if(!SCAN.errors.length) SCAN.errors.push({spread:0, error:"No program rows were found. Try clearer, straighter photos."}); return renderScan(); }
+  SCAN.program = {machines}; renderScan();
 }
 function scanMatchMachine(name){ const raw = String(name==null?"":name).trim(); if(!raw) return "";
   const norm = s => String(s==null?"":s).replace(/\W/g,"").toUpperCase();
@@ -449,20 +475,21 @@ function renderScanPreview(){
     + (flags ? '<div class="sp-flagsum">'+svg("priority_high")+flags+' to review</div>' : '<div class="sp-okline">'+svg("check_circle")+'all recognised</div>')+'</div>';
   const foot = '<div class="sp-actions"><button class="btn ghost" onclick="scanReset()">'+svg("arrow_back")+'Rescan</button>'
     + '<button class="btn primary" '+(SCAN.committing?'disabled':'')+' onclick="scanCommit()">'+svg("check")+(SCAN.committing?'Punching…':('Confirm &amp; punch '+total))+'</button></div>';
+  const errline = (SCAN.errors&&SCAN.errors.length) ? '<div class="scan-err" style="margin:0 0 12px">'+svg("warning")+'<span>'+SCAN.errors.map(e=>'Spread '+e.spread+' couldn\'t be read — recapture it and scan again.').join('<br>')+'</span></div>' : '';
   const action = '<button class="ab-btn" onclick="scanBackToCapture()" title="back to photos">'+svg("photo_camera")+'</button>';
-  shell({ title:"Review scan", tab:"/scan", action, body: head + cards + foot });
+  shell({ title:"Review scan", tab:"/scan", action, body: errline + head + cards + foot });
 }
 async function scanCommit(){
   if(SCAN.committing) return;
   const bad = SCAN.program.machines.filter(m=>!scanMcKnown(m.machine));
   if(bad.length){ toast("Pick a valid machine for each program first"); return; }
   SCAN.committing = true; renderScanPreview();
-  let res; try{ res = await apiPost({op:"scanCommit", program: SCAN.program, images: SCAN.imgs.filter(Boolean)}); }
+  let res; try{ res = await apiPost({op:"scanCommit", program: SCAN.program, images: SCAN.allImages}); }
   catch(e){ res = {error:"Couldn't reach the server."}; }
   SCAN.committing = false;
   if(!res || res.error){ toast((res&&res.error)||"Punch failed"); return renderScanPreview(); }
   const n = res.created||0;
-  SCAN = {imgs:[null,null], program:null, reading:false, error:null, secs:0, committing:false};
+  SCAN = scanFreshState();
   const body = '<div class="card scan-done">'+svg("check_circle")+'<b>'+n+' batch'+(n!=1?'es':'')+' added</b>'
     + '<span>They\'re in the plan now. The page photos were saved for the record.</span>'
     + '<div class="sp-actions"><button class="btn ghost" onclick="location.hash=\'/plan\'">'+svg("calendar_view_week")+'View plan</button>'
