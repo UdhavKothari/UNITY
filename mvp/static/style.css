@@ -518,6 +518,7 @@ tr.linked td{background:var(--success-soft)}
 .mp-ed-remarks{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
 .mp-ed-remarks .material-symbols-rounded{color:var(--muted);font-size:19px}
 .mp-ed-remarks input{flex:1;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:12.8px;background:var(--surface);color:var(--ink)}
+.mp-ed-remarks input::placeholder{color:var(--faint)}
 .mp-ed-remarks input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .mp-noteic{font-size:15px;vertical-align:-3px;color:var(--warning);cursor:help}
 
