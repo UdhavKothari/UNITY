@@ -495,21 +495,24 @@ function renderMassPlan(){
 /* ---- inline batch editor, right inside the machine's table (the Excel-like quick path) ---- */
 function mpEditorHTML(m){
   return `<div class="mp-editor">
-    <div class="mp-ed-grid">
-      <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></label>
-      <label class="mp-ed-f">Shade<span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></label>
-      <label class="mp-ed-f" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
-      <div class="mp-ed-actions">
-        <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${(MP_EDIT&&MP_EDIT.editId)?"Save changes":"Save batch"}</button>
-        <button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button>
+    <div class="mp-ed-table">
+      <div class="mp-ed-table-head"><span>Seq</span><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight</span><span>Quality</span><span>Shade</span><span>Pg No.</span><span>In time</span><span>Out time</span><span>PH</span><span></span></div>
+      <div class="mp-ed-table-row">
+        <span class="mp-ed-seq">+${nextSeq(m.id)}</span>
+        <div class="mp-ed-lots"><div id="mp_lots"></div></div>
+        <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></label>
+        <label class="mp-ed-f">Shade<span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></label>
+        <label class="mp-ed-f">Pg No.<input id="mp_pgno" type="text" placeholder="Page"></label>
+        <span class="mp-ed-readonly">—</span><span class="mp-ed-readonly">—</span><span class="mp-ed-readonly">—</span>
+        <div class="mp-ed-actions">
+          <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${(MP_EDIT&&MP_EDIT.editId)?"Save changes":"Save batch"}</button>
+          <button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button>
+        </div>
       </div>
+      <label class="mp-ed-f mp-ed-step" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
     </div>
-    <div class="lotq-head mp-ed-lhead"><span>Lot no.</span><span>Pcs</span><span>Meters</span><span>Weight (kg)</span><span>Takas</span><span></span></div>
-    <div id="mp_lots"></div>
     <label class="mp-ed-remarks"><span class="material-symbols-rounded">sticky_note_2</span>
       <input id="mp_remarks" type="text" placeholder="Remarks (optional) — a note for this batch only"></label>
-    <label class="mp-ed-remarks"><span class="material-symbols-rounded">menu_book</span>
-      <input id="mp_pgno" type="text" placeholder="Recipe page no. (optional) — where this quality's recipe is filed"></label>
     <div class="mp-ed-foot">
       ${(MP_EDIT&&MP_EDIT.editId)?"":`<button class="btn ghost sm" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button>`}
       <span class="mp-ed-total" id="mp_ed_total"></span>
