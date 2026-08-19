@@ -226,3 +226,74 @@ Observations captured during task-oriented work on the REL Dyeing ERP. Each entr
 **Suggested improvement:** Add a verification rule to the REL design/verification practice: every stub-render pass must also render at least one empty state and one permission-denied state, and assert zero console/pageerror events across ALL of them — not just the data-populated view. Drive views with empty arrays and a minimal-permission user, not only the happy-path fixture.
 
 **Principle:** "No errors" from a happy-path render is not coverage. Empty states, error states, and permission-denied states are distinct code paths and are exactly where undefined helpers and typos hide. Verification fixtures must include the zero/denied cases by default.
+
+### Observation 20: Doc-store makes per-row feature fields free, but derived state must be recomputed not stored
+
+**Date:** 2026-08-17
+**Session context:** Adding workflow-stage lot tracking to the batch planner (lots walk their quality's process flow in order).
+**Skill:** rel-dyeing-design-insight
+**Type:** internal
+**Phase/Area:** Data model / SQLite doc-store
+
+**Issue:** Adding new per-batch fields (stepNode, proc) needed ZERO backend work — the doc-store `upsert` stores the whole row, so new fields persist automatically with no schema/migration and no permission-map change (that's only needed for whole new tables). The temptation was to add a lotStages table to track per-lot progress; instead progress is DERIVED from batches (each batch records which takas it processed at which step), so there is a single source of truth and no sync bug. Verified the exact behaviours (partial split by piece, plan-ahead, unplanned-prior flag) with a headless VM harness that loaded the real app.js and drove the pure helpers, before any UI render.
+
+**Suggested improvement:** Add a short "doc-store patterns" note to the REL design insight skill: (1) new per-record fields are free — just write them on the row; only NEW TABLES need seed + ALL_PAGES + upsert allow-map entries; (2) prefer deriving cross-record state (progress, availability) over a second table, and unit-test the derivation as pure functions in a Node VM with a mock DB before wiring UI.
+
+**Principle:** In a schema-less doc store, the cost of a new field is zero and the cost of a duplicated source of truth is high. Model progress as a projection over existing records, and verify the projection in isolation before trusting the UI.
+
+### Observation 21: Guard big changes to production logic behind a feature predicate so the legacy path is untouched
+
+**Date:** 2026-08-17
+**Session context:** Reworking the batch planner's taka-allocation to be workflow-step-scoped without breaking qualities that have no workflow.
+**Skill:** rel-dyeing-design-insight
+**Type:** internal
+**Phase/Area:** Planner / safe rollout of risky changes
+
+**Issue:** The step-scoped lot availability is a deep change to the most production-critical code (fabric allocation). Rather than replace the global allocation, every new branch is gated by mpWfActive()/hasWorkflow(q): if the quality has no process flow, the editor behaves exactly as before. This bounds the blast radius — existing data and un-migrated qualities are provably unaffected — and let the change ship incrementally alongside a checkpoint commit of the unrelated finished features first.
+
+**Suggested improvement:** Add to the REL insight skill: when changing core planner/scheduler logic, gate the new behaviour behind an explicit predicate (feature present? new field set?) and keep the legacy branch intact; commit independent finished work as a separate checkpoint before the risky change so a revert is surgical.
+
+**Principle:** For high-blast-radius changes, additive-and-guarded beats replace-in-place: the old path stays a proven fallback, and the diff that can break production is small and clearly fenced.
+
+### Observation 22: Verify an external-system integration against a throwaway instance before touching the live one
+
+**Date:** 2026-08-17
+**Session context:** Building the PLC MySQL poller (reads jet machine RTD tables every 10s) — could not reach the factory's 192.168.0.235 from the build sandbox.
+**Skill:** rel-dyeing-design-insight
+**Type:** internal
+**Phase/Area:** Integrations / verification
+
+**Issue:** The factory PLC DB is on a private LAN the build environment can't reach, and the first real run would otherwise be against production. Instead I stood up a throwaway MariaDB in the sandbox, recreated the exact database/user/table/sample row the user gave, and ran the real query + decode + reconciliation + alert path against it. Caught nothing broken, but proved the connection string shape, the identifier-safe table interpolation, the tenths-of-a-degree temp decode, in/out reconciliation and the temperature alert all work before a single byte hit the live DB.
+
+**Suggested improvement:** Add to the REL insight skill: for any external-DB/API integration, reproduce the counterpart locally (a scratch MySQL/stub endpoint seeded with the user's real schema + sample row) and assert the full read→decode→apply path against it; only then point config at the live system. Keep credentials in the gitignored secrets file, never in the repo or the query.
+
+**Principle:** "It compiles" is not "it connects." An integration is only verified once the actual driver has round-tripped real-shaped data; a disposable replica makes that possible without risking the production system.
+
+### Observation 23: Native browser prompt() slipped past the design system until the skill was explicitly invoked
+
+**Date:** 2026-08-19
+**Session context:** Adding a "quick-add shade" affordance inside the REL-UNITY batch planner. First implementation used a native `window.prompt()` to collect the shade name.
+**Skill:** rel-dyeing-design-insight
+**Type:** internal
+**Phase/Area:** Section 8 (Hard bans) / delivery-time enforcement
+
+**Issue:** The first working, tested, and deployed version of the quick-add used `window.prompt()`. That is a reinvented/unstyled browser affordance and contradicts the design system's "no reinvented standard affordances" and "modal as the first thought — exhaust inline/progressive options first" rules. It was only caught and reworked into an inline field (matching the existing Excel-like planner editor) after the user explicitly invoked the rel-dyeing-design-insight skill. The design rules did not reach the moment of decision during the coding flow — they were applied only on explicit re-invocation.
+
+**Suggested improvement:** Add `window.alert`/`confirm`/`prompt` (and other native browser dialogs) to the Section 8 Hard bans list by name, and add a short delivery-time verification checkpoint to the skill: before shipping any new interactive control, re-read Section 8 and confirm no native dialog and no reinvented affordance was introduced. Convert the ban from narrative guidance into an explicit pre-flight check item.
+
+**Principle:** A skill full of design rules still gets violated during the creative flow unless it carries a delivery-time enforcement step. Named, greppable bans (specific API names) plus a "re-read the bans before you ship" checkpoint catch violations that broad prose ("no reinvented affordances") does not.
+
+### Observation 24: Design-system compliance keeps getting caught on explicit re-invocation, not at build time (recurrence of #23)
+
+**Date:** 2026-08-19
+**Session context:** Added a PgNo field/column, double-click-to-edit, and moved PH to the time modal in the batch planner. A new text input (.mp-ed-remarks / PgNo) shipped without the app's standard `::placeholder{color:var(--faint)}` convention; it was only caught and fixed when the user explicitly invoked the design skill afterward.
+
+**Skill:** rel-dyeing-design-insight
+**Type:** internal
+**Phase/Area:** Delivery-time enforcement / Section 8 + token-convention adherence
+
+**Issue:** This is the SECOND time this session (see #23, the native window.prompt()) that a design-system deviation shipped in a working, tested, committed state and was only corrected when the user explicitly re-invoked rel-dyeing-design-insight. #23 was a hard-ban violation; this one was a convention miss (a new form control not matching the app's established placeholder/token usage). Two instances make it a pattern, not a one-off: the design rules are applied reactively (on explicit skill load) rather than proactively during the build.
+
+**Suggested improvement:** Strengthens #23's proposed delivery-time checkpoint. Make the checkpoint cover two questions, not one: (1) did I introduce any hard-ban item (native alert/confirm/prompt, side-stripe border, gradient text, etc.)? and (2) does every NEW form control match the app's existing token conventions — placeholder color, focus ring, control radius, icon family — by grepping the stylesheet for how sibling controls already do it before writing new CSS? Add this as an explicit "before you ship a new/edited control" verification block in the skill.
+
+**Principle:** A design skill enforces its rules only if it carries a build-time verification step; recurrence across a session confirms narrative rules alone don't reach the moment of decision. The check must include convention-matching (does this new element look up how the codebase already solves it?), not just ban-avoidance — most real drift is silent divergence from existing patterns, not flagrant ban violations.
