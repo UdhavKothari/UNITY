@@ -497,7 +497,7 @@ function mpEditorHTML(m){
   return `<div class="mp-editor">
     <div class="mp-ed-grid">
       <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></label>
-      <label class="mp-ed-f">Shade<span class="mp-sh-row"><select id="mp_sh"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></label>
+      <label class="mp-ed-f">Shade<span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></label>
       <label class="mp-ed-f" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
       <div class="mp-ed-actions">
         <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${(MP_EDIT&&MP_EDIT.editId)?"Save changes":"Save batch"}</button>
@@ -545,13 +545,19 @@ function mpEditorRefreshShades(){
   if(!sh) return;                                            // shade field is in quick-add (input) mode — skip
   const q=mq?mq.value:"";
   const list=q?shadesForQuality(q):[];
-  sh.innerHTML=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
+  const opts=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
+  sh.innerHTML=opts + '<option value="__addshade__">+ Add new shade…</option>';   // last entry in the list opens the inline quick-add
+}
+function mpShadeSelChanged(){                                // picking "+ Add new shade…" from the dropdown opens the inline add
+  const sh=document.getElementById("mp_sh");
+  if(sh && sh.value==="__addshade__"){ mpQuickShade(); return; }
+  mpEditorSync();
 }
 /* quick-add a shade right from the planner — an inline field (no browser prompt), matching the
    Excel-like editor. Saves a minimal recipe now; finish family/tone/program later in Admin. */
 function mpShadeRow(sel){                                    // (re)build the shade field: select + quick-add button
   const row=document.querySelector(".mp-sh-row"); if(!row) return;
-  row.innerHTML='<select id="mp_sh"></select>'
+  row.innerHTML='<select id="mp_sh" onchange="mpShadeSelChanged()"></select>'
     +'<button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button>';
   mpEditorRefreshShades();
   if(sel){ const sh=document.getElementById("mp_sh"); if(sh) sh.value=sel; }
@@ -751,7 +757,8 @@ async function mpSaveNew(machineId){
     toast(machineId+" holds "+cap+" kg (+"+capTolerance()+" kg tolerance) — this "+tot.weight+" kg batch is too heavy."); return; }
   const stepNode = wfOn?mpStepNode():((ex&&ex.stepNode)||"");
   const proc = wfOn?mpStepProc():((ex&&ex.proc)||"");
-  const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:document.getElementById("mp_sh").value||"",
+  const _shv=(document.getElementById("mp_sh")||{}).value||"";
+  const row={ lots:rows, lotIds:rows.map(r=>r.lotId), quality:q, shadeNo:(_shv==="__addshade__"?"":_shv),
     machine:machineId, mcPin:machineId, seq: ex?ex.seq:nextSeq(machineId),
     notes:((document.getElementById("mp_remarks")||{}).value||"").trim(),
     pgNo:((document.getElementById("mp_pgno")||{}).value||"").trim(),
