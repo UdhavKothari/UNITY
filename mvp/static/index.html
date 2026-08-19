@@ -558,7 +558,7 @@ function mpQuickShade(){                                     // swap the select 
   if(!canEdit("shadeRecipes")){ toast("You don't have permission to add shades"); return; }
   const row=document.querySelector(".mp-sh-row"); if(!row) return;
   row.innerHTML='<input id="mp_sh_new" class="mp-sh-input" type="text" placeholder="New shade for '+esc(q)+'" autocomplete="off">'
-    +'<button type="button" class="btn sm" title="add shade" onclick="mpQuickShadeSave()"><span class="material-symbols-rounded">check</span></button>'
+    +'<button type="button" class="btn ghost sm mp-sh-ok" title="add shade" onclick="mpQuickShadeSave()"><span class="material-symbols-rounded">check</span></button>'
     +'<button type="button" class="btn ghost sm" title="cancel" onclick="mpShadeRow()"><span class="material-symbols-rounded">close</span></button>';
   const inp=document.getElementById("mp_sh_new");
   if(inp){ inp.focus(); inp.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); mpQuickShadeSave(); } else if(e.key==="Escape"){ mpShadeRow(); } }); }
