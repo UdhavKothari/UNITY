@@ -759,7 +759,7 @@ function renderFloor(el,S,clockH){
               +'<span class="mc-plan-n tnum">'+b.pcs+' pcs &middot; '+b.meters+' m &middot; '+b.kg+' kg</span></li>'; }).join("")
         + '</ol></details>';
     }
-    const pl=(DB.plcLive||{})[m.id], plHot=(function(){ if(!pl||!pl.running) return false; const tl=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3; return (+pl.setTemp>0)&&Math.abs((+pl.actTemp||0)-(+pl.setTemp||0))>tl; })();
+    const pl=(DB.plcLive||{})[m.id], plHot=(function(){ if(!pl||!pl.running||pl.step===3||pl.step===9) return false; const tl=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3; return (+pl.setTemp>0)&&Math.abs((+pl.actTemp||0)-(+pl.setTemp||0))>tl; })();   // HEAT(3)/COOL(9) ramps exempt
     const plBadge = pl ? (' &middot; <span class="tnum" style="color:'+(plHot?'var(--danger)':'var(--accent)')+'">'+(pl.running?(pl.actTemp+'°'):'PLC idle')+'</span>') : (m.plc?" &middot; PLC":"");
     html+='<div class="mc rise" style="animation-delay:'+(i*35)+'ms">'
       +'<div class="mc-top" style="cursor:pointer" title="Live PLC data" onclick="openMachinePlc(\''+esc(m.id)+'\')"><div class="mc-ic"><span class="material-symbols-rounded">'+mcIcon(m.type)+'</span></div>'
@@ -780,6 +780,16 @@ function agoWeb(ts){
   const t=new Date(String(ts).replace(" ","T")); if(isNaN(t)) return "";
   let s=Math.max(0,Math.round((Date.now()-t.getTime())/1000));
   if(s<60) return s+"s ago"; const m=Math.floor(s/60); if(m<60) return m+"m ago"; return Math.floor(m/60)+"h ago";
+}
+/* display-only date formatting — storage stays ISO (YYYY-MM-DD), we only show DD/MM/YYYY */
+function dmy(s){                        // ISO date/datetime -> DD/MM/YYYY (date only)
+  const m=String(s==null?"":s).match(/(\d{4})-(\d{2})-(\d{2})/);
+  return m ? (m[3]+"/"+m[2]+"/"+m[1]) : (s==null?"":String(s));
+}
+function dmyt(s){                       // ISO datetime -> DD/MM/YYYY HH:MM (drops the seconds)
+  const str=String(s==null?"":s).replace("T"," ");
+  const m=str.match(/(\d{4})-(\d{2})-(\d{2})(?:[ ]?(\d{2}:\d{2}))?/);
+  return m ? (m[3]+"/"+m[2]+"/"+m[1]+(m[4]?(" "+m[4]):"")) : str;
 }
 function _mcBatch(mid){   // the batch our plan associates with this machine (running first, else next planned)
   const rows=(DB.batches||[]).filter(b=>b.machine===mid && !b.wash && b.status!=="done");
@@ -806,7 +816,8 @@ function plcModalBody(m){
         : ('No PLC table set for '+esc(m.id)+'. Set it in Admin → Machines (e.g. jet_mch_1_rtd).'))+'</p></div>';
   }
   const tol=(DB.settings&&DB.settings.tempToleranceC!=null)?+DB.settings.tempToleranceC:3;
-  const drift=Math.abs((+p.actTemp||0)-(+p.setTemp||0)), hot=p.running&&(+p.setTemp>0)&&drift>tol;
+  const ramp=(p.step===3||p.step===9);   // HEAT/COOL are ramps — expected divergence, don't flag
+  const drift=Math.abs((+p.actTemp||0)-(+p.setTemp||0)), hot=p.running&&!ramp&&(+p.setTemp>0)&&drift>tol;
   const alarms=(p.alarms||[]).filter(Boolean);
   const kv=(k,v)=>'<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line,#e6eaf1)"><span class="muted">'+k+'</span><span class="tnum" style="font-weight:600;text-align:right">'+v+'</span></div>';
   return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'

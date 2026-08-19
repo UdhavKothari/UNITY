@@ -1,6 +1,6 @@
 /* REL-UNITY mobile — service worker. Precache the shell so the app opens offline on the floor;
    never cache /api (always live); network-first for other /m/ assets with a cache fallback. */
-const CACHE = "relunity-m-v2";
+const CACHE = "relunity-m-v3";
 const SHELL = ["/m/", "/m/index.html", "/m/m.css", "/m/m.js", "/m/manifest.webmanifest", "/m/icon.svg"];
 
 self.addEventListener("install", e => {

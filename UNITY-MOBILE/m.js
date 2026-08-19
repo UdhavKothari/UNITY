@@ -20,6 +20,11 @@ function toast(m){ const t = $("toast"); t.textContent = m; t.classList.add("on"
 function pad(n){ return String(n).padStart(2,"0"); }
 function nowStamp(){ const d = new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+" "+pad(d.getHours())+":"+pad(d.getMinutes()); }
 function hm(dt){ return (dt && dt.length>=16) ? dt.slice(11,16) : ""; }
+function dmyt(s){                        // ISO datetime -> DD/MM/YYYY HH:MM (drops seconds); display-only
+  const str=String(s==null?"":s).replace("T"," ");
+  const m=str.match(/(\d{4})-(\d{2})-(\d{2})(?:[ ]?(\d{2}:\d{2}))?/);
+  return m ? (m[3]+"/"+m[2]+"/"+m[1]+(m[4]?(" "+m[4]):"")) : str;
+}
 function elapsed(startedAt){
   if(!startedAt) return "";
   const s = new Date(startedAt.replace(" ","T")); if(isNaN(s)) return "";
@@ -141,7 +146,8 @@ function plcPanel(m){
   }
   const tol = (DB.settings && DB.settings.tempToleranceC!=null) ? +DB.settings.tempToleranceC : 3;
   const drift = Math.abs((+p.actTemp||0)-(+p.setTemp||0));
-  const hot = p.running && (+p.setTemp>0) && drift>tol;
+  const ramp = (p.step===3 || p.step===9);   // HEAT / COOL: the bath is deliberately ramping, so divergence is expected — don't flag it
+  const hot = p.running && !ramp && (+p.setTemp>0) && drift>tol;
   const stale = plcStaleSecs(p.updated) > 40;
   const dot = p.running ? (hot?'var(--danger)':'var(--success)') : 'var(--faint)';
   const alarms = (p.alarms||[]).filter(Boolean);
@@ -281,8 +287,8 @@ function openBatch(id){
     + (b.wash?'':kv("Shade", '<span class="sw" style="display:inline-block;vertical-align:-3px;background:'+shadeColor(b)+'"></span> '+esc(b.shadeNo||"—")))
     + (b.wash?'':kv("Quality", esc(b.quality||"—")))
     + (b.wash?'':kv("Pcs · Mtr · Kg", '<span class="tnum">'+(b.pcs||0)+' · '+(b.mtr||0)+' · '+(b.weight||0)+'</span>'))
-    + kv("In time", '<span class="tnum">'+(b.startedAt?esc(b.startedAt):"—")+'</span>')
-    + kv("Out time", '<span class="tnum">'+(b.completedAt?esc(b.completedAt):"—")+'</span>')
+    + kv("In time", '<span class="tnum">'+(b.startedAt?esc(dmyt(b.startedAt)):"—")+'</span>')
+    + kv("Out time", '<span class="tnum">'+(b.completedAt?esc(dmyt(b.completedAt)):"—")+'</span>')
     + '<div style="margin-top:16px">'+acts+'</div>'
     + '<button class="btn ghost sm" style="width:100%;margin-top:10px" onclick="closeSheet()">Close</button></div>';
   const sc = document.createElement("div"); sc.className = "scrim"; sc.id = "sheetScrim"; sc.innerHTML = html;

@@ -1570,6 +1570,10 @@ def _bind_server(preferred):
 PLC_STEPS = {1:"FILL NORMAL",2:"DRAIN NORMAL",3:"HEAT",4:"RUN",5:"CHEMICAL IN",6:"LOAD",7:"FILL RECO",
              8:"DRAIN RECO",9:"COOL",10:"RUNWASH",11:"COLOR PASS",12:"MAAL UNLOAD",13:"STOP",
              14:"DRAIN DISCHARGE",15:"SAMPLE",16:"RUNWASH-2",17:"AUXILIARY",18:"ACK"}
+# HEAT (3) and COOL (9) are temperature RAMPS: the bath is deliberately moving toward its target, so
+# act vs set diverges by design (e.g. cooling 120->75 over 5 min). Skip the variance alert on these
+# steps so a normal ramp doesn't fire a false "temperature off" flag.
+PLC_RAMP_STEPS = {3, 9}
 PLC_COLS = ["id","Date","Time","Batch_Name","MC_Status","Auto_Manual","Step_Name","Step_Number",
             "Running_Pgm_No","Set_Temp","Act_Temp","Act_MV_Litre","Max_MV_LTR","LiqRatio_SetLitre_Sel",
             "Curr_Batch_Time","Remain_Time","Alarm_1","Alarm_2","Alarm_3"]
@@ -1648,7 +1652,8 @@ def _plc_apply(db, machine, dec, tol):
         b["plcIn"] = b.get("actInTime"); b["plcOut"] = b.get("actOutTime")   # keep the old field names in sync
         b["plcStep"] = dec["stepName"]; b["plcActTemp"] = dec["actTemp"]; b["plcSetTemp"] = dec["setTemp"]
         b["plcLitre"] = dec["litre"]; b["plcUpdated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    if dec["running"] and dec["setTemp"] > 0 and abs(dec["actTemp"] - dec["setTemp"]) > tol:
+    if (dec["running"] and dec["step"] not in PLC_RAMP_STEPS and dec["setTemp"] > 0
+            and abs(dec["actTemp"] - dec["setTemp"]) > tol):     # HEAT/COOL ramps are exempt (see PLC_RAMP_STEPS)
         _plc_alert(db, mid, "temp", "%s temperature %.1f°C vs set %.1f°C (tolerance ±%g)" % (mid, dec["actTemp"], dec["setTemp"], tol))
     if any(dec["alarms"]):
         _plc_alert(db, mid, "alarm", "%s PLC alarm: %s" % (mid, "/".join(str(a) for a in dec["alarms"] if a)))

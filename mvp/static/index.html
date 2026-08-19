@@ -386,17 +386,17 @@ function batchLifeCell(b){
   const auto=(cfg().completionMode==="auto");
   const autoNote=auto?'<div class="blife-auto">sensor-driven (manual override)</div>':'';
   if(!can("op_batch")){
-    if(s==="running") return `<div class="blife-meta">started ${esc(b.startedAt||"")}${b.startedBy?" · "+esc(b.startedBy):""}</div>`;
-    if(s==="done")    return `<div class="blife-meta">done ${esc(b.completedAt||"")}${b.completedBy?" · "+esc(b.completedBy):""}</div>`;
+    if(s==="running") return `<div class="blife-meta">started ${esc(dmyt(b.startedAt||""))}${b.startedBy?" · "+esc(b.startedBy):""}</div>`;
+    if(s==="done")    return `<div class="blife-meta">done ${esc(dmyt(b.completedAt||""))}${b.completedBy?" · "+esc(b.completedBy):""}</div>`;
     return '<span class="muted">—</span>';
   }
   if(s==="planned")
     return `<button class="blifebtn go" onclick="setBatchStatus('${esc(b.id)}','running')"><span class="material-symbols-rounded">play_arrow</span>Start</button>${autoNote}`;
   if(s==="running")
     return `<button class="blifebtn go" onclick="setBatchStatus('${esc(b.id)}','done')"><span class="material-symbols-rounded">check</span>Complete</button>`
-         + `<div class="blife-meta">started ${esc(b.startedAt||"")}${b.startedBy?" · "+esc(b.startedBy):""}</div>${autoNote}`;
+         + `<div class="blife-meta">started ${esc(dmyt(b.startedAt||""))}${b.startedBy?" · "+esc(b.startedBy):""}</div>${autoNote}`;
   // done
-  return `<div class="blife-meta">done ${esc(b.completedAt||"")}${b.completedBy?" · "+esc(b.completedBy):""}</div>`
+  return `<div class="blife-meta">done ${esc(dmyt(b.completedAt||""))}${b.completedBy?" · "+esc(b.completedBy):""}</div>`
        + `<button class="blifebtn" onclick="setBatchStatus('${esc(b.id)}','planned')"><span class="material-symbols-rounded">undo</span>Reopen</button>`;
 }
 async function setBatchStatus(id,to){
@@ -493,7 +493,7 @@ function mpEditorHTML(m){
   return `<div class="mp-editor">
     <div class="mp-ed-grid">
       <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></label>
-      <label class="mp-ed-f">Shade<select id="mp_sh"></select></label>
+      <label class="mp-ed-f">Shade<span class="mp-sh-row"><select id="mp_sh"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></label>
       <label class="mp-ed-f" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
       <div class="mp-ed-actions">
         <button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${(MP_EDIT&&MP_EDIT.editId)?"Save changes":"Save batch"}</button>
@@ -540,6 +540,25 @@ function mpEditorRefreshShades(){
   const q=document.getElementById("mp_q").value, sh=document.getElementById("mp_sh");
   const list=q?shadesForQuality(q):[];
   sh.innerHTML=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
+}
+/* quick-add a shade right from the planner: enough to plan now, onboard full details later in Admin */
+async function mpQuickShade(){
+  const qs=document.getElementById("mp_q"); const q=(qs&&qs.value)||"";
+  if(!q){ toast("Pick a quality first, then add its shade"); return; }
+  if(!canEdit("shadeRecipes")){ toast("You don't have permission to add shades"); return; }
+  let name=(window.prompt("New shade name for "+q+"  (you can fill family/tone/program later in Admin → Shade recipes)","")||"").trim();
+  if(!name) return;
+  const dup=(DB.shadeRecipes||[]).find(s=>s.quality===q && String(s.shade).toLowerCase()===name.toLowerCase());
+  if(dup){                                                   // already exists — just select it
+    const sh=document.getElementById("mp_sh"); if(sh){ sh.value=dup.shade; }
+    toast(name+" already exists for "+q); mpEditorSync(); return;
+  }
+  const res=await API.save("shadeRecipes", {quality:q, shade:name, family:"Neutral", tone:50, program:"", pendingOnboard:true});
+  if(res && res.error){ toast(res.error); return; }          // API.save patches DB.shadeRecipes in place
+  mpEditorRefreshShades();
+  const sh=document.getElementById("mp_sh"); if(sh){ sh.value=name; }
+  mpEditorSync();
+  toast(name+" added — finish its recipe later in Admin → Shade recipes");
 }
 /* --- workflow step selector (only for qualities that have a process flow) --- */
 function mpMachineType(){ const m=(DB.machines||[]).find(x=>x.id===(MP_EDIT&&MP_EDIT.machineId)); return m?(m.type||""):""; }
