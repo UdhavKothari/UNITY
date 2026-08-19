@@ -24,12 +24,32 @@ MOBILE = os.path.normpath(os.path.join(HERE, "..", "UNITY-MOBILE"))   # REL-UNIT
 # refuses any request whose client IP isn't private/loopback/link-local, so only devices on the factory
 # Wi-Fi/LAN can reach it and nothing off-site can. Turn OFF for a public deployment: set REL_LAN_ONLY=0.
 LAN_ONLY = os.environ.get("REL_LAN_ONLY", "1") != "0"
+# Extra always-allowed IPs / CIDRs, on top of private/loopback/link-local. Tailscale hands out addresses in
+# the 100.64.0.0/10 CGNAT range, which older Python's is_private does NOT recognise — so a phone on the
+# tailnet gets blocked even though it's effectively on the network. We allow that whole range (covers every
+# Tailscale device, even after its IP rotates) plus a couple of explicit phone IPs, and anything listed in
+# the REL_LAN_ALLOW env var (comma-separated IPs or CIDRs).
+_LAN_ALLOW_DEFAULT = "100.64.0.0/10, 10.67.117.39, 100.77.171.126"
+def _parse_nets(s):
+    nets = []
+    for part in (s or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except Exception:
+            pass
+    return nets
+LAN_ALLOW = _parse_nets(_LAN_ALLOW_DEFAULT + "," + os.environ.get("REL_LAN_ALLOW", ""))
 def _client_is_lan(addr):
     try:
         ip = ipaddress.ip_address(addr)
         if getattr(ip, "ipv4_mapped", None):   # ::ffff:192.168.x.x -> treat as the embedded IPv4
             ip = ip.ipv4_mapped
-        return ip.is_private or ip.is_loopback or ip.is_link_local
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            return True
+        return any(ip.version == net.version and ip in net for net in LAN_ALLOW)   # Tailscale / explicit allowlist
     except Exception:
         return False
 
