@@ -497,18 +497,19 @@ function mpEditorHTML(m){
   const editing=MP_EDIT&&MP_EDIT.editId;
   const existing=editing?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
   const timeValue=v=>v?esc(String(v).replace("T"," ").slice(11,16)):"—";
-  return `<div class="mp-editor">
+  // In/Out/PH are read-only (logged via the time modal) and always empty on a new batch — only show them when editing.
+  const roHead = editing ? '<span>In time</span><span>Out time</span><span>PH</span>' : '';
+  const roRow  = editing ? `<div class="mp-ed-f mp-ed-readonly"><b>${timeValue(existing&&existing.startedAt)}</b></div><div class="mp-ed-f mp-ed-readonly"><b>${timeValue(existing&&existing.completedAt)}</b></div><div class="mp-ed-f mp-ed-readonly"><b>${esc((existing&&existing.ph)||"—")}</b></div>` : '';
+  return `<div class="mp-editor${editing?' editing':''}">
     <div class="mp-editor-scroll">
-      <div class="mp-editor-head"><span>Seq</span><span>Lot no.</span><span>Pcs</span><span>Mtr</span><span>Weight</span><span>Quality</span><span>Shade</span><span>Pg No.</span><span>In time</span><span>Out time</span><span>PH</span><span></span></div>
+      <div class="mp-editor-head"><span>Seq</span><span class="mp-hd-lots">Lot no. · pcs · mtr · kg</span><span>Quality</span><span>Shade</span><span>Pg No.</span>${roHead}<span></span></div>
       <div class="mp-editor-row">
         <span class="mp-ed-seq">${editing?esc(existing&&existing.seq||""):"+"+nextSeq(m.id)}</span>
         <div class="mp-ed-lots"><div id="mp_lots"></div></div>
-        <label class="mp-ed-f">Quality<select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></label>
-        <label class="mp-ed-f">Shade<span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></label>
-        <label class="mp-ed-f">Pg No.<input id="mp_pgno" type="text" placeholder="Page"></label>
-        <div class="mp-ed-f mp-ed-readonly"><span>In time</span><b>${timeValue(existing&&existing.startedAt)}</b></div>
-        <div class="mp-ed-f mp-ed-readonly"><span>Out time</span><b>${timeValue(existing&&existing.completedAt)}</b></div>
-        <div class="mp-ed-f mp-ed-readonly"><span>PH</span><b>${esc((existing&&existing.ph)||"—")}</b></div>
+        <div class="mp-ed-f"><select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></div>
+        <div class="mp-ed-f"><span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></div>
+        <div class="mp-ed-f"><input id="mp_pgno" type="text" placeholder="Page"></div>
+        ${roRow}
         <div class="mp-ed-actions"><button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${editing?"Save changes":"Save batch"}</button><button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button></div>
       </div>
       <label class="mp-ed-f mp-ed-step" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
@@ -626,7 +627,7 @@ function mpAddEditorLot(pf){
   const wrap=document.createElement("div"); wrap.className="lotqrow mp-lotline"+(locked?" lot-locked":"");
   wrap.innerHTML=`${lotPickerHTML(locked?pf.lotId:"", "b-lot")}
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
-    <input class="b-mtr" type="number" min="0" placeholder="meters">
+    <input class="b-mtr" type="number" min="0" placeholder="mtr">
     <input class="b-wt" type="number" min="0" step="0.1" placeholder="kg">
     <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
     ${locked?'':`<button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpLockQuality();mpEditorSync()">&times;</button>`}
