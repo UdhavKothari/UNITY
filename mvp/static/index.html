@@ -473,9 +473,12 @@ function renderMassPlan(){
       const intime=b.startedAt?esc(b.startedAt.slice(11,16)):"—", outtime=b.completedAt?esc(b.completedAt.slice(11,16)):"—";
       const shadeCell=`<span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}`;
       const dbl=(mayEdit&&!b.wash)?`ondblclick="mpEditBatch('${esc(b.id)}')" title="Double-click to edit"`:"";   // double-click any row to edit
+      const inMachine=!!(b.startedAt && !b.completedAt && !b.wash);   // in-time logged, no out-time = fabric is inside the machine
+      const imAttr=inMachine?` style="--shln:${shadeColor(b.shadeNo,b.quality)};--shbg:${shadeColor(b.shadeNo,b.quality,0.12)}"`:"";
+      const imCls=inMachine?" mp-inmachine":"";                       // 2px shade-hued marker on the top edge + subtle shade tint
       return lots.map((l,i)=> i===0
-        ? `<tr ${drag} ${dbl} class="mp-brow mp-btop"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${esc(b.pgNo||"")||"—"}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
-        : `<tr ${drag} ${dbl} class="mp-brow mp-lotsub"><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td></tr>`
+        ? `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-btop${imCls}"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${esc(b.pgNo||"")||"—"}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
+        : `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-lotsub${imCls}"><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td></tr>`
       ).join("");
     }).join("") : `<tr><td colspan="12" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (mayEdit ? (editing

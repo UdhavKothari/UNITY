@@ -522,6 +522,12 @@ tr.linked td{background:var(--success-soft)}
 .mp-ed-remarks input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .mp-noteic{font-size:15px;vertical-align:-3px;color:var(--warning);cursor:help}
 
+/* ---- "in the machine" batch: in-time logged, no out-time. Subtle tint of the running shade,
+   with a 2px shade-hued marker on the TOP edge only (the fabric is currently inside). ---- */
+.mp-brow.mp-inmachine{background:var(--shbg)}
+.mp-brow.mp-btop.mp-inmachine>td{border-top:2px solid var(--shln)}
+.mp-brow.mp-inmachine:hover{background:var(--shbg)}   /* keep the shade cue on hover instead of the grey row tint */
+
 /* ---- scheduled machine-wash row in the planner ---- */
 .mp-wash{background:var(--info-soft)}
 .mp-wash td{border-bottom-color:#d6e0f5}

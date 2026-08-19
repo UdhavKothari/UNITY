@@ -225,8 +225,24 @@ function orderLabel(id){
   const sh=(o.lines||[]).map(l=>l.shade+" "+l.m+"m").join(", ");
   return id+"  \u00b7  "+(o.cust||"")+"  \u00b7  "+(o.qual||"")+(sh?("  \u00b7  "+sh):"");
 }
+/* id -> lot, memoized per DB snapshot. lotLabel/lotNos used to do a linear (DB.lots).find per call,
+   which becomes O(lots^2) when the picker scans every lot on each keystroke — painful at ~5000 lots. */
+let _lotByIdCache=null;
+function _lotById(){
+  if(_lotByIdCache && _lotByIdCache.forDB===DB) return _lotByIdCache.map;
+  const map={}; (DB.lots||[]).forEach(l=>{ map[l.id]=l; });
+  _lotByIdCache={forDB:DB, map}; return map;
+}
+/* lowercased search string per lot (id + customer + quality), memoized. The picker matches against this
+   instead of rebuilding the full lotLabel (with allocation maths) for every lot on every keystroke. */
+let _lotSearchCache=null;
+function _lotSearchIndex(){
+  if(_lotSearchCache && _lotSearchCache.forDB===DB) return _lotSearchCache.map;
+  const map={}; (DB.lots||[]).forEach(l=>{ map[l.id]=((l.id||"")+" "+(l.customer||"")+" "+(l.quality||"")).toLowerCase(); });
+  _lotSearchCache={forDB:DB, map}; return map;
+}
 function lotLabel(id){
-  const l=(DB.lots||[]).find(x=>x.id===id); if(!l) return id;
+  const l=_lotById()[id]; if(!l) return id;
   const a=lotAllocation(id);
   const qty = a.used ? (a.remainingPcs+" pcs / "+a.remaining+" m left  (of "+a.totalPcs+" / "+a.total+" m)")
                      : (a.totalPcs+" pcs / "+a.total+" m");
@@ -313,9 +329,9 @@ function wfStepsFull(q){                     // ordered proc-steps of a quality'
       return {seq:i+1, node:n.id, proc:n.proc, name:p.name||n.proc||("Step "+(i+1)), mc:p.machine||"", icon:p.icon||""}; });
 }
 function hasWorkflow(q){ return wfStepsFull(q).length>0; }
-function lotNos(lotId){ const l=(DB.lots||[]).find(x=>x.id===lotId)||{}; const lens=(l.takas||[]).map(Number);
+function lotNos(lotId){ const l=_lotById()[lotId]||{}; const lens=(l.takas||[]).map(Number);
   return (l.takaNos&&l.takaNos.length)?l.takaNos.map(Number):lens.map((_,i)=>i+1); }
-function lotNoMeters(lotId){ const l=(DB.lots||[]).find(x=>x.id===lotId)||{}; const lens=(l.takas||[]).map(Number);
+function lotNoMeters(lotId){ const l=_lotById()[lotId]||{}; const lens=(l.takas||[]).map(Number);
   const nos=(l.takaNos&&l.takaNos.length)?l.takaNos.map(Number):lens.map((_,i)=>i+1);
   const m={}; nos.forEach((n,i)=>m[n]=lens[i]||0); return m; }
 /* taka numbers of a lot already committed to a batch AT this step (planned or beyond), excl. one batch */
@@ -362,9 +378,16 @@ function lotPickVal(root){ return root ? (root.dataset.val||"") : ""; }
 function lotPickerMatches(root, filterFn){
   const term=(root.querySelector(".lotpick-in").value||"").trim().toLowerCase();
   const cur=root.dataset.val;
-  let ids=(DB.lots||[]).filter(l=> (!filterFn || filterFn(l) || l.id===cur)).map(l=>l.id);
-  if(term) ids=ids.filter(id=> lotLabel(id).toLowerCase().indexOf(term)>=0);
-  return ids.slice(0,60);                                 // type to narrow further past the cap
+  const idx=_lotSearchIndex(), lots=DB.lots||[], out=[], CAP=60;
+  // Cheap text gate FIRST (cached lowercased strings), then the expensive filterFn only on survivors,
+  // and stop at the cap — so we never run allocation/step maths across all ~5000 lots per keystroke.
+  for(let i=0;i<lots.length && out.length<CAP;i++){
+    const id=lots[i].id;
+    if(term){ const s=idx[id]; if(!s || s.indexOf(term)<0) continue; }   // applies to the current pick too
+    if(filterFn && id!==cur && !filterFn(lots[i])) continue;             // current selection bypasses filterFn
+    out.push(id);
+  }
+  return out;                                              // type to narrow further past the cap
 }
 function wireLotPicker(root, opts){
   opts=opts||{};
@@ -413,7 +436,8 @@ function wireLotPicker(root, opts){
     if(opts.onSelect) opts.onSelect(id);
   }
   inp.addEventListener("focus", ()=>{ inp.value=""; paint(); });
-  inp.addEventListener("input", paint);
+  let _deb=null;                                          // coalesce fast typing so we repaint at most ~every 90ms
+  inp.addEventListener("input", ()=>{ clearTimeout(_deb); _deb=setTimeout(paint, 90); });
   inp.addEventListener("keydown", e=>{
     if(e.key==="ArrowDown"){ e.preventDefault(); if(!menu.classList.contains("on")) paint(); else setHi(hi+1); }
     else if(e.key==="ArrowUp"){ e.preventDefault(); setHi(hi-1); }
