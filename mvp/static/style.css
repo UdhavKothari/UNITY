@@ -403,25 +403,26 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-machine{margin-bottom:12px}
 .mp-table th{position:sticky;top:0}
 
-/* ---- Mass planning: batch editor modal ---- */
+/* ---- Mass planning: inline batch editor ---- */
+.mp-machine.editing{width:calc(100vw - 32px);margin-left:calc((100% - 100vw + 32px)/2);border-color:var(--accent)}
 .mp-actions{display:flex;align-items:center;gap:4px;white-space:nowrap}
 .mp-del .material-symbols-rounded{color:var(--muted)}
 .mp-del:hover{border-color:#f0cccc;background:var(--danger-soft)}
 .mp-del:hover .material-symbols-rounded{color:var(--danger)}
-.mp-editor-modal{width:min(1080px,100%);max-height:calc(100vh - 88px);display:flex;flex-direction:column}
-.mp-editor-modal .m-h{flex:none}
-.mp-editor-modal .m-b{overflow:auto}
-.mp-editor-modal .m-f{flex:none}
-.mp-editor-modal .m-h h3{display:flex;align-items:center;gap:8px;min-width:0}
-.mp-editor-machine{font:500 11px/1.2 var(--mono);color:var(--muted);white-space:nowrap}
 .mp-editor{display:flex;flex-direction:column;gap:18px}
-.mp-editor-section{border:1px solid var(--line);border-radius:var(--r-c);background:var(--surface-2);padding:14px}
-.mp-editor-section-title{margin-bottom:12px;font:600 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2)}
-.mp-editor-details{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.mp-editor .mp-ed-f{min-width:0}
-.mp-ed-readonly{justify-content:center;min-height:38px}
-.mp-ed-readonly span{font-size:10px;color:var(--muted)}
-.mp-ed-readonly b{font:600 13px/1.2 var(--mono);color:var(--ink)}
+.mp-editor-scroll{overflow-x:auto;padding:12px;background:var(--accent-soft)}
+.mp-editor-head,.mp-editor-row{display:grid;grid-template-columns:.42fr 1.15fr .52fr .62fr .7fr 1fr 1fr .72fr .7fr .7fr .55fr auto;gap:6px;min-width:1040px}
+.mp-editor-head{padding:0 2px 6px;font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.mp-editor-row{align-items:start}
+.mp-ed-seq{align-self:center;padding:10px 2px;font:500 12px/1 var(--mono);color:var(--ink-2)}
+.mp-ed-lots{grid-column:2 / span 4;min-width:0}
+.mp-ed-lots .lotq-head{display:none}
+.mp-ed-lots .mp-lotline{margin-bottom:6px}
+.mp-editor-row>.mp-ed-f{min-width:0}
+.mp-editor-row>.mp-ed-f select,.mp-editor-row>.mp-ed-f input{min-height:38px}
+.mp-ed-readonly{justify-content:center;min-height:38px;text-align:center}
+.mp-ed-readonly span{font-size:9px;color:var(--muted)}
+.mp-ed-readonly b{font:600 12px/1.2 var(--mono);color:var(--ink)}
 .mp-ed-f{display:flex;flex-direction:column;gap:4px;font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);min-width:180px}
 .mp-ed-f select{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;text-transform:none;letter-spacing:0;background:var(--surface);color:var(--ink);transition:border-color var(--dur),box-shadow var(--dur)}
 .mp-ed-f input{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;text-transform:none;letter-spacing:0;background:var(--surface);color:var(--ink)}
@@ -435,19 +436,15 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-sh-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .mp-sh-add,.mp-sh-ok{flex:0 0 auto;padding:0 10px}
 .mp-sh-ok .material-symbols-rounded{color:var(--accent)}   /* affirmative sub-action, still secondary vs the batch Save */
+.mp-ed-actions{display:flex;gap:5px;align-items:center;align-self:center}
 .mp-ed-lhead{margin-top:2px}
-.mp-editor-section .lotq-head{grid-template-columns:1.6fr .7fr .8fr .8fr auto 38px}
 .mp-lotline{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-c);padding:8px;margin-bottom:6px}
 .mp-add-lot{margin-top:4px}
 .mp-ed-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .mp-ed-total{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
 .mp-ed-total .flag{color:var(--danger);font-family:var(--font);margin-left:6px}
 @media(max-width:720px){
-  .modal-bg{padding:14px 8px}
-  .mp-editor-modal{max-height:calc(100vh - 28px)}
-  .mp-editor-modal .m-b{padding:14px}
-  .mp-editor-details{grid-template-columns:1fr 1fr}
-  .mp-editor-section{padding:11px}
+  .mp-machine.editing{width:calc(100vw - 16px);margin-left:calc((100% - 100vw + 16px)/2)}
 }
 
 /* ---- form controls: checkboxes (consistent across Operations + Admin) ---- */
