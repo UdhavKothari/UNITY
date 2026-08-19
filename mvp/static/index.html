@@ -537,26 +537,41 @@ function mpInitEditor(){
   mpEditorSync();
 }
 function mpEditorRefreshShades(){
-  const q=document.getElementById("mp_q").value, sh=document.getElementById("mp_sh");
+  const mq=document.getElementById("mp_q"), sh=document.getElementById("mp_sh");
+  if(!sh) return;                                            // shade field is in quick-add (input) mode — skip
+  const q=mq?mq.value:"";
   const list=q?shadesForQuality(q):[];
   sh.innerHTML=list.length?list.map(s=>`<option>${esc(s.shade)}</option>`).join(""):'<option value="">— no shades —</option>';
 }
-/* quick-add a shade right from the planner: enough to plan now, onboard full details later in Admin */
-async function mpQuickShade(){
+/* quick-add a shade right from the planner — an inline field (no browser prompt), matching the
+   Excel-like editor. Saves a minimal recipe now; finish family/tone/program later in Admin. */
+function mpShadeRow(sel){                                    // (re)build the shade field: select + quick-add button
+  const row=document.querySelector(".mp-sh-row"); if(!row) return;
+  row.innerHTML='<select id="mp_sh"></select>'
+    +'<button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button>';
+  mpEditorRefreshShades();
+  if(sel){ const sh=document.getElementById("mp_sh"); if(sh) sh.value=sel; }
+}
+function mpQuickShade(){                                     // swap the select for an inline "new shade" input
   const qs=document.getElementById("mp_q"); const q=(qs&&qs.value)||"";
   if(!q){ toast("Pick a quality first, then add its shade"); return; }
   if(!canEdit("shadeRecipes")){ toast("You don't have permission to add shades"); return; }
-  let name=(window.prompt("New shade name for "+q+"  (you can fill family/tone/program later in Admin → Shade recipes)","")||"").trim();
-  if(!name) return;
+  const row=document.querySelector(".mp-sh-row"); if(!row) return;
+  row.innerHTML='<input id="mp_sh_new" class="mp-sh-input" type="text" placeholder="New shade for '+esc(q)+'" autocomplete="off">'
+    +'<button type="button" class="btn sm" title="add shade" onclick="mpQuickShadeSave()"><span class="material-symbols-rounded">check</span></button>'
+    +'<button type="button" class="btn ghost sm" title="cancel" onclick="mpShadeRow()"><span class="material-symbols-rounded">close</span></button>';
+  const inp=document.getElementById("mp_sh_new");
+  if(inp){ inp.focus(); inp.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); mpQuickShadeSave(); } else if(e.key==="Escape"){ mpShadeRow(); } }); }
+}
+async function mpQuickShadeSave(){
+  const qs=document.getElementById("mp_q"); const q=(qs&&qs.value)||"";
+  const inp=document.getElementById("mp_sh_new"); const name=inp?inp.value.trim():"";
+  if(!name){ if(inp) inp.focus(); return; }
   const dup=(DB.shadeRecipes||[]).find(s=>s.quality===q && String(s.shade).toLowerCase()===name.toLowerCase());
-  if(dup){                                                   // already exists — just select it
-    const sh=document.getElementById("mp_sh"); if(sh){ sh.value=dup.shade; }
-    toast(name+" already exists for "+q); mpEditorSync(); return;
-  }
+  if(dup){ mpShadeRow(dup.shade); toast(name+" already exists for "+q); mpEditorSync(); return; }
   const res=await API.save("shadeRecipes", {quality:q, shade:name, family:"Neutral", tone:50, program:"", pendingOnboard:true});
   if(res && res.error){ toast(res.error); return; }          // API.save patches DB.shadeRecipes in place
-  mpEditorRefreshShades();
-  const sh=document.getElementById("mp_sh"); if(sh){ sh.value=name; }
+  mpShadeRow(name);                                          // rebuild the select with the new shade chosen
   mpEditorSync();
   toast(name+" added — finish its recipe later in Admin → Shade recipes");
 }

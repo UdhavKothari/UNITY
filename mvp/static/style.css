@@ -418,7 +418,9 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-ed-f select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .mp-ed-f select.locked{background:var(--surface-2);color:var(--ink-2);cursor:not-allowed;border-style:dashed}
 .mp-sh-row{display:flex;gap:6px;align-items:stretch}
-.mp-sh-row select{flex:1 1 auto;min-width:0}
+.mp-sh-row select,.mp-sh-row .mp-sh-input{flex:1 1 auto;min-width:0}
+.mp-sh-input{padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;text-transform:none;letter-spacing:0;background:var(--surface);color:var(--ink);transition:border-color var(--dur),box-shadow var(--dur)}
+.mp-sh-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .mp-sh-add{flex:0 0 auto;padding:0 10px}
 .mp-ed-actions{margin-left:auto;display:flex;gap:6px;align-items:center}
 .mp-ed-lhead{margin-top:2px}
