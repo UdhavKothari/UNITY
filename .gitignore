@@ -24,3 +24,6 @@ mvp/secrets.local.json
 mvp/inbox/
 mvp/inbox_challan/
 skill-observations/
+
+# operator register photos (stored locally, not versioned)
+mvp/program_scans/

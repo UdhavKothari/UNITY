@@ -13,6 +13,7 @@ legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
 import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections
+import base64, urllib.request, urllib.error   # base64: decode uploaded scan photos · urllib: reach the LAN vision model (no external internet)
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -99,7 +100,7 @@ def load_secrets():
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
 # every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan","op_workflows",
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan","op_workflows","op_scan",
              "dashboard","machines","qualities","shadeRecipes","recipes","history",
              "batches","lots","weavers","takaMaster",
              "customers","orders","challans","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
@@ -339,6 +340,7 @@ def _sanitized(db):
                   for u in db.get("users", [])]
     d["activityLog"] = []                 # fetched on demand; keeps every page load small
     d["challans"] = []                    # ditto — challans accumulate; loaded only on the Challans page
+    d["programScans"] = []                # loaded on demand via 'scansList' (Admin) — keeps /api/db lean
     return d
 
 def _prepare_user_row(db, row):
@@ -744,6 +746,20 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception: n = 40
             n = max(1, min(n, 400))
             return self._send(200, {"lines": list(TERM_LOG)[-n:]}, cache="no-cache")
+        if path.startswith("/scan-img/"):
+            # stored program-scan photo — only for signed-in users who can see scans
+            with LOCK:
+                db = load_db(); u, perms = self._auth(db)
+            if not u:
+                return self._send(401, {"error": "login required"})
+            if "op_scan" not in (perms or []) and "settings" not in (perms or []):
+                return self._send(403, {"error": "forbidden"})
+            fn = os.path.basename(path[len("/scan-img/"):])
+            sp = os.path.normpath(os.path.join(PROGRAM_SCANS_DIR, fn))
+            if not sp.startswith(PROGRAM_SCANS_DIR) or not os.path.isfile(sp):
+                return self._send(404, {"error": "not found"})
+            with open(sp, "rb") as f:
+                return self._send(200, f.read(), "image/jpeg")
         # REL-UNITY mobile PWA (served from ../UNITY-MOBILE under /m/)
         if path == "/m":                            # canonicalise: /m -> /m/ so relative assets resolve
             self.send_response(301); self.send_header("Location", "/m/"); self.end_headers(); return
@@ -780,6 +796,30 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._send(400, {"error":"bad json"})
         op = req.get("op")
+
+        # scanRead forwards photos to the LAN vision model, which can take a minute on CPU. Run it OUTSIDE
+        # the global LOCK (only a brief lock for auth) so a scan never freezes every other user's requests.
+        if op == "scanRead":
+            with LOCK:
+                db = load_db(); u, perms = self._auth(db)
+            if not u: return self._send(401, {"error": "login required"})
+            if "op_scan" not in perms: return self._send(403, {"error": "forbidden"})
+            cfg = _vision_cfg()
+            if not cfg["enabled"]:
+                return self._send(200, {"ok": False, "error": "The scan reader isn't set up yet — an admin must configure the on-site vision model (secrets.local.json → vision)."})
+            imgs = req.get("images") or []
+            if not (isinstance(imgs, list) and 1 <= len(imgs) <= 2):
+                return self._send(400, {"error": "Send one or two page photos."})
+            t0 = time.time()
+            try:
+                prog = _ollama_extract(imgs, cfg)
+            except RuntimeError as e:
+                return self._send(200, {"ok": False, "error": str(e)})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": "Reader error: %s" % (e,)})
+            return self._send(200, {"ok": True, "program": prog, "model": cfg["model"],
+                                    "secs": round(time.time() - t0, 1)})
+
         with LOCK:
             db = load_db()
 
@@ -852,6 +892,60 @@ class Handler(BaseHTTPRequestHandler):
                 u["prefs"] = cur
                 save_db(db)
                 return self._send(200, {"ok": True, "prefs": cur})
+
+            if op == "scanCommit":
+                # create real batches from the reviewed program + store the page photos for the record
+                if _need_edit(("op_scan",)):
+                    return self._send(403, {"error": "forbidden"})
+                program = req.get("program") or {}
+                if not isinstance(program, dict) or not program.get("machines"):
+                    return self._send(400, {"error": "Nothing to save."})
+                created = _create_scan_batches(db, program, u["username"])
+                if not created:
+                    return self._send(400, {"error": "No batches could be created — check the machine names and lots."})
+                sid = "PS-" + time.strftime("%y%m%d") + "-" + uuid.uuid4().hex[:6]
+                files = []
+                for suffix, img in zip(("L", "R"), (req.get("images") or [])):
+                    s = str(img or "")
+                    if "," in s and s.strip().lower().startswith("data:"): s = s.split(",", 1)[1]
+                    if not s.strip(): continue
+                    try:
+                        raw = base64.b64decode(s, validate=False)
+                        fn = "%s_%s.jpg" % (sid, suffix)
+                        with open(os.path.join(PROGRAM_SCANS_DIR, fn), "wb") as f: f.write(raw)
+                        files.append(fn)
+                    except Exception as e:
+                        print("[scan] could not store image:", repr(e), flush=True)
+                rec = {"id": sid, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": u["username"],
+                       "machines": sorted({str(m.get("machine", "")) for m in program.get("machines", [])}),
+                       "batchIds": created, "files": files}
+                db.setdefault("programScans", []).append(rec)
+                _log(db, u["username"], "create", "programScans", sid,
+                     "punched %d batch(es) from a photo scan" % len(created))
+                save_db(db)
+                return self._send(200, {"ok": True, "created": len(created), "batchIds": created, "scanId": sid})
+
+            if op == "scansList":
+                if "op_scan" not in perms and "settings" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                rows = [{k: v for k, v in r.items()} for r in db.get("programScans", [])]
+                return self._send(200, {"rows": rows, "vision": {k: _vision_cfg()[k] for k in ("model", "enabled", "endpoint")}})
+
+            if op == "scanDelete":
+                if _need_edit(("op_scan", "settings")):
+                    return self._send(403, {"error": "forbidden"})
+                sid = req.get("id")
+                scans = db.get("programScans", [])
+                rec = next((r for r in scans if r.get("id") == sid), None)
+                if not rec:
+                    return self._send(404, {"error": "scan not found"})
+                for fn in (rec.get("files") or []):
+                    try: os.remove(os.path.join(PROGRAM_SCANS_DIR, fn))
+                    except OSError: pass
+                db["programScans"] = [r for r in scans if r.get("id") != sid]
+                _log(db, u["username"], "delete", "programScans", sid, "deleted a stored scan + its photos")
+                save_db(db)
+                return self._send(200, {"ok": True})
 
             if op == "batchStatus":
                 if _need_edit(("batches", "op_batch")):
@@ -1805,6 +1899,140 @@ def _plc_poller():
             print("[plc] cycle error:", repr(e), flush=True)
             _plc_drop_conn()                                    # force a fresh connection next cycle
             time.sleep(3)
+
+# ================================================================ program-scan (photo -> batches)
+# Operators photograph the handwritten jet register (2 pages: a left page with Sr.No/Lot/Pcs/Mtr/Weight/
+# Quality/Shade and a right page with Page No/In/Out/PH/Remarks). The phone sends both photos here; THIS
+# server forwards them to a vision model running on the LAN (e.g. Ollama on an on-prem PC) — never the
+# public internet — and gets structured JSON back. Nothing leaves the premises. Config lives in
+# secrets.local.json under "vision": {endpoint, model, enabled}. The parsed program is reviewed on the
+# phone and only then committed into real batches.
+PROGRAM_SCANS_DIR = os.path.join(HERE, "program_scans")
+try: os.makedirs(PROGRAM_SCANS_DIR, exist_ok=True)
+except OSError: pass
+
+def _vision_cfg():
+    v = (load_secrets() or {}).get("vision", {}) or {}
+    return {"endpoint": str(v.get("endpoint", "") or "").rstrip("/"),
+            "model": str(v.get("model", "") or "qwen2.5vl:7b"),
+            "enabled": bool(v.get("enabled", True)) and bool(v.get("endpoint")),
+            "timeout": int(v.get("timeoutSecs", 240) or 240)}
+
+_SCAN_PROMPT = (
+"You are transcribing a factory dyeing 'jet program' written by hand in a ruled register. You are given "
+"TWO photos of ONE 2-page spread: the FIRST image is the LEFT page, the SECOND image is the RIGHT page. "
+"They share the same rows. LEFT page columns: Sr.No, Lot No, Pcs, Mtr, Weight, Quality, Shade. RIGHT page "
+"columns: Page No, In Time, Out Time, PH, Remarks. A machine header like 'JET-01' or 'JET-02' (often "
+"underlined) starts that machine's program; every row under it until the next header belongs to that "
+"machine. One Sr.No is ONE batch. A batch can span several lot lines (multiple Lot No/Pcs/Mtr/Weight rows "
+"under a single Sr.No that share one Quality/Shade) — put every such lot line in that batch's 'lots' array. "
+"Transcribe EXACTLY what is written; do not invent or correct values. Use null for any blank/unreadable "
+"cell. Numbers must be digits only (strip units like 'kg'). Times as written (e.g. '12:24'). "
+"Return ONLY JSON of this exact shape: "
+'{"machines":[{"machine":"JET-01","batches":[{"srNo":1,"lots":[{"lotNo":"25226","pcs":6,"mtr":572,"weight":308}],'
+'"quality":"CHIFFON","shade":"11","pageNo":"72","inTime":"12:24","outTime":"5:32","ph":"4.3","remarks":"P3(1200)"}]}]}'
+)
+
+def _ollama_extract(images_b64, cfg):
+    """Send the (already base64) page photos to the LAN vision model and return the parsed program dict.
+    Raises RuntimeError with a friendly message on any failure."""
+    if not cfg.get("enabled") or not cfg.get("endpoint"):
+        raise RuntimeError("The scan reader isn't configured yet — an admin must set 'vision' in secrets.local.json.")
+    imgs = []
+    for b in images_b64:
+        s = str(b or "")
+        if "," in s and s.strip().lower().startswith("data:"):   # strip a data:image/...;base64, prefix if present
+            s = s.split(",", 1)[1]
+        imgs.append(s.strip())
+    payload = {"model": cfg["model"], "stream": False, "format": "json",
+               "options": {"temperature": 0},
+               "messages": [{"role": "user", "content": _SCAN_PROMPT, "images": imgs}]}
+    data = json.dumps(payload).encode("utf-8")
+    url = cfg["endpoint"] + "/api/chat"
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=cfg["timeout"]) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except urllib.error.URLError as e:
+        raise RuntimeError("Couldn't reach the vision model at %s — is Ollama running and on the LAN? (%s)"
+                           % (cfg["endpoint"], getattr(e, "reason", e)))
+    except Exception as e:
+        raise RuntimeError("Vision request failed: %s" % (e,))
+    try:
+        outer = json.loads(raw)
+        content = (outer.get("message", {}) or {}).get("content", "") or ""
+    except ValueError:
+        content = raw
+    prog = _coerce_program(content)
+    if prog is None:
+        raise RuntimeError("The reader replied but the result couldn't be understood. Try clearer, straighter photos.")
+    return prog
+
+def _coerce_program(content):
+    """Pull the JSON program object out of the model's reply (handles code fences / stray prose)."""
+    if isinstance(content, dict):
+        obj = content
+    else:
+        s = str(content or "").strip()
+        if s.startswith("```"):
+            s = re.sub(r"^```[a-zA-Z]*\n?", "", s); s = re.sub(r"\n?```$", "", s).strip()
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            m = re.search(r"\{.*\}", s, re.S)          # last resort: first {...} block
+            if not m: return None
+            try: obj = json.loads(m.group(0))
+            except ValueError: return None
+    if isinstance(obj, list):                          # model returned the machines array directly
+        obj = {"machines": obj}
+    if not isinstance(obj, dict) or "machines" not in obj:
+        return None
+    return obj
+
+def _snum(v):
+    """scan cell -> number: pull the first integer/decimal out (strips units like 'kg', '#')"""
+    if v is None: return 0
+    m = re.search(r"-?\d+(?:\.\d+)?", str(v))
+    return (float(m.group(0)) if ("." in m.group(0)) else int(m.group(0))) if m else 0
+
+def _create_scan_batches(db, program, user):
+    """Turn a reviewed program dict into real planned batches. Returns the list of created batch ids."""
+    machines = {str(m.get("id")): m for m in db.get("machines", [])}
+    created = []
+    seqbase = {}
+    for mc in (program.get("machines") or []):
+        mid = str(mc.get("machine", "") or "").strip()
+        if mid not in machines:                        # tolerate 'JET1' vs 'JET-01' style
+            hit = next((k for k in machines if re.sub(r"\W", "", k).upper() == re.sub(r"\W", "", mid).upper()), None)
+            if hit: mid = hit
+        if mid not in machines:
+            continue                                   # unknown machine — skip (flagged in preview already)
+        if mid not in seqbase:
+            seqbase[mid] = max([int(b.get("seq") or 0) for b in db.get("batches", []) if b.get("machine") == mid] or [0])
+        for b in (mc.get("batches") or []):
+            lots = []
+            for l in (b.get("lots") or []):
+                lid = str(l.get("lotNo") or l.get("lotId") or "").strip()
+                if not lid: continue
+                lots.append({"lotId": lid, "pcs": _snum(l.get("pcs")), "mtr": _snum(l.get("mtr")),
+                             "weight": _snum(l.get("weight")), "takaNos": [], "takas": []})
+            if not lots: continue
+            seqbase[mid] += 1
+            row = {"machine": mid, "mcPin": mid, "seq": seqbase[mid],
+                   "lots": lots, "lotIds": [l["lotId"] for l in lots],
+                   "quality": str(b.get("quality") or "").strip(), "shadeNo": str(b.get("shade") or "").strip(),
+                   "pgNo": str(b.get("pageNo") or "").strip(), "ph": str(b.get("ph") or "").strip(),
+                   "notes": str(b.get("remarks") or "").strip(),
+                   "pcs": sum(l["pcs"] for l in lots), "mtr": int(sum(l["mtr"] for l in lots)),
+                   "weight": round(sum(l["weight"] for l in lots), 1), "status": "planned", "fromScan": True}
+            it = str(b.get("inTime") or "").strip(); ot = str(b.get("outTime") or "").strip()
+            day = time.strftime("%Y-%m-%d")
+            if it: row["startedAt"] = day + " " + it; row["startedBy"] = user; row["status"] = "running"
+            if it and ot: row["completedAt"] = day + " " + ot; row["completedBy"] = user; row["status"] = "done"
+            row["id"] = _batch_id(db, row)
+            db.setdefault("batches", []).append(row)
+            created.append(row["id"])
+    return created
 
 if __name__ == "__main__":
     _install_termlog()   # mirror console output into the Settings log panel
