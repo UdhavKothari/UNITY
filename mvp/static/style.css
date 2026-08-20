@@ -123,6 +123,7 @@ tbody tr{transition:background var(--dur)}
 tbody tr:hover{background:var(--surface-2)}
 td .rowbtns{display:flex;gap:6px;opacity:.55;transition:opacity var(--dur)}
 tr:hover .rowbtns{opacity:1}
+tr.tap{cursor:pointer}
 
 /* ---- forms ---- */
 label.fld{display:block;font-size:12.5px;font-weight:600;color:var(--ink-2);margin-bottom:14px}

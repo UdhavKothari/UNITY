@@ -69,7 +69,7 @@ function ic(name){
     operators:"badge", qcMetrics:"verified", users:"person",
     roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
     batches:"widgets", lots:"qr_code_2", weavers:"factory", recipes:"science",
-    activity:"history", takaMaster:"tag", history:"manage_history", challans:"mail"
+    activity:"history", takaMaster:"tag", history:"manage_history", challans:"mail", lotHistory:"timeline"
   };
   return '<span class="material-symbols-rounded">'+(M[name]||"circle")+'</span>';
 }
@@ -305,7 +305,8 @@ const PAGES=[
   ["shelves","Shelves","Admin"],["storageSlots","Storage slots","Admin"],
   ["suppliers","Suppliers","Admin"],["operators","Operators","Admin"],["qcMetrics","QC metrics","Admin"],
   ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"],
-  ["takaMaster","Taka master","Admin"],["history","Batch history","Admin"],["activity","Activity log","Admin"]];
+  ["takaMaster","Taka master","Admin"],["history","Batch history","Admin"],["lotHistory","Lot history","Admin"],["activity","Activity log","Admin"],
+  ["op_mob_log","Machine activity (24h in/out log)","Mobile app"]];
 
 const NAV=[
   {grp:null, items:[["dashboard","Dashboard"]]},
@@ -317,10 +318,10 @@ const NAV=[
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
   {grp:"Access", items:[["users","Users"],["roles","Roles"]]},
   {grp:"System", items:[["plan","Live plan"],["settings","Settings"]]},
-  {grp:"History & audit", items:[["history","Batch history"],["activity","Activity log"]]}
+  {grp:"History & audit", items:[["history","Batch history"],["lotHistory","Lot history"],["activity","Activity log"]]}
 ];
 
-let CUR="dashboard", editTable=null, editRow=null;
+let CUR="dashboard", editTable=null, editRow=null, LOTHIST_SEL=null;
 const SEARCH={};
 
 function colorFT(family,tone){
@@ -443,6 +444,7 @@ function render(){
   if(CUR==="plan") return renderPlan(c);
   if(CUR==="activity") return renderActivity(c);
   if(CUR==="history") return renderBatchHistory(c);
+  if(CUR==="lotHistory") return renderLotHistory(c);
   if(CUR==="takaMaster") return renderTakaMaster(c);
   if(CUR==="recipes") return renderRecipes(c);
   const sc=SCHEMAS[CUR];
@@ -582,31 +584,144 @@ function renderBatchHistory(c){
   rows.sort((a,b)=>String(b.completedAt||"").localeCompare(String(a.completedAt||"")));
   const map=b=>{ const lots=(b.lots||[]).map(l=>l.lotId).filter(Boolean).join(", ")||(b.lotIds||[]).join(", ");
     const takas=(b.lots||[]).reduce((n,l)=>n+((l.takaNos||l.takas||[]).length),0);
-    return {id:b.id,quality:b.quality||"",shade:b.shadeNo||"",lots,takas,pcs:b.pcs||0,mtr:b.mtr||0,kg:b.weight||0,machine:b.machine||b.mcPin||"",started:b.startedAt||"",resolved:b.completedAt||"",by:b.completedBy||b.startedBy||"",operator:b.operator||"",notes:b.notes||""}; };
+    return {id:b.id,quality:b.quality||"",shade:b.shadeNo||"",lots,takas,pcs:b.pcs||0,mtr:b.mtr||0,kg:b.weight||0,machine:b.machine||b.mcPin||"",started:b.startedAt||"",resolved:b.completedAt||"",by:b.completedBy||b.startedBy||"",operator:b.operator||"",notes:b.notes||"",
+      plcIn:b.actInTime||b.plcIn||"",plcOut:b.actOutTime||b.plcOut||"",water:b.plcWaterTotal||0}; };
   let list=rows.map(map);
   if(term) list=list.filter(r=>[r.id,r.quality,r.shade,r.lots,r.machine,r.by,r.operator,r.notes].some(v=>String(v).toLowerCase().indexOf(term)>=0));
-  c.innerHTML='<div class="page-head"><h1>Batch history</h1><p>'+rows.length+' resolved (completed) batch(es) — every batch finished and cleared from the floor.</p></div>'
+  c.innerHTML='<div class="page-head"><h1>Batch history</h1><p>'+rows.length+' resolved (completed) batch(es) — every batch finished and cleared from the floor. "PLC in/out" and "Water" come straight from the machine (LOAD / MAAL UNLOAD steps and fill volume), separate from the times logged by whoever ran the batch.</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search batch, quality, shade, lot, machine…" value="'+esc(SEARCH.history||"")+'" oninput="onSearchInput(this)"></div>'
     +'<div class="spacer"></div><span class="small muted" style="margin-right:10px">'+list.length+' of '+rows.length+'</span>'
     +'<button class="btn ghost" onclick="exportBatchHistory()"><span class="material-symbols-rounded">download</span>Export</button></div>'
-    +'<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr><th>Batch</th><th>Resolved</th><th>Machine</th><th>Quality</th><th>Shade</th><th>Lots</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Started</th><th>By</th><th>Operator</th><th>Remarks</th></tr></thead><tbody>'
+    +'<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr><th>Batch</th><th>Resolved</th><th>Machine</th><th>Quality</th><th>Shade</th><th>Lots</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Started</th><th>PLC in</th><th>PLC out</th><th>Water (L)</th><th>By</th><th>Operator</th><th>Remarks</th></tr></thead><tbody>'
     +(list.length?list.map(r=>'<tr><td class="tnum">'+esc(r.id)+'</td><td class="tnum small">'+esc(r.resolved)+'</td><td class="tnum">'+esc(r.machine)+'</td>'
       +'<td>'+esc(r.quality)+'</td><td><span class="swatch" style="background:'+shadeColor(r.shade,r.quality)+'"></span> '+esc(r.shade)+'</td>'
       +'<td class="small muted">'+esc(r.lots||"—")+(r.takas?' · '+r.takas+'tk':'')+'</td>'
       +'<td class="tnum">'+r.pcs+'</td><td class="tnum">'+r.mtr+'</td><td class="tnum">'+r.kg+'</td>'
-      +'<td class="tnum small">'+esc(r.started)+'</td><td>'+esc(r.by||"—")+'</td><td>'+esc(r.operator||"—")+'</td>'
+      +'<td class="tnum small">'+esc(r.started)+'</td>'
+      +'<td class="tnum small">'+esc(r.plcIn||"—")+'</td><td class="tnum small">'+esc(r.plcOut||"—")+'</td><td class="tnum">'+(r.water||"—")+'</td>'
+      +'<td>'+esc(r.by||"—")+'</td><td>'+esc(r.operator||"—")+'</td>'
       +'<td class="small muted">'+esc(r.notes||"")+'</td></tr>').join("")
-      :'<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:26px">No resolved batches'+(term?' match your search':' yet')+'.</td></tr>')
+      :'<tr><td colspan="16" style="text-align:center;color:var(--muted);padding:26px">No resolved batches'+(term?' match your search':' yet')+'.</td></tr>')
     +'</tbody></table></div></div>';
 }
 function exportBatchHistory(){
-  const header=["Batch","Resolved","Machine","Quality","Shade","Lots","Pcs","Mtr","Kg","Started","By","Operator","Remarks"];
+  const header=["Batch","Resolved","Machine","Quality","Shade","Lots","Pcs","Mtr","Kg","Started","PLC in","PLC out","Water (L)","By","Operator","Remarks"];
   const body=(DB.batches||[]).filter(b=>b.status==="done").sort((a,b)=>String(b.completedAt||"").localeCompare(String(a.completedAt||"")))
-    .map(b=>[b.id,b.completedAt||"",b.machine||b.mcPin||"",b.quality||"",b.shadeNo||"",((b.lots||[]).map(l=>l.lotId).filter(Boolean).join(", ")||(b.lotIds||[]).join(", ")),b.pcs||0,b.mtr||0,b.weight||0,b.startedAt||"",b.completedBy||b.startedBy||"",b.operator||"",b.notes||""]);
+    .map(b=>[b.id,b.completedAt||"",b.machine||b.mcPin||"",b.quality||"",b.shadeNo||"",((b.lots||[]).map(l=>l.lotId).filter(Boolean).join(", ")||(b.lotIds||[]).join(", ")),b.pcs||0,b.mtr||0,b.weight||0,b.startedAt||"",
+      b.actInTime||b.plcIn||"",b.actOutTime||b.plcOut||"",b.plcWaterTotal||0,b.completedBy||b.startedBy||"",b.operator||"",b.notes||""]);
   const ws=XLSX.utils.aoa_to_sheet([header].concat(body));
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Batch history");
   XLSX.writeFile(wb,"BatchHistory_"+new Date().toISOString().slice(0,10)+".xlsx");
+}
+/* ---- Lot history: for one lot — every batch it was punched into (which machine, which workflow
+   step, PLC in/out), whether that matches the workflow its quality is assigned, and everything a
+   dispatch report has removed from its active stock. See server.py _apply_dispatch / _plc_apply. ---- */
+function lotBatchesFor(lotId){
+  return (DB.batches||[]).filter(b => (b.lots||[]).some(l=>l.lotId===lotId) || (b.lotIds||[]).includes(lotId))
+    .slice().sort((a,b)=>String(a.startedAt||a.completedAt||"").localeCompare(String(b.startedAt||b.completedAt||"")));
+}
+function lotDispatchesFor(lotId){
+  return (DB.lotDispatches||[]).filter(d=>String(d.lotId)===String(lotId))
+    .slice().sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+}
+/* the workflow builder is a small graph (nodes+edges, wfbuilder.js) — walk it from the "input" node
+   forward to get the ordered chain of processType ids a fabric on this flow is expected to visit. */
+function wfExpectedChain(workflowId){
+  const w=(DB.workflows||[]).find(x=>x.id===workflowId); if(!w) return [];
+  const nodes=w.nodes||[], edges=w.edges||[];
+  const byId={}; nodes.forEach(n=>byId[n.id]=n);
+  const nextOf={}; edges.forEach(e=>{ if(!(e.from in nextOf)) nextOf[e.from]=e.to; });
+  let cur=(nodes.find(n=>n.kind==="input")||{}).id, guard=0;
+  const chain=[], seen=new Set();
+  while(cur && !seen.has(cur) && guard++<200){
+    seen.add(cur);
+    const n=byId[cur];
+    if(n && n.kind==="proc" && n.proc) chain.push(n.proc);
+    cur=nextOf[cur];
+  }
+  return chain;
+}
+function procName(procId){ const p=(DB.processTypes||[]).find(x=>x.id===procId); return p?(p.name||procId):procId; }
+/* actual vs expected: "matches" = every expected step appears, in order, somewhere in what actually
+   happened (extra steps like a re-wash in between are fine and not flagged as a mismatch). */
+function wfCompareLot(lot, batches){
+  const q=(DB.qualities||[]).find(x=>x.name===lot.quality);
+  if(!q || !q.workflowId) return null;                        // this quality has no assigned workflow — nothing to check
+  const expected=wfExpectedChain(q.workflowId);
+  if(!expected.length) return null;
+  const actual=batches.map(b=>b.proc).filter(Boolean);
+  let i=0, ok=true;
+  const stepResults=expected.map(p=>{
+    const idx=actual.indexOf(p, i);
+    const hit = idx!==-1;
+    if(hit) i=idx+1; else ok=false;
+    return {proc:p, done:hit};
+  });
+  const extra=actual.filter(p=>!expected.includes(p));
+  return {ok: ok, steps: stepResults, extra};
+}
+function openLotDetail(lotId){ LOTHIST_SEL=lotId; render(); const m=document.querySelector('main'); if(m) m.scrollTop=0; }
+function closeLotDetail(){ LOTHIST_SEL=null; render(); }
+function renderLotHistory(c){
+  const term=(SEARCH.lotHistory||"").toLowerCase();
+  let lots=(DB.lots||[]).slice().sort((a,b)=>String(b.id).localeCompare(String(a.id),undefined,{numeric:true}));
+  if(term) lots=lots.filter(l=>[l.id,l.customer,l.quality].some(v=>String(v||"").toLowerCase().indexOf(term)>=0));
+  const detail = LOTHIST_SEL ? renderLotDetail(LOTHIST_SEL) : "";
+  c.innerHTML=detail
+    + '<div class="page-head"><h1>Lot history</h1><p>'+(DB.lots||[]).length+' lot(s). Click a lot to see every batch it went through, its machines, PLC in/out, whether it followed its quality\'s assigned workflow, and any dispatches recorded against it.</p></div>'
+    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
+    +'<input placeholder="Search lot / customer / quality…" value="'+esc(SEARCH.lotHistory||"")+'" oninput="onSearchInput(this)"></div>'
+    +'<div class="spacer"></div><span class="small muted">'+lots.length+' of '+(DB.lots||[]).length+'</span></div>'
+    +'<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr><th>Lot no.</th><th>Customer</th><th>Quality</th><th>Status</th><th>Stock left</th><th>Batches</th><th>Workflow</th></tr></thead><tbody>'
+    +(lots.length?lots.map(l=>{
+        const batches=lotBatchesFor(l.id);
+        const cmp=wfCompareLot(l, batches);
+        const wfCell = cmp===null ? '<span class="small muted">no workflow set</span>'
+          : (cmp.ok ? '<span class="sp-okline" style="padding:3px 9px;font-size:11.5px"><span class="material-symbols-rounded" style="font-size:14px">check_circle</span>on track</span>'
+                    : '<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>off workflow</span>');
+        const stock = (l.takaNos||[]).length ? (l.takaNos.length+' tk · '+Math.round(l.meters||0)+' m') : '<span class="muted">none</span>';
+        return '<tr class="tap" onclick="openLotDetail(\''+esc(l.id)+'\')"><td><b class="tnum">'+esc(l.id)+'</b></td><td>'+esc(l.customer||"—")+'</td><td>'+esc(l.quality||"—")+'</td>'
+          +'<td><span class="pill '+(l.status==="dispatched"?"free":"run")+'">'+esc((l.status||"in stock").toUpperCase())+'</span></td>'
+          +'<td class="small">'+stock+'</td><td class="tnum">'+batches.length+'</td><td>'+wfCell+'</td></tr>';
+      }).join("")
+      :'<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:26px">No lots'+(term?' match your search':' yet')+'.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+function renderLotDetail(lotId){
+  const l=(DB.lots||[]).find(x=>x.id===lotId);
+  if(!l) return '';
+  const batches=lotBatchesFor(lotId), dispatches=lotDispatchesFor(lotId), cmp=wfCompareLot(l, batches);
+  const batchRows = batches.length ? batches.map(b=>{
+    const mc=(DB.machines||[]).find(x=>x.id===b.machine);
+    return '<tr><td class="tnum">'+esc(b.id)+'</td><td class="tnum">'+esc(b.machine||"—")+'</td><td class="small muted">'+esc(mc?mc.type:"")+'</td>'
+      +'<td>'+esc(b.proc?procName(b.proc):"—")+'</td><td>'+esc(b.quality||"")+'</td>'
+      +'<td class="tnum small">'+esc(b.startedAt||"—")+'</td><td class="tnum small">'+esc(b.completedAt||"—")+'</td>'
+      +'<td class="tnum small">'+esc(b.actInTime||b.plcIn||"—")+'</td><td class="tnum small">'+esc(b.actOutTime||b.plcOut||"—")+'</td>'
+      +'<td class="tnum">'+(b.plcWaterTotal||"—")+'</td><td class="tnum">'+(b.weight||0)+'</td></tr>';
+  }).join("") : '<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px">No batches recorded for this lot yet.</td></tr>';
+  const wfBlock = cmp===null ? '<p class="small muted">This lot\'s quality ('+esc(l.quality||"—")+') has no workflow assigned in Admin → Qualities, so there\'s nothing to check it against.</p>'
+    : '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:'+(cmp.extra.length?'8px':'0')+'">'
+      + cmp.steps.map(s=>'<span class="pill '+(s.done?'run':'maint')+'"><span class="material-symbols-rounded" style="font-size:14px">'+(s.done?'check':'priority_high')+'</span>'+esc(procName(s.proc))+'</span>').join('')
+      + '</div>'
+      + (cmp.extra.length ? '<p class="small muted">Also went through, outside the assigned flow: '+cmp.extra.map(p=>esc(procName(p))).join(', ')+'</p>' : '');
+  const dispatchRows = dispatches.length ? dispatches.map(d=>{
+    const tk=d.takas||[]; const mts=tk.reduce((a,t)=>a+(+t.mts||0),0), wt=tk.reduce((a,t)=>a+(+t.wt||0),0);
+    return '<tr><td class="tnum small">'+esc(d.date||"—")+'</td><td>'+esc(d.cardNo||"—")+'</td><td>'+esc(d.jobChallan||"—")+'</td>'
+      +'<td class="tnum">'+tk.length+'</td><td class="tnum">'+Math.round(mts)+'</td><td class="tnum">'+wt.toFixed(1)+'</td></tr>';
+  }).join("") : '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:16px">No dispatches recorded for this lot yet.</td></tr>';
+  return '<div class="card" style="margin-bottom:16px">'
+    + '<div class="page-head" style="padding:0 0 12px"><h1 style="font-size:19px">Lot '+esc(l.id)+'</h1>'
+      + '<p>'+esc(l.customer||"No customer")+' · '+esc(l.quality||"—")+' · <span class="pill '+(l.status==="dispatched"?"free":"run")+'">'+esc((l.status||"in stock").toUpperCase())+'</span>'
+      + ' · '+(l.takaNos||[]).length+' taka(s), '+Math.round(l.meters||0)+' m left in stock</p></div>'
+    + '<div class="sec-label" style="font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 6px">Workflow check</div>'
+    + wfBlock
+    + '<div class="sec-label" style="font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:16px 0 6px">Batch trail</div>'
+    + '<div class="tbl-wrap"><table><thead><tr><th>Batch</th><th>Machine</th><th>Type</th><th>Step</th><th>Quality</th><th>Started</th><th>Completed</th><th>PLC in</th><th>PLC out</th><th>Water (L)</th><th>Kg</th></tr></thead><tbody>'+batchRows+'</tbody></table></div>'
+    + '<div class="sec-label" style="font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:16px 0 6px">Dispatches</div>'
+    + '<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Challan</th><th>Job challan</th><th>Takas</th><th>Mtr</th><th>Kg</th></tr></thead><tbody>'+dispatchRows+'</tbody></table></div>'
+    + '<button class="btn ghost sm" style="margin-top:14px" onclick="closeLotDetail()"><span class="material-symbols-rounded">close</span>Close</button>'
+    + '</div>';
 }
 function actionPill(a){
   if(a==="delete"||a==="reset") return "wash";

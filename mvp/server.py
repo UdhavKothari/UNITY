@@ -99,9 +99,11 @@ def load_secrets():
 # ---------------------------------------------------------------- auth helpers
 SESSIONS = {}                 # token -> {"username":.., "expires":ts}   (in-memory)
 SESSION_TTL = 12 * 3600       # 12 hours
-# every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS)
-ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan","op_workflows","op_scan",
-             "dashboard","machines","qualities","shadeRecipes","recipes","history",
+# every viewable "page" a role can be granted (must match static/app.js PAGE_KEYS). op_mob_log is
+# mobile-only (UNITY-MOBILE/m.js) — the other op_* keys are shared between the desktop page and the
+# mobile tab/view of the same name (op_floor, op_massplan).
+ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan","op_workflows","op_scan","op_mob_log",
+             "dashboard","machines","qualities","shadeRecipes","recipes","history","lotHistory",
              "batches","lots","weavers","takaMaster",
              "customers","orders","challans","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]
@@ -1634,6 +1636,158 @@ def _inbox_watcher():
             print("[inbox] watcher error:", e, flush=True)
         time.sleep(INBOX_POLL_SECS)
 
+# ---------------------------------------------------------------- dispatch inbox: taka-wise "Dispatch
+# Report ..." CSVs (one row per dispatched taka, from the mill's GREYRET/CHALTRN dispatch query).
+# Drop one in mvp/inbox_dispatch/ ; this watcher removes each dispatched taka from its lot's ACTIVE
+# stock (so Storage / Taka master stop showing it) and files an itemized record in lotDispatches so
+# the Lot history page can still show what left, when, and on which challan — even once a lot's stock
+# empties out entirely. Same CSV-only / header-matched-by-name convention as the lot inbox above.
+DISPATCH_DIR  = os.path.join(HERE, "inbox_dispatch")
+DISPATCH_DONE = os.path.join(DISPATCH_DIR, "done")
+DISPATCH_ERR  = os.path.join(DISPATCH_DIR, "error")
+DISPATCH_POLL_SECS = 45
+LOT_DISPATCHES_CAP = 20000   # per-taka records; oldest trimmed once exceeded (mirrors LOG_CAP's approach)
+
+DISPATCH_COL_ALIASES = {
+    "lotNo":      ["LOT_NO_DISPLAY", "LOT NO DISPLAY", "LOT_NO", "LOT NO", "LOTNO", "DESPNO"],
+    "cardNo":     ["CHALLAN_CARDNO", "CHALLAN CARDNO", "CARDNO", "CARD NO"],
+    "dispDate":   ["DISPATCH_DATE", "DISPATCH DATE", "CUTDATE"],
+    "quality":    ["QUALITY", "GREYQUAL"],
+    "jobChallan": ["JOB_CHALLAN", "JOB CHALLAN"],
+    "takaSr":     ["TAKA_NO", "TAKA NO", "TAKASRNO", "TAKA SR NO"],
+    "takaMts":    ["TAKA_MTS", "TAKA MTS", "MTS"],
+    "takaWt":     ["TAKA_WT", "TAKA WT", "WT"],
+    "remark":     ["REMARK", "WRMK"],
+}
+
+def _dispatch_colmap(headers):
+    norm = [_norm_hdr(h) for h in headers]; m = {}
+    for field, aliases in DISPATCH_COL_ALIASES.items():
+        for a in aliases:
+            na = _norm_hdr(a)
+            if na in norm:
+                m[field] = norm.index(na); break
+    return m
+
+def _find_dispatch_header(rows):
+    for i, r in enumerate(rows):
+        norm = [_norm_hdr(x) for x in r]
+        if any(h in norm for h in ("LOTNODISPLAY", "LOTNO", "DESPNO")) and any(h in norm for h in ("TAKANO", "TAKASRNO")):
+            return i
+    return 0
+
+def _csv_to_dispatch(rows):
+    """CSV rows (one row per dispatched taka) -> flat list of per-taka dispatch dicts."""
+    if not rows:
+        return []
+    hi = _find_dispatch_header(rows)
+    cm = _dispatch_colmap(rows[hi])
+    if "lotNo" not in cm or "takaSr" not in cm:
+        raise ValueError("no Lot_No_Display / Taka_No columns found; header row was %s" % (rows[hi],))
+    out = []
+    for r in rows[hi + 1:]:
+        if not any(str(x).strip() for x in r):
+            continue
+        get = lambda f: (r[cm[f]] if (f in cm and cm[f] < len(r)) else "")
+        lotno = str(get("lotNo")).strip()
+        if not lotno or set(lotno) <= set("- ") or "(" in lotno or lotno.upper() in ("0", "NULL"):
+            continue                                    # SQL-dump noise / footer rows, same guard as the lot inbox
+        sr_raw = str(get("takaSr")).strip()
+        if not sr_raw:
+            continue
+        try: sr = int(float(sr_raw))
+        except (ValueError, TypeError): continue
+        out.append({"lotNo": lotno, "cardNo": str(get("cardNo")).strip(), "dispDate": str(get("dispDate")).strip()[:10],
+                    "quality": _normalize_quality(get("quality")), "jobChallan": str(get("jobChallan")).strip(),
+                    "takaSr": sr, "takaMts": _num(get("takaMts")), "takaWt": _num(get("takaWt")),
+                    "remark": str(get("remark")).strip()})
+    return out
+
+def _apply_dispatch(entries):
+    """Group per-taka rows by lot, remove each dispatched taka from that lot's active stock arrays,
+    and file one itemized lotDispatches record per lot per report (kept even after the lot's own
+    stock empties out, so Lot history always has something to show)."""
+    with LOCK:
+        db = load_db()
+        by_lot = {}
+        for e in entries:
+            by_lot.setdefault(e["lotNo"], []).append(e)
+        taka_count = 0; matched_lots = 0; dispatched_lots = 0; unmatched = 0
+        recs = db.setdefault("lotDispatches", [])
+        for lotno, rows in by_lot.items():
+            lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(lotno)), None)
+            recs.append({"id": "DSP-" + uuid.uuid4().hex[:8], "lotId": lotno,
+                         "cardNo": rows[0].get("cardNo") or "", "date": rows[0].get("dispDate") or time.strftime("%Y-%m-%d"),
+                         "jobChallan": rows[0].get("jobChallan") or "",
+                         "quality": rows[0].get("quality") or ((lot or {}).get("quality") or ""),
+                         "takas": [{"sr": r["takaSr"], "mts": r["takaMts"], "wt": r["takaWt"], "remark": r.get("remark") or ""} for r in rows],
+                         "importedAt": time.strftime("%Y-%m-%d %H:%M:%S")})
+            taka_count += len(rows)
+            if not lot:
+                unmatched += 1
+                continue
+            matched_lots += 1
+            want_srs = {str(r["takaSr"]) for r in rows}
+            keep_idx = [i for i, sr in enumerate(lot.get("takaNos") or []) if str(sr) not in want_srs]
+            if len(keep_idx) != len(lot.get("takaNos") or []):
+                for field in ("takas", "takaNos", "takaWts"):
+                    if lot.get(field):
+                        lot[field] = [lot[field][i] for i in keep_idx if i < len(lot[field])]
+                lot["pcs"] = len(lot.get("takas") or [])
+                lot["meters"] = round(sum(lot.get("takas") or []))
+                if "takaWts" in lot:                          # only recompute weight if the lot tracks per-taka weight at all
+                    lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
+                if not lot.get("takas"):
+                    lot["status"] = "dispatched"
+                    dispatched_lots += 1
+        if len(recs) > LOT_DISPATCHES_CAP:
+            del recs[:len(recs) - LOT_DISPATCHES_CAP]
+        _log(db, "inbox", "dispatch", "lots", "",
+             "dispatch report: %d taka(s) across %d lot(s) (%d fully dispatched, %d lot id not found in system)"
+             % (taka_count, matched_lots + unmatched, dispatched_lots, unmatched))
+        save_db(db)
+    return taka_count, matched_lots, dispatched_lots, unmatched
+
+def _process_dispatch_inbox(path):
+    if path.lower().endswith((".xlsx", ".xls")):
+        raise ValueError("Excel received — please export CSV, not Excel (the server reads CSV).")
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(_csv.reader(f))
+    entries = _csv_to_dispatch(rows)
+    if not entries:
+        raise ValueError("no dispatched takas found in file")
+    taka_count, matched_lots, dispatched_lots, unmatched = _apply_dispatch(entries)
+    return ("%d taka(s) across %d lot(s): %d fully dispatched, %d lot id not found in system"
+            % (taka_count, matched_lots + unmatched, dispatched_lots, unmatched))
+
+def _dispatch_watcher():
+    for d in (DISPATCH_DIR, DISPATCH_DONE, DISPATCH_ERR):
+        try: os.makedirs(d, exist_ok=True)
+        except OSError: pass
+    while True:
+        try:
+            for name in sorted(os.listdir(DISPATCH_DIR)):
+                p = os.path.join(DISPATCH_DIR, name)
+                if not os.path.isfile(p) or name.startswith(".") or not name.lower().endswith((".csv", ".txt", ".xlsx", ".xls")):
+                    continue
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                try:
+                    summary = _process_dispatch_inbox(p)
+                    dest = os.path.join(DISPATCH_DONE, stamp + "-" + name); os.replace(p, dest)
+                    with open(dest + ".log", "w", encoding="utf-8") as lf: lf.write("OK: " + summary + "\n")
+                    print("[dispatch]", name, "->", summary, flush=True)
+                except Exception as e:
+                    try: dest = os.path.join(DISPATCH_ERR, stamp + "-" + name); os.replace(p, dest)
+                    except OSError: dest = p
+                    try:
+                        with open(dest + ".log", "w", encoding="utf-8") as lf: lf.write("ERROR: " + str(e) + "\n")
+                    except OSError: pass
+                    print("[dispatch] ERROR", name, ":", e, flush=True)
+            _prune_dir(DISPATCH_DONE); _prune_dir(DISPATCH_ERR)
+        except Exception as e:
+            print("[dispatch] watcher error:", e, flush=True)
+        time.sleep(DISPATCH_POLL_SECS)
+
 # ---------------------------------------------------------------- mill challans (parsed from emailed PDFs)
 # challan_watch.py (a separate helper, uses pdfplumber) drops parsed JSON here; the server stays
 # dependency-free and just files the results into the 'challans' table. One PDF page = one challan lot.
@@ -1820,6 +1974,8 @@ PLC_STEPS = {1:"FILL NORMAL",2:"DRAIN NORMAL",3:"HEAT",4:"RUN",5:"CHEMICAL IN",6
 # act vs set diverges by design (e.g. cooling 120->75 over 5 min). Skip the variance alert on these
 # steps so a normal ramp doesn't fire a false "temperature off" flag.
 PLC_RAMP_STEPS = {3, 9}
+PLC_FILL_STEPS = {1, 7}          # FILL NORMAL, FILL RECO — a rising litre reading during these steps is fresh water going in
+PLC_EVENT_RETAIN_DAYS = 7        # machine-wise LOAD/UNLOAD event log (mobile "activity" page shows the last 24h of it)
 PLC_COLS = ["id","Date","Time","Batch_Name","MC_Status","Auto_Manual","Step_Name","Step_Number",
             "Running_Pgm_No","Set_Temp","Act_Temp","Act_MV_Litre","Max_MV_LTR","LiqRatio_SetLitre_Sel",
             "Curr_Batch_Time","Remain_Time","Alarm_1","Alarm_2","Alarm_3"]
@@ -1854,6 +2010,20 @@ def _plc_running_batch(db, machine_id):
     rows.sort(key=lambda b: (0 if b.get("status") == "running" else 1, _plc_num(b.get("seq"))))
     return rows[0] if rows else None
 
+def _plc_log_event(db, machine_id, kind):
+    """append a machine-wise LOAD ('in') / MAAL UNLOAD ('out') event, decoupled from whatever batch the
+    plan thinks is running (the mobile maintenance view cares that fabric physically moved, not which
+    batch record it got attributed to — that attribution can be wrong when the plan is haywire).
+    Pruned to the last PLC_EVENT_RETAIN_DAYS days."""
+    ev = db.setdefault("plcEvents", [])
+    ev.append({"machine": machine_id, "kind": kind, "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+    if len(ev) > 200:      # only pay for the prune walk once the list has actually grown
+        cutoff = time.time() - PLC_EVENT_RETAIN_DAYS * 86400
+        def _fresh(e):
+            try: return time.mktime(time.strptime(e["at"], "%Y-%m-%d %H:%M:%S")) >= cutoff
+            except Exception: return True
+        db["plcEvents"] = [e for e in ev if _fresh(e)]
+
 def _plc_alert(db, machine_id, kind, message):
     """append a de-duplicated PLC/maintenance alert (surfaced in the app; MNTC push comes later)"""
     al = db.setdefault("plcAlerts", []); now = time.time()
@@ -1870,6 +2040,7 @@ def _plc_apply(db, machine, dec, tol):
     and raise temperature / alarm alerts."""
     mid = machine.get("id")
     now = dec["at"] or time.strftime("%Y-%m-%d %H:%M:%S")
+    prev = (db.get("plcLive") or {}).get(mid) or {}   # last reading, read BEFORE we overwrite it below
     live = {k: dec[k] for k in ("stepName", "step", "setTemp", "actTemp", "litre", "liqRatio",
                                 "program", "pgmNo", "running", "remain", "battime", "alarms", "at")}
     live["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1885,6 +2056,13 @@ def _plc_apply(db, machine, dec, tol):
         progs = db.setdefault("programs", [])
         if not any((p.get("name") or "").upper() == dec["program"].upper() for p in progs):
             progs.append({"id": "PGM-" + uuid.uuid4().hex[:6], "name": dec["program"], "firstSeen": time.strftime("%Y-%m-%d %H:%M")})
+    # machine-wise LOAD/UNLOAD event log: edge-triggered (only the moment the step CHANGES into 6/12,
+    # not every 10s poll while parked there), decoupled from batch reconciliation below — see _plc_log_event.
+    prev_step = prev.get("step")
+    if dec["step"] == 6 and prev_step != 6:
+        _plc_log_event(db, mid, "in")
+    elif dec["step"] == 12 and prev_step != 12:
+        _plc_log_event(db, mid, "out")
     b = _plc_running_batch(db, mid)
     if b:
         # ACT IN time: the LOAD step (6) is the real load moment; if we join mid-run, the first running read stands in
@@ -1898,6 +2076,16 @@ def _plc_apply(db, machine, dec, tol):
         b["plcIn"] = b.get("actInTime"); b["plcOut"] = b.get("actOutTime")   # keep the old field names in sync
         b["plcStep"] = dec["stepName"]; b["plcActTemp"] = dec["actTemp"]; b["plcSetTemp"] = dec["setTemp"]
         b["plcLitre"] = dec["litre"]; b["plcUpdated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        # cumulative water SPENT on this batch: sum every rise in litre seen while in a FILL step. The
+        # live "litre" field alone is just the current vat level — it falls again on drain, so it can't
+        # tell you how much fresh water the batch has gone through in total; this can.
+        prev_litre = prev.get("litre")
+        if (dec["step"] in PLC_FILL_STEPS and prev.get("step") in PLC_FILL_STEPS
+                and prev_litre is not None and dec["litre"] > prev_litre):
+            delta = dec["litre"] - prev_litre
+            cap = float(machine.get("capMax") or 0) or 99999
+            if 0 < delta <= cap * 3:            # guard against a garbage/glitch PLC reading
+                b["plcWaterTotal"] = round((b.get("plcWaterTotal") or 0) + delta, 1)
     if (dec["running"] and dec["step"] not in PLC_RAMP_STEPS and dec["setTemp"] > 0
             and abs(dec["actTemp"] - dec["setTemp"]) > tol):     # HEAT/COOL ramps are exempt (see PLC_RAMP_STEPS)
         _plc_alert(db, mid, "temp", "%s temperature %.1f°C vs set %.1f°C (tolerance ±%g)" % (mid, dec["actTemp"], dec["setTemp"], tol))
@@ -2234,6 +2422,7 @@ if __name__ == "__main__":
     load_db()  # ensure the database exists
     threading.Thread(target=_watch_and_reload, daemon=True).start()
     threading.Thread(target=_inbox_watcher, daemon=True).start()
+    threading.Thread(target=_dispatch_watcher, daemon=True).start()
     threading.Thread(target=_challan_watcher, daemon=True).start()
     threading.Thread(target=_challan_email_scheduler, daemon=True).start()
     threading.Thread(target=_plc_poller, daemon=True).start()
@@ -2244,6 +2433,7 @@ if __name__ == "__main__":
     print(f"   admin:   http://localhost:{port}/admin.html")
     print(f"Data file: {DB_PATH}")
     print(f"Inbox:     drop CSVs in {INBOX_DIR} — auto-imported as lots every {INBOX_POLL_SECS}s")
+    print(f"Dispatch:  drop \"Dispatch Report ...\" CSVs in {DISPATCH_DIR} — taka-wise, removed from active stock and filed to Lot history every {DISPATCH_POLL_SECS}s")
     print("Auto-reload is ON (server.py edits restart it) · pages are never cached")
     try:
         srv.serve_forever()

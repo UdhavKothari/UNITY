@@ -63,11 +63,12 @@ function statusPill(b){
 
 /* ---------------- shell ---------------- */
 const TABS = [["/", "grid_view", "Floor", "op_floor"], ["/plan", "calendar_view_week", "Plan", "op_massplan"],
+              ["/log", "schedule", "Activity", "op_mob_log"],
               ["/alerts", "notifications", "Alerts", null], ["/me", "person", "Me", null]];
 function tabAllowed(t){ return !t[3] || can(t[3]); }               // null perm = always visible (Alerts, Me)
 function allowedTabs(){ return TABS.filter(tabAllowed); }
 function firstTab(){ const t = allowedTabs()[0]; return t ? t[0] : "/me"; }
-const NEEDS = h => (h==="/"||h===""||h.startsWith("/machine/")) ? "op_floor" : (h==="/plan" ? "op_massplan" : null);
+const NEEDS = h => (h==="/"||h===""||h.startsWith("/machine/")) ? "op_floor" : (h==="/plan" ? "op_massplan" : (h==="/log" ? "op_mob_log" : null));
 function shell(opts){
   const { title, body, tab, back, action } = opts;
   let ab = '<header class="appbar">';
@@ -173,7 +174,9 @@ function plcPanel(m){
                p.remain?('~'+p.remain+' min left'):(p.battime?('running '+p.battime+' min'):' '), '')
       + '</div>'
       + '<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)">'
-        + '<span>'+svg("water_drop",16)+' <b class="tnum">'+(p.litre||0)+'</b> L</span>'
+        + '<span title="current vat level — falls again on drain">'+svg("water_drop",16)+' <b class="tnum">'+(p.litre||0)+'</b> L now</span>'
+        + (function(){ const bt=currentBatch(m.id); return (bt && bt.plcWaterTotal)
+            ? '<span title="every fill this batch has used, summed — this does not fall on drain">'+svg("waves",16)+' <b class="tnum">'+bt.plcWaterTotal+'</b> L spent (batch)</span>' : ''; })()
         + (p.pgmNo?'<span>Program no. <b class="tnum">'+p.pgmNo+'</b></span>':'')
         + (p.liqRatio?'<span>LiqRatio sel <b class="tnum">'+p.liqRatio+'</b></span>':'')
       + '</div>'
@@ -247,6 +250,28 @@ function renderAlerts(){
   shell({ title:"Alerts", body, tab:"/alerts" });
 }
 
+/* machine-wise LOAD/UNLOAD activity, last 24h — decoupled from batches on purpose: this is for
+   maintenance, who care that fabric physically entered/left a machine, not which batch record (possibly
+   wrong, if the plan is haywire) the server happened to attribute it to. See server.py _plc_log_event. */
+function renderMachineLog(){
+  const cutoff = Date.now() - 24*3600*1000;
+  const rows = ((DB.plcEvents)||[]).filter(e=>{
+    const t = new Date(String(e.at||"").replace(" ","T")); return !isNaN(t) && t.getTime()>=cutoff;
+  }).slice().reverse();   // newest first
+  let body;
+  if(!rows.length){
+    body = empty("schedule", "No activity in the last 24h", "Every time the PLC reports LOAD or MAAL UNLOAD on a machine, it shows up here — regardless of which batch the plan currently has assigned to that machine.");
+  } else {
+    body = '<div class="sec-label">Last 24 hours · '+rows.length+' event(s)</div>' + rows.map(e=>{
+      const inn = e.kind==="in";
+      return '<div class="brow"><span class="mc-tile" style="width:40px;height:40px;background:'+(inn?'var(--success-soft)':'#e8f0fb')+';color:'+(inn?'var(--success)':'#2f6ea8')+'">'+svg(inn?"play_arrow":"logout",22)+'</span>'
+        + '<div style="min-width:0;flex:1"><div class="lot">'+esc(e.machine||"")+'</div><div class="q">'+(inn?'Fabric loaded · LOAD':'Fabric unloaded · MAAL UNLOAD')+'</div></div>'
+        + '<div class="r" style="text-align:right"><span class="q tnum" style="display:block">'+esc((e.at||"").slice(11,16))+'</span><span class="q" style="display:block">'+esc(agoText(e.at))+'</span></div></div>';
+    }).join("");
+  }
+  shell({ title:"Machine activity", body, tab:"/log" });
+}
+
 function renderMe(){
   const perms = (USER.perms||[]).length;
   const body = '<div class="card" style="display:flex;align-items:center;gap:14px">'
@@ -289,6 +314,7 @@ function openBatch(id){
     + (b.wash?'':kv("Pcs · Mtr · Kg", '<span class="tnum">'+(b.pcs||0)+' · '+(b.mtr||0)+' · '+(b.weight||0)+'</span>'))
     + kv("In time", '<span class="tnum">'+(b.startedAt?esc(dmyt(b.startedAt)):"—")+'</span>')
     + kv("Out time", '<span class="tnum">'+(b.completedAt?esc(dmyt(b.completedAt)):"—")+'</span>')
+    + (b.plcWaterTotal?kv("Water spent (PLC)", '<span class="tnum">'+b.plcWaterTotal+' L</span>'):'')
     + '<div style="margin-top:16px">'+acts+'</div>'
     + '<button class="btn ghost sm" style="width:100%;margin-top:10px" onclick="closeSheet()">Close</button></div>';
   const sc = document.createElement("div"); sc.className = "scrim"; sc.id = "sheetScrim"; sc.innerHTML = html;
@@ -347,6 +373,7 @@ function route(){
   }
   if(h.startsWith("/machine/")) return renderMachine(decodeURIComponent(h.split("/")[2]||""));
   if(h==="/plan") return renderPlan();
+  if(h==="/log") return renderMachineLog();
   if(h==="/alerts") return renderAlerts();
   if(h==="/me") return renderMe();
   return renderFloor();
