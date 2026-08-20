@@ -447,7 +447,19 @@ def seed():
     data.setdefault("challans", [])        # table always exists so edits/adds work before the first import
     return data
 
+_DB_CACHE = None   # in-memory db, once loaded (this process is the sole writer of data.sqlite).
+                   # Every caller of load_db() already holds LOCK, so serving the same cached dict
+                   # instead of re-reading + re-parsing every SQLite table on every request is safe:
+                   # nothing else touches the file while we're up. This also means the one-time
+                   # migrate/self-heal scans below run ONCE per process lifetime, not on every
+                   # GET/POST — they were previously re-scanning every quality/lot/batch/etc. on
+                   # every single request, serialized behind the same global lock every other
+                   # request was waiting on.
+
 def load_db():
+    global _DB_CACHE
+    if _DB_CACHE is not None:
+        return _DB_CACHE
     db = _load_raw()
     # auto-migrate: ensure any new tables/keys from the current seed exist
     base = seed()
@@ -472,6 +484,7 @@ def load_db():
                 r["edit"] = list(ALL_PAGES); changed = True
     if _migrate(db):
         changed = True
+    _DB_CACHE = db          # set before save_db() so a save triggered from in here doesn't recurse
     if changed:
         save_db(db)
     return db
@@ -554,13 +567,14 @@ def _write_all(c, db):
     _snapshot(db)                                          # snapshot now matches disk again
 
 def save_db(db):
-    global DB_VERSION
+    global DB_VERSION, _DB_CACHE
     c = _connect()
     try:
         _write_all(c, db)
     finally:
         c.close()
     DB_VERSION += 1
+    _DB_CACHE = db          # keep the in-memory cache authoritative and in sync with disk
 
 def _etag():
     return '"%s-%d"' % (_BOOT, DB_VERSION)
@@ -1843,6 +1857,7 @@ def _plc_cycle(pymysql, cfg):
     _PLC["warned_no_tbl"] = False
     conn = _plc_get_conn(pymysql, cfg)
     seen = []
+    readings = []                                   # (mid, dec) collected here, applied in ONE batch below
     cur = conn.cursor()
     for m in machines:
         mid, tbl = m["id"], m["plcTable"]
@@ -1862,11 +1877,22 @@ def _plc_cycle(pymysql, cfg):
         dec = _plc_decode(row)
         seen.append("%s:%s%s" % (mid, (dec["stepName"] if dec["running"] else "idle"),
                                  (" %.1f°" % dec["actTemp"] if dec["running"] else "")))
+        readings.append((mid, dec))
+    # Apply every machine's reading in ONE load+save, not one per machine — with N jets on PLC tables
+    # this used to take the global LOCK (and reload/rewrite the whole db) N times per 10s cycle, right
+    # alongside every user request. Table reads above already happened outside the lock, so this is
+    # just the in-memory apply + a single write.
+    if readings:
         with LOCK:
             db = load_db()
-            mm = next((x for x in db.get("machines", []) if x.get("id") == mid), None)
-            if mm:
-                _plc_apply(db, mm, dec, tol); save_db(db)
+            by_id = {x.get("id"): x for x in db.get("machines", [])}
+            applied = False
+            for mid, dec in readings:
+                mm = by_id.get(mid)
+                if mm:
+                    _plc_apply(db, mm, dec, tol); applied = True
+            if applied:
+                save_db(db)
     summary = "[plc] " + ", ".join(seen)            # only log when it changes (avoids flooding the console)
     if summary != _PLC["last"]:
         print(summary, flush=True); _PLC["last"] = summary
