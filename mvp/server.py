@@ -2094,7 +2094,7 @@ def _scan_sessions_gc(db):
 def _gemini_cfg():
     g = (load_secrets() or {}).get("gemini", {}) or {}
     return {"apiKey": str(g.get("apiKey", "") or ""),
-            "model": str(g.get("model", "") or "gemini-2.0-flash"),
+            "model": str(g.get("model", "") or "gemini-2.5-flash"),
             "enabled": bool(g.get("enabled", True)) and bool(g.get("apiKey")),
             "timeout": int(g.get("timeoutSecs", 120) or 120)}
 
@@ -2140,7 +2140,13 @@ def _gemini_extract(images_b64, cfg):
         body = ""
         try: body = e.read().decode("utf-8", "replace")[:300]
         except Exception: pass
-        raise RuntimeError("Gemini API error %s: %s" % (e.code, body or e.reason))
+        hint = ""
+        if e.code == 404:
+            hint = (" — the model name in gemini.model (currently %r) isn't valid for this API key/region. "
+                    "Model names change over time; set gemini.model in secrets.local.json to a current one "
+                    "(see https://ai.google.dev/gemini-api/docs/models), or leave it blank to use the server's "
+                    "built-in default." % (cfg.get("model"),))
+        raise RuntimeError("Gemini API error %s: %s%s" % (e.code, body or e.reason, hint))
     except urllib.error.URLError as e:
         raise RuntimeError("Couldn't reach the Gemini API — check the server's internet connection (%s)"
                            % (getattr(e, "reason", e),))

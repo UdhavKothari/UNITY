@@ -81,6 +81,15 @@ applied, cancelled, or expired.
   LAN-only by design — this is the one feature that needs an outbound connection.)
 - Check **Admin → Settings → Server log** for the exact error Gemini returned (bad key, quota,
   etc.) — it's shown to the user on the review screen too.
+- **"Gemini API error 404: models/... is not found"** — the `gemini.model` name in
+  `secrets.local.json` isn't one Google currently serves for your key. Google renames/retires
+  model IDs over time (this has already happened once — `gemini-2.0-flash` was the original
+  default and no longer works). Look up a current model name at
+  https://ai.google.dev/gemini-api/docs/models and set `gemini.model` to it — this needs
+  **no server restart**, `secrets.local.json` is re-read on every scan, just try again.
+  Note: `pip install google-genai` does **not** affect this — the server talks to Gemini
+  directly over HTTP (`urllib`), it doesn't use that SDK, so installing/upgrading it has no
+  effect either way.
 
 ## 7. If the QR code won't scan / the phone page says "link expired"
 
