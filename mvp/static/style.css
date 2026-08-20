@@ -411,14 +411,16 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-del:hover .material-symbols-rounded{color:var(--danger)}
 .mp-editor{display:flex;flex-direction:column;gap:18px}
 .mp-editor-scroll{overflow-x:auto;padding:12px;background:var(--accent-soft)}
-/* create mode: Seq | lots(2–5) | Quality | Shade | Pg No. | actions — In/Out/PH hidden (always empty on a new batch).
-   minmax(0,·) keeps every track purely fractional so the header grid and the row grid compute identical widths
-   (a select's intrinsic width can't stretch a row track past its header). */
-.mp-editor-head,.mp-editor-row{display:grid;gap:6px;min-width:880px;
-  grid-template-columns:minmax(0,.4fr) minmax(0,1.5fr) minmax(0,.5fr) minmax(0,.55fr) minmax(0,.62fr) minmax(0,1.25fr) minmax(0,1.35fr) minmax(0,.8fr) 200px}
+/* create mode: Seq | lots(2–5) | Quality | Shade | Pg No. | Remarks | actions — In/Out/PH hidden (always empty
+   on a new batch). Shade/Pg No. are kept narrow (numbers/short codes don't need width) so Remarks can sit right
+   next to Pg No. instead of on its own full-width row below. minmax(0,·) keeps every track purely fractional so
+   the header grid and the row grid compute identical widths (a select's intrinsic width can't stretch a row
+   track past its header). */
+.mp-editor-head,.mp-editor-row{display:grid;gap:6px;min-width:980px;
+  grid-template-columns:minmax(0,.4fr) minmax(0,1.5fr) minmax(0,.5fr) minmax(0,.55fr) minmax(0,.62fr) minmax(0,1.25fr) minmax(0,.5fr) minmax(0,.3fr) minmax(0,1.4fr) 200px}
 /* edit mode: also show the read-only In / Out / PH columns */
-.mp-editor.editing .mp-editor-head,.mp-editor.editing .mp-editor-row{min-width:1080px;
-  grid-template-columns:minmax(0,.4fr) minmax(0,1.25fr) minmax(0,.48fr) minmax(0,.5fr) minmax(0,.58fr) minmax(0,1.05fr) minmax(0,1.15fr) minmax(0,.72fr) minmax(0,.6fr) minmax(0,.6fr) minmax(0,.5fr) 200px}
+.mp-editor.editing .mp-editor-head,.mp-editor.editing .mp-editor-row{min-width:1200px;
+  grid-template-columns:minmax(0,.4fr) minmax(0,1.25fr) minmax(0,.48fr) minmax(0,.5fr) minmax(0,.58fr) minmax(0,1.05fr) minmax(0,.45fr) minmax(0,.28fr) minmax(0,1.2fr) minmax(0,.6fr) minmax(0,.6fr) minmax(0,.5fr) 200px}
 .mp-editor-head{padding:0 2px 6px;font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .mp-editor-row{align-items:start}
 .mp-ed-seq{align-self:center;padding:10px 2px;font:500 12px/1 var(--mono);color:var(--ink-2)}
@@ -460,6 +462,7 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-editor{background:var(--accent-soft);border-radius:var(--r);padding:14px 16px;gap:12px}   /* no inner border — the machine card's accent outline is the only outline */
 .mp-editor-scroll{padding:0;background:transparent}
 .mp-editor .mp-lotline{background:transparent;border:0;padding:0}
+.mp-editor .lotqrow{grid-template-columns:1.6fr .25fr .28fr .8fr auto 38px}   /* pcs/mtr shrunk to ~35% — they're short numbers; frees width for Remarks up in the row */
 .mp-editor .mp-ed-lots .mp-lotline + .mp-lotline{border-top:1px solid #c9d5ea;padding-top:8px;margin-top:2px}   /* divider between stacked lots */
 .mp-editor .mp-ed-f select,
 .mp-editor .mp-ed-f input,
@@ -486,9 +489,6 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-editor .mp-sh-add,.mp-editor .mp-sh-ok{background:transparent;border:0;color:var(--ink-2)}
 .mp-editor .mp-sh-add:hover,.mp-editor .mp-sh-ok:hover{background:rgba(255,255,255,.65);color:var(--accent)}
 .mp-editor .mp-sh-ok .material-symbols-rounded{color:var(--accent)}
-.mp-editor .mp-ed-remarks{margin:0}
-.mp-editor .mp-ed-remarks input{background:transparent;border:0;border-bottom:1.5px solid #c3d0e8;border-radius:0;padding:7px 4px}
-.mp-editor .mp-ed-remarks input:focus{outline:none;border-bottom-color:var(--accent);box-shadow:none;background:rgba(255,255,255,.65)}
 .mp-editor .mp-add-lot{background:transparent;border:1px dashed #b7c6e4;color:var(--ink-2)}
 .mp-editor .mp-add-lot:hover{background:rgba(255,255,255,.55);border-color:var(--accent);color:var(--accent)}
 .mp-editor .mp-ed-actions .btn.ghost{background:transparent;border:0;color:var(--ink-2)}   /* cancel reads subtle; Save batch stays the one solid primary */
@@ -580,12 +580,7 @@ tr.linked td{background:var(--success-soft)}
 .mp-hold .hold-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,255,255,.30);pointer-events:none}
 .mp-hold .hold-lbl{position:relative;display:inline-flex;align-items:center;gap:6px}
 
-/* ---- batch remarks (batch-maker editor + planner row note) ---- */
-.mp-ed-remarks{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
-.mp-ed-remarks .material-symbols-rounded{color:var(--muted);font-size:19px}
-.mp-ed-remarks input{flex:1;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:12.8px;background:var(--surface);color:var(--ink)}
-.mp-ed-remarks input::placeholder{color:var(--faint)}
-.mp-ed-remarks input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+/* ---- planner row note (truncated remark shown in the mass-plan table) ---- */
 .mp-noteic{font-size:15px;vertical-align:-3px;color:var(--warning);cursor:help}
 
 /* ---- "in the machine" batch: in-time logged, no out-time. Subtle tint of the running shade,
@@ -649,33 +644,35 @@ tr.linked td{background:var(--success-soft)}
 .sp-flagsum .material-symbols-rounded{font-size:16px}
 .sp-okline{display:inline-flex;align-items:center;gap:5px;font-weight:700;font-size:13px;color:var(--success);background:var(--success-soft);padding:6px 11px;border-radius:20px}
 .sp-okline .material-symbols-rounded{font-size:16px}
-.sp-mc{padding:12px}
-.sp-mch{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.sp-mch .mc{font-weight:800;font-family:'IBM Plex Mono',monospace;flex:1;min-width:0}
+/* ---- register review: a real sheet per machine (table, not stacked cards) — reuses the app's
+   standard table (sticky mono header, hover row tint) with cells as inline-editable, borderless-until-
+   focus inputs so it reads like an actual spreadsheet, not a form. Flags = amber cell + tooltip
+   (conditional-formatting style) instead of banner text under every row. ---- */
+.sp-mcsheet{margin:0 0 22px}
+.sp-mcsheet:last-child{margin-bottom:0}
+.sp-mch2{display:flex;align-items:center;gap:10px;padding:2px 2px 10px;flex-wrap:wrap}
+.sp-mch2 select{font-family:var(--mono);font-weight:700;font-size:14px;padding:7px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);background:var(--surface);color:var(--ink);min-width:120px}
+.sp-mch2 select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.sp-mch2 select.bad{border-color:var(--warning);background:var(--warning-soft)}
 .sp-count{font-size:12px;color:var(--muted);white-space:nowrap}
-.sp-batch{border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px;background:var(--surface-2)}
-.sp-batch:last-child{margin-bottom:0}
-.sp-brow{display:flex;align-items:center;gap:7px}
-.sp-seq{font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--ink-2);flex:none;min-width:30px}
-.sp-in{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:9px;background:var(--surface);color:var(--ink);font-size:15px;min-width:0}
-.sp-in:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-.sp-in.bad{border-color:var(--warning);background:var(--warning-soft)}
-.sp-in.q{flex:1}
-.sp-lots{margin-top:9px;display:flex;flex-direction:column;gap:7px}
-.sp-lot{display:grid;grid-template-columns:1.5fr .7fr .8fr .8fr auto;gap:6px;align-items:center}
-.sp-lot .sp-flag{grid-column:1/-1}
-.sp-in.num{text-align:center;padding:9px 4px}
-.sp-rm{width:38px;height:38px;flex:none;display:grid;place-items:center;border-radius:9px;color:var(--danger);background:var(--surface)}
-.sp-rm .material-symbols-rounded{font-size:19px}
-.sp-rm:hover,.sp-rm:active{background:var(--danger-soft)}
-.sp-rm-sp{width:38px}
+.sp-table td{padding:4px 6px;vertical-align:middle;white-space:normal}
+.sp-table thead th{white-space:nowrap}
+.sp-table tr.sp-brow0>td{border-top:1px solid var(--line)}   /* divider between batches */
+.sp-table tr.sp-lotsub>td{border-top:1px dashed var(--line-2)}   /* divider between lots within one batch */
+.sp-table input{width:100%;min-width:0;padding:7px 7px;border:1px solid transparent;border-radius:7px;background:transparent;font:inherit;font-size:12.6px;color:var(--ink);transition:border-color var(--dur),background var(--dur)}
+.sp-table input::placeholder{color:var(--faint)}
+.sp-table input:hover{border-color:var(--line-2)}
+.sp-table input:focus{outline:none;border-color:var(--accent);background:var(--surface);box-shadow:0 0 0 3px var(--accent-soft)}
+.sp-table input.tnum{text-align:right}
+.sp-table input.bad{border-color:var(--warning);background:var(--warning-soft)}
+.sp-table input.bad:hover{border-color:var(--warning)}
+.sp-kgcell{display:flex;align-items:center;gap:2px}
+.sp-actcell{text-align:center}
+.sp-rm2{width:26px;height:26px;flex:none;display:inline-grid;place-items:center;border-radius:7px;color:var(--danger);background:transparent}
+.sp-rm2 .material-symbols-rounded{font-size:16px}
+.sp-rm2:hover{background:var(--danger-soft)}
 .sp-flag{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;color:var(--warning);background:var(--warning-soft);padding:3px 8px;border-radius:7px;white-space:nowrap}
 .sp-flag .material-symbols-rounded{font-size:14px}
-.sp-flagline{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
-.sp-meta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-top:9px}
-.sp-meta label{display:flex;flex-direction:column;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
-.sp-meta .sp-in.sm{padding:8px 6px;text-align:center;font-size:14px}
-.sp-rem{display:flex;flex-direction:column;gap:3px;margin-top:9px;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 .sp-actions{display:flex;gap:10px;margin-top:4px}
 .sp-actions .btn{width:auto;flex:1}
 

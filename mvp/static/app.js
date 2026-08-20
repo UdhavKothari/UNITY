@@ -1016,9 +1016,9 @@ function openScanCamera(){
   if(!canEdit("op_scan")){ toast("You don't have access to the camera scan"); return; }
   const ex=document.getElementById("scanqrOverlay"); if(ex) ex.remove();
   const o=document.createElement("div"); o.id="scanqrOverlay"; o.className="modal-bg on";
-  o.innerHTML='<div class="modal" style="width:440px"><div class="m-h"><h3><span class="material-symbols-rounded">qr_code_scanner</span>Scan a register</h3>'
+  o.innerHTML='<div class="modal" id="scanqr_modal" style="width:460px"><div class="m-h"><h3><span class="material-symbols-rounded">qr_code_scanner</span>Scan a register</h3>'
     +'<button class="x" onclick="scanQrClose()">&times;</button></div>'
-    +'<div class="m-b" id="scanqr_body" style="max-height:70vh;overflow:auto"><div class="scanqr-wait"><span class="material-symbols-rounded" style="font-size:36px;color:var(--accent)">hourglass_top</span><p>Starting…</p></div></div></div>';
+    +'<div class="m-b" id="scanqr_body" style="max-height:78vh;overflow:auto"><div class="scanqr-wait"><span class="material-symbols-rounded" style="font-size:36px;color:var(--accent)">hourglass_top</span><p>Starting…</p></div></div></div>';
   document.body.appendChild(o);
   scanQrStart();
 }
@@ -1032,6 +1032,7 @@ async function scanQrStart(){
 }
 function scanQrRenderWait(){
   const body = document.getElementById("scanqr_body"); if(!body || !SCANQR) return;
+  const modal = document.getElementById("scanqr_modal"); if(modal) modal.style.width="460px";   // shrink back from the register-sheet width
   let qrSvg = "";
   try{ const qr = qrcode(0, "M"); qr.addData(SCANQR.url); qr.make(); qrSvg = qr.createSvgTag({cellSize:5, margin:2}); }
   catch(e){ qrSvg = ""; }
@@ -1113,47 +1114,55 @@ function scanQrRemoveBatch(mi,bi){ const m=SCANQR.program.machines[mi]; m.batche
 
 function scanQrRenderPreview(){
   const body = document.getElementById("scanqr_body"); if(!body || !SCANQR) return;
+  const modal = document.getElementById("scanqr_modal"); if(modal) modal.style.width="min(95vw,1360px)";   // widen to a real register sheet once there's something to review
   const scrollY = body.scrollTop;
   const P = SCANQR.program; let flags = 0;
   const mcOptions = (sel) => '<option value="">— pick machine —</option>' + (DB.machines||[]).slice()
       .sort((a,b)=>String(a.id).localeCompare(String(b.id),undefined,{numeric:true}))
       .map(m => '<option'+(String(m.id)===String(sel)?' selected':'')+'>'+esc(m.id)+'</option>').join("")
       + (sel && !scanQrMcKnown(sel) ? '<option selected>'+esc(sel)+'</option>' : '');
-  const cards = P.machines.map((mc, mi) => {
+  const sheets = P.machines.map((mc, mi) => {
     const mcBad = !scanQrMcKnown(mc.machine); if(mcBad) flags++;
-    const batches = mc.batches.map((b, bi) => {
+    const rows = mc.batches.map((b, bi) => {
       const qBad = !scanQrQualKnown(b.quality), shBad = !scanQrShadeKnown(b.quality, b.shade);
       if(qBad) flags++; if(shBad) flags++;
-      const lots = b.lots.map((l, li) => { const lBad = !scanQrLotKnown(l.lotNo); if(lBad) flags++;
-        return '<div class="sp-lot">'
-          + '<input class="sp-in lot'+(lBad?' bad':'')+'" value="'+esc(l.lotNo)+'" placeholder="lot no" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'lotNo\',this.value)">'
-          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.pcs)+'" placeholder="pcs" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'pcs\',this.value)">'
-          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.mtr)+'" placeholder="mtr" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'mtr\',this.value)">'
-          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.weight)+'" placeholder="kg" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'weight\',this.value)">'
-          + (b.lots.length>1 ? '<button class="sp-rm" title="remove lot" onclick="scanQrRemoveLot('+mi+','+bi+','+li+')"><span class="material-symbols-rounded">delete</span></button>' : '<span class="sp-rm-sp"></span>')
-          + (lBad ? '<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>not in system</span>' : '') + '</div>'; }).join("");
-      return '<div class="sp-batch">'
-        + '<div class="sp-brow"><span class="sp-seq">#'+esc(b.srNo||(bi+1))+'</span>'
-          + '<input class="sp-in q'+(qBad?' bad':'')+'" value="'+esc(b.quality)+'" placeholder="quality" onchange="scanQrSet('+mi+','+bi+',\'quality\',this.value)">'
-          + '<input class="sp-in q'+(shBad?' bad':'')+'" value="'+esc(b.shade)+'" placeholder="shade" onchange="scanQrSet('+mi+','+bi+',\'shade\',this.value)">'
-          + '<button class="sp-rm" title="remove batch" onclick="scanQrRemoveBatch('+mi+','+bi+')"><span class="material-symbols-rounded">delete</span></button></div>'
-        + ((qBad||shBad) ? '<div class="sp-flagline">'+(qBad?'<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>quality new</span>':'')+(shBad?'<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>shade new</span>':'')+'</div>' : '')
-        + '<div class="sp-lots">'+lots+'</div>'
-        + '<div class="sp-meta">'
-          + '<label>Pg<input class="sp-in sm" value="'+esc(b.pageNo)+'" onchange="scanQrSet('+mi+','+bi+',\'pageNo\',this.value)"></label>'
-          + '<label>In<input class="sp-in sm" value="'+esc(b.inTime)+'" onchange="scanQrSet('+mi+','+bi+',\'inTime\',this.value)"></label>'
-          + '<label>Out<input class="sp-in sm" value="'+esc(b.outTime)+'" onchange="scanQrSet('+mi+','+bi+',\'outTime\',this.value)"></label>'
-          + '<label>pH<input class="sp-in sm" value="'+esc(b.ph)+'" onchange="scanQrSet('+mi+','+bi+',\'ph\',this.value)"></label></div>'
-        + '<label class="sp-rem">Remarks<input class="sp-in" value="'+esc(b.remarks)+'" onchange="scanQrSet('+mi+','+bi+',\'remarks\',this.value)"></label></div>'; }).join("");
-    return '<div class="card sp-mc"><div class="sp-mch"><select class="sp-in mc'+(mcBad?' bad':'')+'" onchange="scanQrSetMachine('+mi+',this.value)">'+mcOptions(mc.machine)+'</select>'
-      + '<span class="sp-count">'+mc.batches.length+' batch'+(mc.batches.length!=1?'es':'')+'</span></div>'
-      + (mcBad ? '<div class="sp-flagline"><span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>machine not recognised — pick one</span></div>' : '')
-      + batches + '</div>'; }).join("");
+      const n = b.lots.length;
+      return b.lots.map((l, li) => {
+        const lBad = !scanQrLotKnown(l.lotNo); if(lBad) flags++;
+        const lotCells =
+            '<td><input class="'+(lBad?'bad':'')+'" title="'+(lBad?'Lot not in system':'')+'" value="'+esc(l.lotNo)+'" placeholder="lot no" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'lotNo\',this.value)"></td>'
+          + '<td><input class="tnum" inputmode="numeric" value="'+esc(l.pcs)+'" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'pcs\',this.value)"></td>'
+          + '<td><input class="tnum" inputmode="numeric" value="'+esc(l.mtr)+'" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'mtr\',this.value)"></td>'
+          + '<td><span class="sp-kgcell"><input class="tnum" inputmode="numeric" value="'+esc(l.weight)+'" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'weight\',this.value)">'
+              + (n>1 ? '<button class="sp-rm2" title="remove lot" onclick="scanQrRemoveLot('+mi+','+bi+','+li+')"><span class="material-symbols-rounded">close</span></button>' : '')
+              + '</span></td>';
+        if(li>0) return '<tr class="sp-lotsub">'+lotCells+'</tr>';
+        return '<tr class="sp-brow0">'
+          + '<td class="tnum" rowspan="'+n+'">#'+esc(b.srNo||(bi+1))+'</td>'
+          + lotCells
+          + '<td rowspan="'+n+'"><input class="'+(qBad?'bad':'')+'" title="'+(qBad?'Quality not in system':'')+'" value="'+esc(b.quality)+'" placeholder="quality" onchange="scanQrSet('+mi+','+bi+',\'quality\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><input class="'+(shBad?'bad':'')+'" title="'+(shBad?'Shade not in system':'')+'" value="'+esc(b.shade)+'" placeholder="shade" onchange="scanQrSet('+mi+','+bi+',\'shade\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.pageNo)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'pageNo\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.inTime)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'inTime\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.outTime)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'outTime\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.ph)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'ph\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><input value="'+esc(b.remarks)+'" placeholder="remarks" onchange="scanQrSet('+mi+','+bi+',\'remarks\',this.value)"></td>'
+          + '<td class="sp-actcell" rowspan="'+n+'"><button class="sp-rm2" title="remove batch" onclick="scanQrRemoveBatch('+mi+','+bi+')"><span class="material-symbols-rounded">delete</span></button></td>'
+          + '</tr>';
+      }).join("");
+    }).join("");
+    return '<div class="sp-mcsheet">'
+      + '<div class="sp-mch2"><select class="'+(mcBad?'bad':'')+'" onchange="scanQrSetMachine('+mi+',this.value)">'+mcOptions(mc.machine)+'</select>'
+        + '<span class="sp-count">'+mc.batches.length+' batch'+(mc.batches.length!=1?'es':'')+'</span>'
+        + (mcBad ? '<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>machine not recognised — pick one</span>' : '')
+        + '</div>'
+      + '<div class="tbl-wrap"><table class="sp-table"><thead><tr><th>Seq</th><th>Lot no.</th><th>Pcs</th><th>Mtr</th><th>Kg</th><th>Quality</th><th>Shade</th><th>Pg no.</th><th>In</th><th>Out</th><th>PH</th><th>Remarks</th><th></th></tr></thead>'
+        + '<tbody>'+rows+'</tbody></table></div></div>'; }).join("");
   const total = P.machines.reduce((a,m)=>a+m.batches.length,0);
   const head = '<div class="card sp-top"><div><b>'+total+' batch'+(total!=1?'es':'')+'</b> · '+P.machines.length+' machine'+(P.machines.length!=1?'s':'')+'</div>'
     + (flags ? '<div class="sp-flagsum"><span class="material-symbols-rounded">priority_high</span>'+flags+' to review</div>' : '<div class="sp-okline"><span class="material-symbols-rounded">check_circle</span>all recognised</div>')+'</div>';
   const errline = (SCANQR.errors&&SCANQR.errors.length) ? '<div class="scan-err"><span class="material-symbols-rounded">warning</span><span>'+SCANQR.errors.map(e=>'Spread '+e.spread+' couldn\'t be read — recapture it on the phone and send again.').join('<br>')+'</span></div>' : '';
-  body.innerHTML = errline + head + cards
+  body.innerHTML = errline + head + sheets
     + '<div class="sp-actions" style="margin-top:12px"><button class="btn ghost" onclick="scanQrClose()">Close</button>'
     + '<button class="btn" '+(SCANQR.applying?'disabled':'')+' onclick="scanQrApply()"><span class="material-symbols-rounded">check</span>'+(SCANQR.applying?'Punching…':('Confirm & punch '+total))+'</button></div>';
   body.scrollTop = scrollY;
