@@ -63,12 +63,11 @@ function statusPill(b){
 
 /* ---------------- shell ---------------- */
 const TABS = [["/", "grid_view", "Floor", "op_floor"], ["/plan", "calendar_view_week", "Plan", "op_massplan"],
-              ["/scan", "qr_code_scanner", "Scan", "op_scan"],
               ["/alerts", "notifications", "Alerts", null], ["/me", "person", "Me", null]];
 function tabAllowed(t){ return !t[3] || can(t[3]); }               // null perm = always visible (Alerts, Me)
 function allowedTabs(){ return TABS.filter(tabAllowed); }
 function firstTab(){ const t = allowedTabs()[0]; return t ? t[0] : "/me"; }
-const NEEDS = h => (h==="/"||h===""||h.startsWith("/machine/")) ? "op_floor" : (h==="/plan" ? "op_massplan" : (h==="/scan" ? "op_scan" : null));
+const NEEDS = h => (h==="/"||h===""||h.startsWith("/machine/")) ? "op_floor" : (h==="/plan" ? "op_massplan" : null);
 function shell(opts){
   const { title, body, tab, back, action } = opts;
   let ab = '<header class="appbar">';
@@ -330,173 +329,6 @@ async function doLogin(e){
 }
 async function signOut(){ await apiPost({op:"logout"}).catch(()=>{}); USER = null; DB = null; renderLogin(); }
 
-/* ================= Program scan: photograph the register -> review -> punch batches ================= */
-let SCAN = {pairs:[{imgs:[null,null]}], reading:false, progress:{done:0,total:0}, program:null, errors:[], committing:false, allImages:[]};
-function scanNewPair(){ return {imgs:[null,null]}; }
-function scanFreshState(){ return {pairs:[scanNewPair()], reading:false, progress:{done:0,total:0}, program:null, errors:[], committing:false, allImages:[]}; }
-function scanReset(){ SCAN = scanFreshState(); renderScan(); }
-function scanBackToCapture(){ SCAN.program = null; renderScan(); }         // keep the photos; go tweak/re-read
-function scanAddPair(){ SCAN.pairs.push(scanNewPair()); renderScan(); }
-function scanRemovePair(pi){ SCAN.pairs.splice(pi,1); if(!SCAN.pairs.length) SCAN.pairs.push(scanNewPair()); renderScan(); }
-function scanValidPairs(){ return SCAN.pairs.filter(pr => pr.imgs[0]); }
-function scanPick(pi,si){ const el = document.getElementById("scan_in_"+pi+"_"+si); if(el) el.click(); }
-function scanDownscale(file, cb){
-  const rd = new FileReader();
-  rd.onload = () => { const img = new Image();
-    img.onload = () => { const max = 1600; let w = img.width, h = img.height;
-      if(Math.max(w,h) > max){ const s = max/Math.max(w,h); w = Math.round(w*s); h = Math.round(h*s); }
-      const c = document.createElement("canvas"); c.width = w; c.height = h;
-      c.getContext("2d").drawImage(img, 0, 0, w, h);
-      try{ cb(c.toDataURL("image/jpeg", 0.72)); }catch(e){ cb(null); } };
-    img.onerror = () => cb(null); img.src = rd.result; };
-  rd.onerror = () => cb(null); rd.readAsDataURL(file);
-}
-function scanFile(pi, si, input){
-  const f = input.files && input.files[0]; if(!f){ return; }
-  scanDownscale(f, url => { if(url){ SCAN.pairs[pi].imgs[si] = url; SCAN.errors = []; renderScan(); } else toast("Couldn't read that photo"); });
-  input.value = "";
-}
-function renderScan(){
-  if(!can("op_scan")) return renderNoAccess();
-  if(SCAN.program) return renderScanPreview();
-  if(SCAN.reading) return renderScanReading();
-  const slot = (pi, si, label) => { const img = SCAN.pairs[pi].imgs[si];
-    return '<div class="scan-slot'+(img?' has':'')+'"><div class="scan-slot-h">'+label+(si===0?' <b class="req">req</b>':'')+'</div>'
-      + (img ? '<img class="scan-thumb" src="'+img+'" alt=""><button class="btn ghost sm scan-retake" onclick="scanPick('+pi+','+si+')">'+svg("photo_camera")+'Retake</button>'
-             : '<button class="scan-drop" onclick="scanPick('+pi+','+si+')">'+svg("photo_camera")+'<span>Photo</span></button>')
-      + '<input type="file" accept="image/*" capture="environment" id="scan_in_'+pi+'_'+si+'" style="display:none" onchange="scanFile('+pi+','+si+',this)"></div>'; };
-  const pairCard = (pr, pi) => '<div class="card sp-pair"><div class="sp-pair-h"><b>Spread '+(pi+1)+'</b>'
-      + (SCAN.pairs.length>1 ? '<button class="sp-rm" title="remove spread" onclick="scanRemovePair('+pi+')">'+svg("delete")+'</button>' : '')+'</div>'
-      + '<div class="scan-slots">'+slot(pi,0,"Left page")+slot(pi,1,"Right page")+'</div></div>';
-  const valid = scanValidPairs().length;
-  let body = '<div class="scan-hint">'+svg("qr_code_scanner")+'<span>Photograph each 2-page spread — <b>left page</b> then <b>right page</b>. Add as many spreads as you like; they\'re read one after another, then reviewed together. Keep pages flat and fill the frame.</span></div>'
-    + SCAN.pairs.map(pairCard).join("")
-    + '<button class="btn ghost scan-addpair" onclick="scanAddPair()">'+svg("add")+'Add another spread</button>';
-  if(SCAN.errors && SCAN.errors.length) body += '<div class="scan-err">'+svg("warning")+'<span>'+SCAN.errors.map(e=>(e.spread?'Spread '+e.spread+': ':'')+esc(e.error)).join('<br>')+'</span></div>';
-  body += '<button class="btn primary lg scan-go" '+(valid?'':'disabled')+' onclick="scanDoReadAll()">'+svg("bolt")+'Read '+(valid||'')+' spread'+(valid!=1?'s':'')+'</button>';
-  shell({ title:"Scan program", body, tab:"/scan" });
-}
-function renderScanReading(){
-  const p = SCAN.progress, pct = p.total ? Math.round(p.done/p.total*100) : 0, cur = Math.min(p.done+1, p.total);
-  const body = '<div class="card scan-reading-card">'+svg("hourglass_top")
-    + '<div class="srr-t"><b>Reading spread '+cur+' of '+p.total+'…</b><span>The on-site reader is transcribing each spread — about a minute each. Keep the app open.</span></div>'
-    + '<div class="srr-bar"><div class="srr-fill" style="width:'+pct+'%"></div></div>'
-    + '<div class="srr-count tnum">'+p.done+' / '+p.total+' done'+((SCAN.errors&&SCAN.errors.length)?(' · '+SCAN.errors.length+' failed'):'')+'</div></div>';
-  shell({ title:"Reading…", body, tab:"/scan" });
-}
-async function scanDoReadAll(){
-  const valid = scanValidPairs();
-  if(!valid.length){ toast("Add at least the left page of one spread"); return; }
-  SCAN.reading = true; SCAN.errors = []; SCAN.progress = {done:0, total:valid.length};
-  const machines = [], allImages = [];
-  renderScan();
-  for(let i=0;i<valid.length;i++){
-    SCAN.progress.done = i; renderScan();
-    await new Promise(r=>setTimeout(r, 30));                 // let the progress bar paint before the long call
-    const imgs = valid[i].imgs.filter(Boolean);
-    let res; try{ res = await apiPost({op:"scanRead", images: imgs}); }
-    catch(e){ res = {ok:false, error:"Couldn't reach the server."}; }
-    if(res && res.ok!==false && !res.error){
-      scanNormalize(res.program).machines.forEach(m => machines.push(m));
-      imgs.forEach(im => allImages.push(im));
-    } else { SCAN.errors.push({spread:i+1, error:(res&&res.error)||"read failed"}); }
-    SCAN.progress.done = i+1; renderScan();
-  }
-  SCAN.reading = false; SCAN.allImages = allImages;
-  if(!machines.length){ SCAN.program = null; if(!SCAN.errors.length) SCAN.errors.push({spread:0, error:"No program rows were found. Try clearer, straighter photos."}); return renderScan(); }
-  SCAN.program = {machines}; renderScan();
-}
-function scanMatchMachine(name){ const raw = String(name==null?"":name).trim(); if(!raw) return "";
-  const norm = s => String(s==null?"":s).replace(/\W/g,"").toUpperCase();
-  const hit = (DB.machines||[]).find(m => norm(m.id)===norm(raw)); return hit ? hit.id : raw; }
-function scanNormalize(p){ const out = {machines:[]};
-  (((p&&p.machines))||[]).forEach(mc => {
-    const machine = scanMatchMachine(mc.machine);
-    const batches = ((mc.batches)||[]).map(b => ({
-      srNo: b.srNo!=null?b.srNo:"",
-      lots: ((b.lots)||[]).map(l => ({ lotNo:String(l.lotNo!=null?l.lotNo:(l.lotId!=null?l.lotId:"")).trim(),
-        pcs:l.pcs!=null?l.pcs:"", mtr:l.mtr!=null?l.mtr:"", weight:l.weight!=null?l.weight:"" })).filter(l=>l.lotNo||l.pcs||l.mtr||l.weight),
-      quality:String(b.quality!=null?b.quality:"").trim(), shade:String(b.shade!=null?b.shade:"").trim(),
-      pageNo:String(b.pageNo!=null?b.pageNo:"").trim(), inTime:String(b.inTime!=null?b.inTime:"").trim(),
-      outTime:String(b.outTime!=null?b.outTime:"").trim(), ph:String(b.ph!=null?b.ph:"").trim(),
-      remarks:String(b.remarks!=null?b.remarks:"").trim() })).filter(b => b.lots.length);
-    if(batches.length) out.machines.push({machine, batches}); });
-  return out; }
-function scanLotKnown(id){ return !!id && (DB.lots||[]).some(l => String(l.id)===String(id)); }
-function scanQualKnown(name){ const n=String(name||"").trim().toLowerCase(); return !n || (DB.qualities||[]).some(q => String(q.name||"").toLowerCase()===n); }
-function scanShadeKnown(q,sh){ const s=String(sh||"").trim().toLowerCase(); if(!s) return true;
-  return (DB.shadeRecipes||[]).some(r => String(r.shade||"").toLowerCase()===s && (!q || String(r.quality||"").toLowerCase()===String(q||"").toLowerCase())); }
-function scanMcKnown(id){ return (DB.machines||[]).some(m => String(m.id)===String(id)); }
-function scanRerender(){ const y=window.scrollY||window.pageYOffset||0; renderScanPreview(); window.scrollTo(0,y); }
-function scanSet(mi,bi,f,v){ SCAN.program.machines[mi].batches[bi][f] = v; scanRerender(); }
-function scanSetLot(mi,bi,li,f,v){ SCAN.program.machines[mi].batches[bi].lots[li][f] = v; scanRerender(); }
-function scanSetMachine(mi,v){ SCAN.program.machines[mi].machine = v; scanRerender(); }
-function scanRemoveLot(mi,bi,li){ const b = SCAN.program.machines[mi].batches[bi]; b.lots.splice(li,1); if(!b.lots.length) scanRemoveBatch(mi,bi); else scanRerender(); }
-function scanRemoveBatch(mi,bi){ const m = SCAN.program.machines[mi]; m.batches.splice(bi,1); if(!m.batches.length) SCAN.program.machines.splice(mi,1); if(!SCAN.program.machines.length){ scanReset(); return; } scanRerender(); }
-function renderScanPreview(){
-  const P = SCAN.program; let flags = 0;
-  const mcOptions = (sel) => '<option value="">— pick machine —</option>' + (DB.machines||[]).slice()
-      .sort((a,b)=>String(a.id).localeCompare(String(b.id),undefined,{numeric:true}))
-      .map(m => '<option'+(String(m.id)===String(sel)?' selected':'')+'>'+esc(m.id)+'</option>').join("")
-      + (sel && !scanMcKnown(sel) ? '<option selected>'+esc(sel)+'</option>' : '');
-  const cards = P.machines.map((mc, mi) => {
-    const mcBad = !scanMcKnown(mc.machine); if(mcBad) flags++;
-    const batches = mc.batches.map((b, bi) => {
-      const qBad = !scanQualKnown(b.quality), shBad = !scanShadeKnown(b.quality, b.shade);
-      if(qBad) flags++; if(shBad) flags++;
-      const lots = b.lots.map((l, li) => { const lBad = !scanLotKnown(l.lotNo); if(lBad) flags++;
-        return '<div class="sp-lot">'
-          + '<input class="sp-in lot'+(lBad?' bad':'')+'" value="'+esc(l.lotNo)+'" placeholder="lot no" onchange="scanSetLot('+mi+','+bi+','+li+',&#39;lotNo&#39;,this.value)">'
-          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.pcs)+'" placeholder="pcs" onchange="scanSetLot('+mi+','+bi+','+li+',&#39;pcs&#39;,this.value)">'
-          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.mtr)+'" placeholder="mtr" onchange="scanSetLot('+mi+','+bi+','+li+',&#39;mtr&#39;,this.value)">'
-          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.weight)+'" placeholder="kg" onchange="scanSetLot('+mi+','+bi+','+li+',&#39;weight&#39;,this.value)">'
-          + (b.lots.length>1 ? '<button class="sp-rm" title="remove lot" onclick="scanRemoveLot('+mi+','+bi+','+li+')">'+svg("delete")+'</button>' : '<span class="sp-rm-sp"></span>')
-          + (lBad ? '<span class="sp-flag">'+svg("priority_high")+'not in system</span>' : '') + '</div>'; }).join("");
-      return '<div class="sp-batch">'
-        + '<div class="sp-brow"><span class="sp-seq">#'+esc(b.srNo||(bi+1))+'</span>'
-          + '<input class="sp-in q'+(qBad?' bad':'')+'" value="'+esc(b.quality)+'" placeholder="quality" onchange="scanSet('+mi+','+bi+',&#39;quality&#39;,this.value)">'
-          + '<input class="sp-in q'+(shBad?' bad':'')+'" value="'+esc(b.shade)+'" placeholder="shade" onchange="scanSet('+mi+','+bi+',&#39;shade&#39;,this.value)">'
-          + '<button class="sp-rm" title="remove batch" onclick="scanRemoveBatch('+mi+','+bi+')">'+svg("delete")+'</button></div>'
-        + ((qBad||shBad) ? '<div class="sp-flagline">'+(qBad?'<span class="sp-flag">'+svg("priority_high")+'quality new</span>':'')+(shBad?'<span class="sp-flag">'+svg("priority_high")+'shade new</span>':'')+'</div>' : '')
-        + '<div class="sp-lots">'+lots+'</div>'
-        + '<div class="sp-meta">'
-          + '<label>Pg<input class="sp-in sm" value="'+esc(b.pageNo)+'" onchange="scanSet('+mi+','+bi+',&#39;pageNo&#39;,this.value)"></label>'
-          + '<label>In<input class="sp-in sm" value="'+esc(b.inTime)+'" onchange="scanSet('+mi+','+bi+',&#39;inTime&#39;,this.value)"></label>'
-          + '<label>Out<input class="sp-in sm" value="'+esc(b.outTime)+'" onchange="scanSet('+mi+','+bi+',&#39;outTime&#39;,this.value)"></label>'
-          + '<label>pH<input class="sp-in sm" value="'+esc(b.ph)+'" onchange="scanSet('+mi+','+bi+',&#39;ph&#39;,this.value)"></label></div>'
-        + '<label class="sp-rem">Remarks<input class="sp-in" value="'+esc(b.remarks)+'" onchange="scanSet('+mi+','+bi+',&#39;remarks&#39;,this.value)"></label></div>'; }).join("");
-    return '<div class="card sp-mc"><div class="sp-mch"><select class="sp-in mc'+(mcBad?' bad':'')+'" onchange="scanSetMachine('+mi+',this.value)">'+mcOptions(mc.machine)+'</select>'
-      + '<span class="sp-count">'+mc.batches.length+' batch'+(mc.batches.length!=1?'es':'')+'</span></div>'
-      + (mcBad ? '<div class="sp-flagline"><span class="sp-flag">'+svg("priority_high")+'machine not recognised — pick one</span></div>' : '')
-      + batches + '</div>'; }).join("");
-  const total = P.machines.reduce((a,m)=>a+m.batches.length,0);
-  const head = '<div class="card sp-top"><div><b>'+total+' batch'+(total!=1?'es':'')+'</b> · '+P.machines.length+' machine'+(P.machines.length!=1?'s':'')
-    + (SCAN.secs?' <span class="muted">· read in '+SCAN.secs+'s</span>':'')+'</div>'
-    + (flags ? '<div class="sp-flagsum">'+svg("priority_high")+flags+' to review</div>' : '<div class="sp-okline">'+svg("check_circle")+'all recognised</div>')+'</div>';
-  const foot = '<div class="sp-actions"><button class="btn ghost" onclick="scanReset()">'+svg("arrow_back")+'Rescan</button>'
-    + '<button class="btn primary" '+(SCAN.committing?'disabled':'')+' onclick="scanCommit()">'+svg("check")+(SCAN.committing?'Punching…':('Confirm &amp; punch '+total))+'</button></div>';
-  const errline = (SCAN.errors&&SCAN.errors.length) ? '<div class="scan-err" style="margin:0 0 12px">'+svg("warning")+'<span>'+SCAN.errors.map(e=>'Spread '+e.spread+' couldn\'t be read — recapture it and scan again.').join('<br>')+'</span></div>' : '';
-  const action = '<button class="ab-btn" onclick="scanBackToCapture()" title="back to photos">'+svg("photo_camera")+'</button>';
-  shell({ title:"Review scan", tab:"/scan", action, body: errline + head + cards + foot });
-}
-async function scanCommit(){
-  if(SCAN.committing) return;
-  const bad = SCAN.program.machines.filter(m=>!scanMcKnown(m.machine));
-  if(bad.length){ toast("Pick a valid machine for each program first"); return; }
-  SCAN.committing = true; renderScanPreview();
-  let res; try{ res = await apiPost({op:"scanCommit", program: SCAN.program, images: SCAN.allImages}); }
-  catch(e){ res = {error:"Couldn't reach the server."}; }
-  SCAN.committing = false;
-  if(!res || res.error){ toast((res&&res.error)||"Punch failed"); return renderScanPreview(); }
-  const n = res.created||0;
-  SCAN = scanFreshState();
-  const body = '<div class="card scan-done">'+svg("check_circle")+'<b>'+n+' batch'+(n!=1?'es':'')+' added</b>'
-    + '<span>They\'re in the plan now. The page photos were saved for the record.</span>'
-    + '<div class="sp-actions"><button class="btn ghost" onclick="location.hash=\'/plan\'">'+svg("calendar_view_week")+'View plan</button>'
-    + '<button class="btn primary" onclick="renderScan()">'+svg("qr_code_scanner")+'Scan another</button></div></div>';
-  shell({ title:"Punched", body, tab:"/scan" });
-}
-
 /* ---------------- boot ---------------- */
 async function loadDB(){
   try{ const d = await apiGet("/api/db"); if(d && d.error) throw new Error(d.error); if(d && d.__auth===false){ return renderLogin(); } DB = d; OFFLINE = false; }
@@ -515,7 +347,6 @@ function route(){
   }
   if(h.startsWith("/machine/")) return renderMachine(decodeURIComponent(h.split("/")[2]||""));
   if(h==="/plan") return renderPlan();
-  if(h==="/scan") return renderScan();
   if(h==="/alerts") return renderAlerts();
   if(h==="/me") return renderMe();
   return renderFloor();

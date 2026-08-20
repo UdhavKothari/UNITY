@@ -355,3 +355,78 @@ The factory PC runs a **stale copy** unless you do all of: **(1)** `git pull` in
 - Lazy-load `lots` + `shadeRecipes` off `/api/db` (Phase 2 of the scale work).
 - "Undo last merge" safety net for the quality merge tool.
 - Push of the two local commits (`a48a802` Sales console + the prior challan-scheduler commit) — the sandbox can't reach GitHub, so **the owner pushes from their own terminal**.
+
+## Update — 20 Aug 2026 (perf: in-memory DB cache + batched PLC writes; camera scan rebuilt on QR + Gemini)
+
+### 28. Performance: `load_db()` no longer re-reads SQLite on every request
+Every GET/POST — including trivial ones like `changePassword`/`savePrefs`/`batchStatus` — was calling
+`load_db()`, which did a full read of every SQLite table PLUS re-ran the full `_migrate()` and
+Administrator-role self-heal scans, all under the single global request lock (`LOCK`), which
+serializes every request in the app. Fine at demo scale; a real cost heading toward the ~150-
+concurrent-user target, especially since the client polls `/api/db` every 4s per user. Now the
+deserialized `db` dict is cached in-process after first load (`_DB_CACHE` in `server.py`) and kept
+in sync by `save_db()`; migrate/self-heal run once per process lifetime, not on every read. Safe
+because this process is the sole writer of `data.sqlite`. Verified: writes still persist correctly
+across a restart, the `/api/db` ETag 304 fast-path still works.
+
+### 29. Performance: the PLC poller no longer reloads/rewrites the whole DB per machine
+`_plc_cycle()` (the 10s jet-temperature poll) used to do a separate `load_db()`+`save_db()` **per
+machine** inside its loop — N jets with PLC tables meant N full lock/reload/rewrite cycles every
+10 seconds, competing with live user requests. MySQL reads still happen outside the lock (unchanged),
+but all machines' readings are now applied in **one** load+save per cycle. Verified with a 3-machine
+mock cycle: `save_db()` called once (was 3), all three machines' `plcLive` updated correctly.
+
+### 30. Camera scan rebuilt: QR handoff from desktop + Gemini API (replaces the old phone-login flow)
+The local on-site vision model plan (Ollama on an iMac) didn't work out in practice, so the reader
+is now the **Gemini API** — the one deliberate outbound-internet call this app makes; everything
+else stays LAN-only. The whole capture/review workflow also moved from "log into the phone app and
+do everything there" to a **QR handoff**:
+
+- **Operations → Batch planner** gained a **camera** button (`mp_camera_btn` in `index.html`,
+  gated on `canEdit("op_scan")`). Clicking it calls `scanSessionStart` and shows a QR code (rendered
+  client-side with the vendored `qrcode-generator` library, `static/vendor/qrcode.js` — MIT, no
+  server dependency, matches how `xlsx.full.min.js` is vendored) encoding
+  `location.origin + "/scan_upload.html?t=<token>"`.
+- **`static/scan_upload.html`** — new, self-contained, **no login**. The token in the URL is a
+  short-lived (20 min) bearer credential for that one session only. Same left-page/right-page
+  "spread" capture UX as the old phone flow (downscale to 1600px / JPEG q0.72 client-side, same as
+  before), but sends photos via three new **token-authenticated** ops
+  (`scanUploadPair`/`scanTokenInfo`/`scanSessionFinish` — validated by token, not by cookie/login,
+  special-cased in `do_POST` ahead of the normal auth block) instead of doing the read+review+commit
+  on the phone itself.
+- The desktop polls `scanSessionStatus` every 3s while the QR modal is open; as soon as the phone
+  signals it's done (or the link expires with unread photos on it), the desktop **automatically**
+  calls `scanSessionRead` (Gemini, run outside the global lock — same reasoning the old `scanRead`
+  had, since a Gemini call can take tens of seconds) and switches into the review screen — the user
+  never has to click "check for photos."
+- **Review/edit/apply now lives on desktop** (`app.js`: `scanQr*` functions), ported near-verbatim
+  from the old phone-side `m.js` reviewer (same amber-flag-unknown-lot/quality/shade/machine logic,
+  same field editing) — just retargeted from `shell()`-per-page rendering to a `.modal-bg` (the same
+  modal pattern as the PLC-live and change-password modals). `scanSessionApply` (replaces the old
+  `scanCommit`) creates the batches and archives the session's photos into `program_scans/` exactly
+  as before; `programScans`/`scansList`/`scanDelete`/Admin's "Program scans" panel are unchanged.
+- **Ownership is enforced server-side**: every `scanSession*` desktop op checks
+  `session.createdBy == caller.username` — only the person who opened the QR code can see or apply
+  what lands on it, even though the phone that uploaded needed no login at all.
+- New `scanSessions` table (short-lived; stripped from `/api/db` like `activityLog`/`challans` — it
+  carries bearer tokens) + `scan_sessions/<id>/` working-photo directory, garbage-collected
+  (`_scan_sessions_gc`) on each new session start: sessions past their 20-minute TTL flip to
+  `expired`, and applied/cancelled/expired sessions older than an hour are dropped along with their
+  files.
+- **Removed entirely** (per owner's call — QR replaces it, not adds to it): the phone `/m` app's
+  **Scan** tab and all `scan*`/`sp-*` functions in `m.js`/`m.css` (`op_scan`'s old phone route),
+  `_ollama_extract`/`_vision_cfg` in `server.py`, and the old `scanRead`/`scanCommit` ops.
+  `secrets.local.json`'s `vision` block is replaced by a `gemini` block (`apiKey`, `model` — default
+  `gemini-2.0-flash`, `enabled`, `timeoutSecs`). `SCAN_SETUP.md` rewritten for the new flow.
+- The `.scan-*`/`.sp-*` CSS moved from `m.css` (mobile-only) into `style.css` (shared) since both
+  `scan_upload.html` and the desktop review modal use it now; icons switched from `m.js`'s inline-SVG
+  `svg()` helper to the standard `.material-symbols-rounded` ligature spans, per the design skill
+  ("one icon family, everywhere").
+- Verified end-to-end with a scripted smoke test against a temp copy of the server (monkeypatched
+  Gemini call): session start → token upload (including a left-page-only spread) → status →
+  finish → read (twice — second call correctly finds nothing unread) → apply → batch created,
+  session files cleaned up, photos archived into `programScans`, and `scanSessions`/tokens
+  confirmed stripped from the `/api/db` payload.
+
+⚠ Not done / left for the owner: Gemini API pricing and rate limits weren't sized against real
+scan volume — worth watching usage on https://aistudio.google.com/ once this is in daily use.

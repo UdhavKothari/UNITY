@@ -297,7 +297,7 @@ const SCHEMAS={
 };
 /* every page a role can be granted (keys must match server ALL_PAGES) */
 const PAGES=[
-  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Batch planner","Operations"],["op_scan","Program scan (photo)","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],["op_order","Sales — order entry","Sales"],["op_orderstatus","Sales — order status","Sales"],
+  ["op_floor","Shop floor","Operations"],["op_schedule","Schedule","Operations"],["op_batch","Batch maker","Operations"],["op_storage","Storage","Operations"],["op_massplan","Batch planner","Operations"],["op_scan","Program scan (camera)","Operations"],["urgent_flag","Flag urgent (Master)","Operations"],["op_order","Sales — order entry","Sales"],["op_orderstatus","Sales — order status","Sales"],
   ["dashboard","Dashboard","Admin"],["machines","Machines","Admin"],["qualities","Qualities","Admin"],["op_workflows","Workflows","Admin"],
   ["shadeRecipes","Shade recipes","Admin"],["recipes","Dye recipes","Admin"],
   ["batches","Batch maker","Admin"],["lots","Lot master","Admin"],["weavers","Weavers","Admin"],
@@ -1616,7 +1616,7 @@ function renderSettings(c){
      +'<button class="btn '+((s.plcEnabled!==false)?'danger':'')+'" onclick="togglePlc()"><span class="material-symbols-rounded">'+((s.plcEnabled!==false)?'stop_circle':'play_arrow')+'</span>'+((s.plcEnabled!==false)?'Stop PLC import':'Start PLC import')+'</button>'
      +'</div></div>'):'')
    +(canEdit("settings")?('<div class="card" style="margin-top:16px"><div class="card-b">'
-     +'<div style="display:flex;align-items:center;gap:8px;margin:0 0 8px"><h2 style="margin:0;font-size:15px">Program scans (photo entry)</h2><span style="flex:1"></span><button class="btn ghost sm" onclick="loadScans()"><span class="material-symbols-rounded">refresh</span>Refresh</button></div>'
+     +'<div style="display:flex;align-items:center;gap:8px;margin:0 0 8px"><h2 style="margin:0;font-size:15px">Program scans (camera + QR)</h2><span style="flex:1"></span><button class="btn ghost sm" onclick="loadScans()"><span class="material-symbols-rounded">refresh</span>Refresh</button></div>'
      +'<p class="small muted" id="scanVis" style="margin:0 0 12px">Loading…</p>'
      +'<div id="scanMgr"><p class="small muted">Loading…</p></div>'
      +'</div></div>'):'')
@@ -1639,10 +1639,10 @@ async function loadScans(){
   let d; try{ const r=await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({op:"scansList"}),credentials:"same-origin"}); d=await r.json(); }
   catch(e){ box.innerHTML='<p class="small muted">Couldn\'t load scans.</p>'; return; }
   if(d&&d.error){ box.innerHTML='<p class="small muted">'+esc(d.error)+'</p>'; return; }
-  const v=d.vision||{};
+  const v=d.gemini||{};
   if(vis) vis.innerHTML = v.enabled
-    ? 'On-site reader: <b>'+esc(v.model||'')+'</b> at <span class="tnum">'+esc(v.endpoint||'')+'</span>. Operators granted the “Program scan” page can photograph the register on their phone; photos are read here (never sent off-site) and stored below.'
-    : '<span style="color:var(--warning)">The scan reader isn\'t configured yet.</span> Point <span class="tnum">vision.endpoint</span> in secrets.local.json at a LAN vision server (see SCAN_SETUP.md).';
+    ? 'Reader: <b>Gemini API</b> (<span class="tnum">'+esc(v.model||'')+'</span>). The Batch planner\'s camera button shows a QR code — anyone who scans it can photograph a register from their phone (no login needed there) and it appears back here for the person who opened it to review and punch.'
+    : '<span style="color:var(--warning)">The scan reader isn\'t configured yet.</span> Set <span class="tnum">gemini.apiKey</span> in secrets.local.json (see SCAN_SETUP.md).';
   const rows=(d.rows||[]).slice().reverse();
   if(!rows.length){ box.innerHTML='<p class="small muted">No scans stored yet.</p>'; return; }
   box.innerHTML='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn danger sm" onclick="deleteAllScans('+rows.length+')"><span class="material-symbols-rounded">delete_sweep</span>Delete all ('+rows.length+')</button></div>'

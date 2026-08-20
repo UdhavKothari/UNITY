@@ -13,7 +13,7 @@ legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
 import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections
-import base64, urllib.request, urllib.error   # base64: decode uploaded scan photos · urllib: reach the LAN vision model (no external internet)
+import base64, urllib.request, urllib.error   # base64: decode uploaded scan photos · urllib: the Gemini API call (the one deliberate outbound-internet call in this app)
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -341,6 +341,8 @@ def _sanitized(db):
     d["activityLog"] = []                 # fetched on demand; keeps every page load small
     d["challans"] = []                    # ditto — challans accumulate; loaded only on the Challans page
     d["programScans"] = []                # loaded on demand via 'scansList' (Admin) — keeps /api/db lean
+    d["scanSessions"] = []                 # carries bearer tokens — never goes in the bulk payload;
+                                            # fetched per-session via scanSessionStatus (owner-only)
     return d
 
 def _prepare_user_row(db, row):
@@ -428,6 +430,7 @@ def _migrate(db):
         if not o.get("username") or not o.get("pin"):
             _ensure_operator_creds(db, o); changed = True
     db.setdefault("activityLog", [])
+    db.setdefault("scanSessions", [])
     db.setdefault("settings", {}).setdefault("completionMode", "manual")
     return changed
 
@@ -811,28 +814,100 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error":"bad json"})
         op = req.get("op")
 
-        # scanRead forwards photos to the LAN vision model, which can take a minute on CPU. Run it OUTSIDE
-        # the global LOCK (only a brief lock for auth) so a scan never freezes every other user's requests.
-        if op == "scanRead":
+        # ---- QR camera-scan: token-authenticated ops used by the PHONE (no login on the phone —
+        # the unguessable, short-lived token from the QR code IS the credential for these three ops
+        # only). Desktop-side session ops (scanSessionStart/Status/Read/Apply/Cancel) are further
+        # down, behind the normal cookie login like everything else.
+        if op in ("scanUploadPair", "scanTokenInfo", "scanSessionFinish"):
+            with LOCK:
+                db = load_db()
+                row = next((s for s in db.get("scanSessions", []) if s.get("token") == req.get("token")), None)
+                live = bool(row) and row.get("status") in ("open", "finished") and time.time() <= row.get("expiresAt", 0)
+                if op == "scanTokenInfo":
+                    if not row:
+                        return self._send(404, {"error": "This scan link isn't valid."})
+                    return self._send(200, {"ok": True, "live": live, "status": row.get("status"),
+                                            "pairCount": len(row.get("pairs", []))})
+                if not live:
+                    return self._send(200, {"ok": False,
+                        "error": "This scan link has expired or was already used — go back to the desktop and open the camera again for a new code."})
+                if op == "scanSessionFinish":
+                    row["status"] = "finished"; save_db(db)
+                    return self._send(200, {"ok": True})
+                # scanUploadPair {token, left, right}: left page is required, right page optional
+                # (mirrors the old phone flow's "left page req'd" rule) — stored to disk, not kept
+                # in the JSON row (keeps /api/db and the doc-store small).
+                left, right = req.get("left"), req.get("right")
+                if not str(left or "").strip():
+                    return self._send(400, {"error": "Left page photo is required."})
+                sdir = os.path.join(SCAN_SESSIONS_DIR, row["id"])
+                try: os.makedirs(sdir, exist_ok=True)
+                except OSError: pass
+                idx = len(row.get("pairs", []))
+                pair = {"idx": idx, "left": "", "right": "", "read": False,
+                        "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+                for side, val in (("left", left), ("right", right)):
+                    s = str(val or "")
+                    if "," in s and s.strip().lower().startswith("data:"): s = s.split(",", 1)[1]
+                    if not s.strip(): continue
+                    try:
+                        raw = base64.b64decode(s, validate=False)
+                        fn = "pair%d_%s.jpg" % (idx, side)
+                        with open(os.path.join(sdir, fn), "wb") as f: f.write(raw)
+                        pair[side] = fn
+                    except Exception as e:
+                        print("[scan] could not store %s photo:" % side, repr(e), flush=True)
+                if not pair["left"]:
+                    return self._send(400, {"error": "Couldn't read that photo — try again."})
+                row.setdefault("pairs", []).append(pair)
+                row["status"] = "open"
+                save_db(db)
+                return self._send(200, {"ok": True, "pairCount": len(row["pairs"])})
+
+        # scanSessionRead forwards the session's photos to the Gemini API, which can take tens of
+        # seconds. Run it OUTSIDE the global LOCK (only brief locks for auth + the final write) so
+        # it never freezes every other user's requests — same reasoning the old scanRead had.
+        if op == "scanSessionRead":
             with LOCK:
                 db = load_db(); u, perms = self._auth(db)
             if not u: return self._send(401, {"error": "login required"})
-            if "op_scan" not in perms: return self._send(403, {"error": "forbidden"})
-            cfg = _vision_cfg()
+            if "op_scan" not in _edit_perms_for(db, u): return self._send(403, {"error": "forbidden"})
+            sid = req.get("id")
+            with LOCK:
+                db = load_db()
+                row = next((s for s in db.get("scanSessions", []) if s.get("id") == sid), None)
+                if not row or row.get("createdBy") != u["username"]:
+                    return self._send(404, {"error": "scan session not found"})
+                unread = [dict(p) for p in row.get("pairs", []) if not p.get("read")]
+                sdir = os.path.join(SCAN_SESSIONS_DIR, sid)
+            cfg = _gemini_cfg()
             if not cfg["enabled"]:
-                return self._send(200, {"ok": False, "error": "The scan reader isn't set up yet — an admin must configure the on-site vision model (secrets.local.json → vision)."})
-            imgs = req.get("images") or []
-            if not (isinstance(imgs, list) and 1 <= len(imgs) <= 2):
-                return self._send(400, {"error": "Send one or two page photos."})
-            t0 = time.time()
-            try:
-                prog = _ollama_extract(imgs, cfg)
-            except RuntimeError as e:
-                return self._send(200, {"ok": False, "error": str(e)})
-            except Exception as e:
-                return self._send(200, {"ok": False, "error": "Reader error: %s" % (e,)})
-            return self._send(200, {"ok": True, "program": prog, "model": cfg["model"],
-                                    "secs": round(time.time() - t0, 1)})
+                return self._send(200, {"ok": False,
+                    "error": "The scan reader isn't set up yet — an admin must set gemini.apiKey in secrets.local.json."})
+            machines, errors, done_idx = [], [], []
+            for p in unread:
+                try:
+                    imgs = []
+                    for fn in (p.get("left"), p.get("right")):
+                        if not fn: continue
+                        with open(os.path.join(sdir, fn), "rb") as f:
+                            imgs.append(base64.b64encode(f.read()).decode("ascii"))
+                    prog = _gemini_extract(imgs, cfg)
+                    machines.extend(prog.get("machines") or [])
+                except RuntimeError as e:
+                    errors.append({"spread": p.get("idx", 0) + 1, "error": str(e)})
+                except Exception as e:
+                    errors.append({"spread": p.get("idx", 0) + 1, "error": "Reader error: %s" % (e,)})
+                done_idx.append(p.get("idx"))
+            with LOCK:
+                db = load_db()
+                row = next((s for s in db.get("scanSessions", []) if s.get("id") == sid), None)
+                if row:
+                    for p in row.get("pairs", []):
+                        if p.get("idx") in done_idx:
+                            p["read"] = True
+                    save_db(db)
+            return self._send(200, {"ok": True, "machines": machines, "errors": errors})
 
         with LOCK:
             db = load_db()
@@ -907,43 +982,86 @@ class Handler(BaseHTTPRequestHandler):
                 save_db(db)
                 return self._send(200, {"ok": True, "prefs": cur})
 
-            if op == "scanCommit":
-                # create real batches from the reviewed program + store the page photos for the record
+            # ---- QR camera-scan: desktop-side session ops (cookie-authenticated, owner-only) ----
+            if op == "scanSessionStart":
+                # Batch planner "camera" button: mint a short-lived, unguessable token + QR-able URL.
+                # Nobody but this user can read/apply what gets uploaded to it (checked below by
+                # comparing session.createdBy to the caller on every other scanSession* op).
                 if _need_edit(("op_scan",)):
                     return self._send(403, {"error": "forbidden"})
+                _scan_sessions_gc(db)
+                sid = "SS-" + uuid.uuid4().hex[:8]
+                token = secrets.token_urlsafe(24)
+                row = {"id": sid, "token": token, "createdBy": u["username"],
+                       "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "expiresAt": time.time() + SCAN_SESSION_TTL, "status": "open", "pairs": []}
+                db.setdefault("scanSessions", []).append(row)
+                save_db(db)
+                return self._send(200, {"ok": True, "id": sid, "token": token, "expiresIn": SCAN_SESSION_TTL})
+
+            if op == "scanSessionStatus":
+                row = next((s for s in db.get("scanSessions", []) if s.get("id") == req.get("id")), None)
+                if not row or row.get("createdBy") != u["username"]:
+                    return self._send(404, {"error": "scan session not found"})
+                return self._send(200, {"ok": True, "status": row.get("status"),
+                    "pairCount": len(row.get("pairs", [])),
+                    "unreadCount": sum(1 for p in row.get("pairs", []) if not p.get("read")),
+                    "expired": time.time() > row.get("expiresAt", 0)})
+
+            if op == "scanSessionCancel":
+                row = next((s for s in db.get("scanSessions", []) if s.get("id") == req.get("id")), None)
+                if row and row.get("createdBy") == u["username"] and row.get("status") not in ("applied",):
+                    row["status"] = "cancelled"; save_db(db)
+                    _scan_session_cleanup_files(row["id"])
+                return self._send(200, {"ok": True})
+
+            if op == "scanSessionApply":
+                # create real batches from the reviewed program + archive the session's photos into
+                # programScans for the record (same shape scanCommit used to write)
+                if _need_edit(("op_scan",)):
+                    return self._send(403, {"error": "forbidden"})
+                row = next((s for s in db.get("scanSessions", []) if s.get("id") == req.get("id")), None)
+                if not row or row.get("createdBy") != u["username"]:
+                    return self._send(404, {"error": "scan session not found"})
+                if row.get("status") == "applied":
+                    return self._send(400, {"error": "This scan was already applied."})
                 program = req.get("program") or {}
                 if not isinstance(program, dict) or not program.get("machines"):
                     return self._send(400, {"error": "Nothing to save."})
                 created = _create_scan_batches(db, program, u["username"])
                 if not created:
                     return self._send(400, {"error": "No batches could be created — check the machine names and lots."})
-                sid = "PS-" + time.strftime("%y%m%d") + "-" + uuid.uuid4().hex[:6]
+                pid = "PS-" + time.strftime("%y%m%d") + "-" + uuid.uuid4().hex[:6]
                 files = []
-                for idx, img in enumerate(req.get("images") or []):   # 2 photos (one spread) or many (queue mode)
-                    s = str(img or "")
-                    if "," in s and s.strip().lower().startswith("data:"): s = s.split(",", 1)[1]
-                    if not s.strip(): continue
-                    try:
-                        raw = base64.b64decode(s, validate=False)
-                        fn = "%s_%02d.jpg" % (sid, idx + 1)
-                        with open(os.path.join(PROGRAM_SCANS_DIR, fn), "wb") as f: f.write(raw)
-                        files.append(fn)
-                    except Exception as e:
-                        print("[scan] could not store image:", repr(e), flush=True)
-                rec = {"id": sid, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": u["username"],
+                sdir = os.path.join(SCAN_SESSIONS_DIR, row["id"])
+                for p in row.get("pairs", []):
+                    for fn in (p.get("left"), p.get("right")):
+                        if not fn: continue
+                        src = os.path.join(sdir, fn)
+                        if not os.path.isfile(src): continue
+                        dest_fn = "%s_%s" % (pid, fn)
+                        try:
+                            with open(src, "rb") as sf, open(os.path.join(PROGRAM_SCANS_DIR, dest_fn), "wb") as df:
+                                df.write(sf.read())
+                            files.append(dest_fn)
+                        except OSError as e:
+                            print("[scan] could not archive %s:" % fn, repr(e), flush=True)
+                rec = {"id": pid, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": u["username"],
                        "machines": sorted({str(m.get("machine", "")) for m in program.get("machines", [])}),
                        "batchIds": created, "files": files}
                 db.setdefault("programScans", []).append(rec)
-                _log(db, u["username"], "create", "programScans", sid,
-                     "punched %d batch(es) from a photo scan" % len(created))
+                row["status"] = "applied"
+                _log(db, u["username"], "create", "programScans", pid,
+                     "punched %d batch(es) from a QR camera scan" % len(created))
                 save_db(db)
-                return self._send(200, {"ok": True, "created": len(created), "batchIds": created, "scanId": sid})
+                _scan_session_cleanup_files(row["id"])   # copies now live in program_scans/; drop the working files
+                return self._send(200, {"ok": True, "created": len(created), "batchIds": created, "scanId": pid})
 
             if op == "scansList":
                 if "op_scan" not in perms and "settings" not in perms:
                     return self._send(403, {"error": "forbidden"})
                 rows = [{k: v for k, v in r.items()} for r in db.get("programScans", [])]
-                return self._send(200, {"rows": rows, "vision": {k: _vision_cfg()[k] for k in ("model", "enabled", "endpoint")}})
+                return self._send(200, {"rows": rows, "gemini": {k: _gemini_cfg()[k] for k in ("model", "enabled")}})
 
             if op == "scanDelete":
                 if _need_edit(("op_scan", "settings")):
@@ -1927,22 +2045,58 @@ def _plc_poller():
             time.sleep(3)
 
 # ================================================================ program-scan (photo -> batches)
-# Operators photograph the handwritten jet register (2 pages: a left page with Sr.No/Lot/Pcs/Mtr/Weight/
-# Quality/Shade and a right page with Page No/In/Out/PH/Remarks). The phone sends both photos here; THIS
-# server forwards them to a vision model running on the LAN (e.g. Ollama on an on-prem PC) — never the
-# public internet — and gets structured JSON back. Nothing leaves the premises. Config lives in
-# secrets.local.json under "vision": {endpoint, model, enabled}. The parsed program is reviewed on the
-# phone and only then committed into real batches.
+# A desktop user clicks the camera button on the Batch planner, gets a QR code, scans it with a
+# phone (no login on the phone — the QR's token is a short-lived bearer credential for that one
+# session), photographs the handwritten jet register (2 pages: a left page with Sr.No/Lot/Pcs/Mtr/
+# Weight/Quality/Shade and a right page with Page No/In/Out/PH/Remarks), and can close the phone —
+# the photos already appeared on the desktop that opened the QR. That desktop user (and only them —
+# every scanSession* op checks session.createdBy) reads the photos through the Gemini API and
+# reviews/edits the result before punching it into real batches. Config lives in secrets.local.json
+# under "gemini": {apiKey, model, enabled}. Session bookkeeping is the "scanSessions" table (short-
+# lived, stripped from /api/db — see _sanitized); working photos live under scan_sessions/<id>/ until
+# applied, at which point copies move into program_scans/ (the permanent scanned-batch record).
 PROGRAM_SCANS_DIR = os.path.join(HERE, "program_scans")
 try: os.makedirs(PROGRAM_SCANS_DIR, exist_ok=True)
 except OSError: pass
 
-def _vision_cfg():
-    v = (load_secrets() or {}).get("vision", {}) or {}
-    return {"endpoint": str(v.get("endpoint", "") or "").rstrip("/"),
-            "model": str(v.get("model", "") or "qwen2.5vl:7b"),
-            "enabled": bool(v.get("enabled", True)) and bool(v.get("endpoint")),
-            "timeout": int(v.get("timeoutSecs", 240) or 240)}
+SCAN_SESSIONS_DIR = os.path.join(HERE, "scan_sessions")
+try: os.makedirs(SCAN_SESSIONS_DIR, exist_ok=True)
+except OSError: pass
+SCAN_SESSION_TTL = 20 * 60   # a QR code / upload link stays live this long (seconds)
+
+def _scan_session_cleanup_files(sid):
+    """delete a scan session's working photo files (called once its images are archived into
+    program_scans/, or when it's cancelled/expired and never applied)."""
+    d = os.path.join(SCAN_SESSIONS_DIR, sid)
+    try:
+        for fn in os.listdir(d):
+            try: os.remove(os.path.join(d, fn))
+            except OSError: pass
+        os.rmdir(d)
+    except OSError:
+        pass
+
+def _scan_sessions_gc(db):
+    """expire stale QR sessions (past their TTL) and drop old finished ones + their photo files, so
+    the table and scan_sessions/ directory don't grow unbounded from abandoned/never-applied scans."""
+    now = time.time()
+    keep = []
+    for row in db.get("scanSessions", []):
+        if row.get("status") in ("open", "finished") and now > row.get("expiresAt", 0):
+            row["status"] = "expired"
+        if row.get("status") in ("applied", "cancelled", "expired") and now - row.get("expiresAt", now) > 3600:
+            _scan_session_cleanup_files(row.get("id", ""))
+            continue
+        keep.append(row)
+    if len(keep) != len(db.get("scanSessions", [])):
+        db["scanSessions"] = keep
+
+def _gemini_cfg():
+    g = (load_secrets() or {}).get("gemini", {}) or {}
+    return {"apiKey": str(g.get("apiKey", "") or ""),
+            "model": str(g.get("model", "") or "gemini-2.0-flash"),
+            "enabled": bool(g.get("enabled", True)) and bool(g.get("apiKey")),
+            "timeout": int(g.get("timeoutSecs", 120) or 120)}
 
 _SCAN_PROMPT = (
 "You are transcribing a factory dyeing 'jet program' written by hand in a ruled register. You are given "
@@ -1959,36 +2113,44 @@ _SCAN_PROMPT = (
 '"quality":"CHIFFON","shade":"11","pageNo":"72","inTime":"12:24","outTime":"5:32","ph":"4.3","remarks":"P3(1200)"}]}]}'
 )
 
-def _ollama_extract(images_b64, cfg):
-    """Send the (already base64) page photos to the LAN vision model and return the parsed program dict.
-    Raises RuntimeError with a friendly message on any failure."""
-    if not cfg.get("enabled") or not cfg.get("endpoint"):
-        raise RuntimeError("The scan reader isn't configured yet — an admin must set 'vision' in secrets.local.json.")
-    imgs = []
+def _gemini_extract(images_b64, cfg):
+    """Send the (already base64) page photos to the Gemini API and return the parsed program dict.
+    Raises RuntimeError with a friendly message on any failure. This is the ONLY place this server
+    ever calls out to the public internet — everything else in the app is LAN-only."""
+    if not cfg.get("enabled") or not cfg.get("apiKey"):
+        raise RuntimeError("The scan reader isn't configured yet — an admin must set gemini.apiKey in secrets.local.json.")
+    parts = [{"text": _SCAN_PROMPT}]
     for b in images_b64:
         s = str(b or "")
         if "," in s and s.strip().lower().startswith("data:"):   # strip a data:image/...;base64, prefix if present
             s = s.split(",", 1)[1]
-        imgs.append(s.strip())
-    payload = {"model": cfg["model"], "stream": False, "format": "json",
-               "options": {"temperature": 0},
-               "messages": [{"role": "user", "content": _SCAN_PROMPT, "images": imgs}]}
+        s = s.strip()
+        if s:
+            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": s}})
+    payload = {"contents": [{"parts": parts}],
+               "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}}
     data = json.dumps(payload).encode("utf-8")
-    url = cfg["endpoint"] + "/api/chat"
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s"
+           % (cfg["model"], cfg["apiKey"]))
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=cfg["timeout"]) as r:
             raw = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try: body = e.read().decode("utf-8", "replace")[:300]
+        except Exception: pass
+        raise RuntimeError("Gemini API error %s: %s" % (e.code, body or e.reason))
     except urllib.error.URLError as e:
-        raise RuntimeError("Couldn't reach the vision model at %s — is Ollama running and on the LAN? (%s)"
-                           % (cfg["endpoint"], getattr(e, "reason", e)))
+        raise RuntimeError("Couldn't reach the Gemini API — check the server's internet connection (%s)"
+                           % (getattr(e, "reason", e),))
     except Exception as e:
-        raise RuntimeError("Vision request failed: %s" % (e,))
+        raise RuntimeError("Gemini request failed: %s" % (e,))
     try:
         outer = json.loads(raw)
-        content = (outer.get("message", {}) or {}).get("content", "") or ""
-    except ValueError:
-        content = raw
+        content = outer["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        raise RuntimeError("The reader replied but the result couldn't be understood (unexpected Gemini response).")
     prog = _coerce_program(content)
     if prog is None:
         raise RuntimeError("The reader replied but the result couldn't be understood. Try clearer, straighter photos.")

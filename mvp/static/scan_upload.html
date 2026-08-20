@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>REL-UNITY — Scan register</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* This page is reached only via a QR code's one-time link — no login, no nav, phone-first. */
+  body{background:var(--bg)}
+  .su-wrap{max-width:520px;margin:0 auto;padding:16px 14px 40px}
+  .su-top{display:flex;align-items:center;gap:8px;padding:14px 2px 6px;font-weight:700;color:var(--ink)}
+  .su-top .material-symbols-rounded{color:var(--accent)}
+  .su-top small{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:600;margin-left:2px}
+  .su-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.04),0 2px 6px rgba(16,24,40,.05)}
+  .su-full{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:40px 20px}
+  .su-full .material-symbols-rounded{font-size:44px;color:var(--accent)}
+  .su-full.err .material-symbols-rounded{color:var(--danger)}
+  .su-full.ok .material-symbols-rounded{color:var(--success)}
+  .su-full h2{font-size:17px;margin:0}
+  .su-full p{color:var(--ink-2);font-size:13.5px;max-width:34ch;margin:0}
+  .su-btn{width:100%;justify-content:center;padding:13px 16px;font-size:15px}
+</style>
+</head>
+<body>
+<div class="su-wrap">
+  <div class="su-top"><span class="material-symbols-rounded">qr_code_scanner</span>REL-UNITY <small>SCAN REGISTER</small></div>
+  <div id="su_root"><div class="su-full"><span class="material-symbols-rounded">hourglass_top</span><h2>Checking link…</h2></div></div>
+</div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+let PAIRS = [{left:null, right:null}];
+let SENDING = false, FINISHED = false, UPLOADED_TOTAL = 0;
+
+async function post(body){
+  try{
+    const r = await fetch("/api", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    return await r.json();
+  }catch(e){ return {ok:false, error:"Couldn't reach the server — check you're on the factory Wi-Fi."}; }
+}
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+const ic = n => '<span class="material-symbols-rounded">'+n+'</span>';
+
+function downscale(file, cb){
+  const rd = new FileReader();
+  rd.onload = () => { const img = new Image();
+    img.onload = () => { const max = 1600; let w = img.width, h = img.height;
+      if(Math.max(w,h) > max){ const s = max/Math.max(w,h); w = Math.round(w*s); h = Math.round(h*s); }
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      try{ cb(c.toDataURL("image/jpeg", 0.72)); }catch(e){ cb(null); } };
+    img.onerror = () => cb(null); img.src = rd.result; };
+  rd.onerror = () => cb(null); rd.readAsDataURL(file);
+}
+function pick(pi, si){ const el = document.getElementById("su_in_"+pi+"_"+si); if(el) el.click(); }
+function handleFile(pi, si, input){
+  const f = input.files && input.files[0]; if(!f) return;
+  downscale(f, url => { if(url){ PAIRS[pi][si?"right":"left"] = url; render(); } else alert("Couldn't read that photo — try again."); });
+  input.value = "";
+}
+function addPair(){ PAIRS.push({left:null, right:null}); render(); }
+function removePair(pi){ PAIRS.splice(pi,1); if(!PAIRS.length) PAIRS.push({left:null,right:null}); render(); }
+function validPairs(){ return PAIRS.filter(p => p.left); }
+
+async function sendAll(){
+  const valid = validPairs();
+  if(!valid.length){ alert("Take at least the left page of one spread first."); return; }
+  SENDING = true; render();
+  let sent = 0, failed = 0;
+  for(const p of valid){
+    const res = await post({op:"scanUploadPair", token:TOKEN, left:p.left, right:p.right});
+    if(res && res.ok) sent++; else failed++;
+  }
+  await post({op:"scanSessionFinish", token:TOKEN});
+  SENDING = false; FINISHED = true; UPLOADED_TOTAL += sent;
+  PAIRS = [{left:null, right:null}];
+  render();
+  if(failed) alert(failed+" spread(s) failed to upload — you can add them again below.");
+}
+function addMore(){ FINISHED = false; render(); }
+
+function renderCapture(){
+  const slot = (pi, si, label, req) => { const img = PAIRS[pi][si?"right":"left"];
+    return '<div class="scan-slot'+(img?' has':'')+'"><div class="scan-slot-h">'+label+(req?' <b class="req">req</b>':'')+'</div>'
+      + (img ? '<img class="scan-thumb" src="'+img+'" alt=""><button class="btn ghost sm scan-retake" onclick="pick('+pi+','+si+')">'+ic("photo_camera")+'Retake</button>'
+             : '<button class="scan-drop" onclick="pick('+pi+','+si+')">'+ic("photo_camera")+'<span>Photo</span></button>')
+      + '<input type="file" accept="image/*" capture="environment" id="su_in_'+pi+'_'+si+'" style="display:none" onchange="handleFile('+pi+','+si+',this)"></div>'; };
+  const pairCard = (p, pi) => '<div class="su-card sp-pair"><div class="sp-pair-h"><b>Spread '+(pi+1)+'</b>'
+      + (PAIRS.length>1 ? '<button class="sp-rm" title="remove spread" onclick="removePair('+pi+')">'+ic("delete")+'</button>' : '')+'</div>'
+      + '<div class="scan-slots">'+slot(pi,0,"Left page",true)+slot(pi,1,"Right page",false)+'</div></div>';
+  const valid = validPairs().length;
+  return '<div class="scan-hint">'+ic("qr_code_scanner")+'<span>Photograph each 2-page spread — <b>left page</b> then <b>right page</b>. Add as many spreads as you like, then send them all at once. Keep pages flat and fill the frame.</span></div>'
+    + PAIRS.map(pairCard).join("")
+    + '<button class="btn ghost su-btn" style="border-style:dashed;margin-bottom:14px" onclick="addPair()">'+ic("add")+'Add another spread</button>'
+    + '<button class="btn su-btn" '+((valid&&!SENDING)?'':'disabled')+' onclick="sendAll()">'+ic("bolt")+(SENDING?'Sending…':('Send '+(valid||'')+' spread'+(valid!=1?'s':'')+' to desktop'))+'</button>';
+}
+function renderDone(){
+  return '<div class="su-card su-full ok">'+ic("check_circle")
+    + '<h2>'+UPLOADED_TOTAL+' spread'+(UPLOADED_TOTAL!=1?'s':'')+' sent</h2>'
+    + '<p>They already appeared on the desktop that opened this code — you can close this page now, or add more spreads first.</p>'
+    + '<button class="btn ghost su-btn" onclick="addMore()">'+ic("add_a_photo")+'Add more spreads</button></div>';
+}
+function render(){
+  document.getElementById("su_root").innerHTML = FINISHED ? renderDone() : renderCapture();
+}
+
+async function boot(){
+  const root = document.getElementById("su_root");
+  if(!TOKEN){
+    root.innerHTML = '<div class="su-card su-full err">'+ic("error")+'<h2>No scan code</h2><p>Open this page by scanning the QR code shown on the desktop\'s camera button.</p></div>';
+    return;
+  }
+  const info = await post({op:"scanTokenInfo", token:TOKEN});
+  if(!info || !info.ok || !info.live){
+    root.innerHTML = '<div class="su-card su-full err">'+ic("error")+'<h2>This link has expired</h2><p>Go back to the desktop, open the camera on the Batch planner again, and scan the new code.</p></div>';
+    return;
+  }
+  render();
+}
+boot();
+</script>
+</body>
+</html>

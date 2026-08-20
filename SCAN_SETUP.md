@@ -1,87 +1,90 @@
-# Program Scan — on-site setup (photo → batches, fully offline)
+# Program Scan — setup (camera + QR handoff, Gemini API)
 
-The phone **Scan** tab lets an operator photograph the handwritten jet register (left page +
-right page) and punch the batches straight into the plan. The handwriting is read by a **vision
-model that runs on YOUR network** — the app server forwards the photos to it over the LAN and
-gets structured data back. **Nothing is ever sent to the internet or any external API.**
+The Batch planner has a **camera** button. Click it and a QR code appears — scan it with any
+phone on the factory Wi-Fi, no login needed on the phone. Photograph the handwritten jet register
+(left page + right page of each spread), send, and close the phone — the photos already appeared
+back on the **desktop that opened the code**. That person reviews and edits the read-out there,
+then punches it into real batches. Only they can see/apply that session's photos.
+
+The handwriting is read by the **Gemini API** (Google). This is the one deliberate outbound-internet
+call this app makes — everything else is LAN-only.
 
 ```
-Phone (Scan tab)  ──photos──▶  App server (LAN, no internet)  ──LAN──▶  Ollama + vision model (the iMac)
-        ▲                                   │                                     │
-        └────────── review + confirm ───────┘◀──────── structured batches ────────┘
+Desktop (camera button)  ──QR code──▶  Phone (no login, scan_upload.html)
+        │                                        │
+        │  photos land on the session the        │ photographs + sends
+        │  desktop opened (token-scoped)          ▼
+        └──────────◀── App server (LAN) ──photos──┘
+                              │
+                              ▼
+                        Gemini API (internet)
+                              │
+                              ▼
+                 structured batches ──▶ reviewed + confirmed on the SAME desktop
 ```
 
-## 1. The reader machine (the iMac)
+## 1. Get a Gemini API key
 
-Run the vision model on the 27" iMac (i5 6-core, Radeon Pro 580X, RAM → 16 GB min, 32–64 GB better).
+Go to https://aistudio.google.com/apikey, create a key (a free tier is enough to start). Keep it
+secret — anyone with the key can spend against your account.
 
-Honest expectations on this hardware:
-- On an **Intel Mac the AMD GPU is not used** for this — Ollama runs on the **CPU**. That's fine for
-  your volume, just not instant.
-- Expect roughly **30 s – 2 min per scan**, and **good-but-not-perfect** accuracy — which is exactly
-  why every scan goes through the editable review screen before anything is saved.
-- Set the iMac to **never sleep** (System Settings → Displays/Battery → never), so the app server can
-  always reach it. Keep it plugged in and awake.
+## 2. Point the app server at it
 
-## 2. Install Ollama on the iMac
-
-1. Download the macOS app from https://ollama.com/download and open it (it runs as a menu-bar service).
-   *(This is the only step that needs internet — to download Ollama and the model once. After that the
-   whole thing works with no internet.)*
-2. Make Ollama listen on the LAN (not just localhost) so the app server can reach it. In Terminal:
-   ```
-   launchctl setenv OLLAMA_HOST 0.0.0.0:11434
-   ```
-   Then quit and reopen the Ollama app so it picks that up. (To make it stick across reboots, add the
-   same `launchctl setenv` line to a login item / script.)
-3. Pull a vision model (one-time download, needs internet just for this):
-   ```
-   ollama pull qwen2.5vl:7b
-   ```
-   Alternatives, by trade-off:
-   - `qwen2.5vl:3b` — faster, lighter (good if 16 GB feels tight); a bit less accurate.
-   - `qwen2.5vl:7b` — the recommended balance.
-   - `minicpm-v` — strong OCR, another good option to compare against.
-
-## 3. Point the app server at it
-
-Find the iMac's LAN IP (System Settings → Network, e.g. `192.168.0.60`). On the **app server**, edit
-`REL_DYEING/mvp/secrets.local.json` (create it from `secrets.example.json` if needed) and set:
+On the **app server**, edit `REL_DYEING/mvp/secrets.local.json` (create it from
+`secrets.example.json` if needed) and set:
 
 ```json
-"vision": {
-  "endpoint": "http://192.168.0.60:11434",
-  "model": "qwen2.5vl:7b",
+"gemini": {
+  "apiKey": "YOUR-KEY-HERE",
+  "model": "gemini-2.0-flash",
   "enabled": true,
-  "timeoutSecs": 240
+  "timeoutSecs": 120
 }
 ```
 
-Restart the app server. `secrets.local.json` is gitignored — never commit it.
+Restart the app server. `secrets.local.json` is gitignored — never commit it, never share the key.
 
-## 4. Give operators access
+## 3. Give people access
 
-In the web console: **Admin → Roles →** grant the **“Program scan (photo)”** page to whichever role
-should be allowed to scan. Those users get a **Scan** tab in the mobile app.
+In the web console: **Admin → Roles →** grant the **"Program scan (camera)"** page (`op_scan`,
+with **edit** ticked, not just view — starting a scan and applying it both cost a real API call
+and create data) to whichever role should be allowed to use the camera button.
 
-## 5. Using it
+## 4. Using it
 
-On the phone: **Scan** tab → take the **left-page** photo and the **right-page** photo of one 2-page
-spread → **Read pages**. In ~1 minute a review screen appears with every batch and lot. Anything not
-already in the system (an unknown lot number, a new quality/shade, an unrecognised machine) is
-**highlighted amber** for you to fix or pick. When it looks right, **Confirm & punch** — the batches
-appear in the plan and the two photos are stored for the record.
+1. **Operations → Batch planner → Camera** button. A QR code appears.
+2. Scan it with a phone on the factory Wi-Fi (any phone — no login, no app to install).
+3. On the phone: photograph the **left page**, then the **right page** of one spread. Add as many
+   spreads as you like, then **Send**. The phone shows a confirmation — you can close it.
+4. Back on the desktop that opened the code, the photos appear automatically and get read within
+   about a minute. A review screen shows every batch and lot. Anything not already in the system
+   (an unknown lot number, a new quality/shade, an unrecognised machine) is **highlighted amber**
+   for you to fix or pick.
+5. **Confirm & punch** — the batches appear in the plan and the photos are archived for the record.
 
-## 6. Where the photos live / deleting them
+The QR code / upload link stays live for **20 minutes**. If it's not used within that window, or
+once it's applied, it stops accepting new photos — open the camera button again for a fresh one.
 
-Stored on the app server under `REL_DYEING/mvp/program_scans/`. Manage them from **Admin → Settings →
-Program scans**: it lists every scan with thumbnails and lets you **delete one** or **delete all** (the
-batches already created are kept). The scan reader's status (model + endpoint) is shown there too.
+## 5. Where the photos live / deleting them
 
-## 7. If it says the reader can't be reached
+Once applied, the photos are stored on the app server under `REL_DYEING/mvp/program_scans/`.
+Manage them from **Admin → Settings → Program scans**: it lists every scan with thumbnails and
+lets you **delete one** or **delete all** (the batches already created are kept). The scan
+reader's status (model, enabled/not) is shown there too. Working photos for a scan that's still
+in progress live under `REL_DYEING/mvp/scan_sessions/<id>/` and are cleaned up automatically once
+applied, cancelled, or expired.
 
-- Is the iMac awake and is the Ollama app running?
-- Did you set `OLLAMA_HOST 0.0.0.0:11434` and reopen Ollama? Test from the app server:
-  `curl http://<imac-ip>:11434/api/tags` should list your model.
-- Is the macOS firewall blocking port 11434? Allow incoming connections for Ollama.
-- Is `vision.endpoint` in `secrets.local.json` the iMac's current LAN IP?
+## 6. If it says the reader isn't configured / can't be reached
+
+- Is `gemini.apiKey` actually set in `secrets.local.json` (not just `secrets.example.json`)?
+- Does the app server itself have working internet access? (Everything else in this app is
+  LAN-only by design — this is the one feature that needs an outbound connection.)
+- Check **Admin → Settings → Server log** for the exact error Gemini returned (bad key, quota,
+  etc.) — it's shown to the user on the review screen too.
+
+## 7. If the QR code won't scan / the phone page says "link expired"
+
+- Make sure the phone is on the **factory Wi-Fi** — this is a LAN-only app, phones on mobile data
+  can't reach it.
+- The link is only good for 20 minutes and only for one scan session — go back to the desktop and
+  click the camera button again for a new code.

@@ -66,6 +66,7 @@
     <div class="bar">
       <span class="small muted" id="mp_note"></span>
       <span class="spacer"></span>
+      <button class="btn ghost" id="mp_camera_btn" style="display:none" title="Scan a jet register with your phone" onclick="openScanCamera()"><span class="material-symbols-rounded">photo_camera</span>Camera</button>
       <button class="btn mp-hold" id="mp_saveorder" style="display:none" onmousedown="mpHoldStart(event)" onmouseup="mpHoldCancel()" onmouseleave="mpHoldCancel()" ontouchstart="mpHoldStart(event)" ontouchend="mpHoldCancel()"><span class="hold-fill" id="mp_holdfill"></span><span class="hold-lbl"><span class="material-symbols-rounded">save</span>Hold 3s to save order</span></button>
     </div>
     <div id="mp_body"></div>
@@ -73,6 +74,7 @@
 </main>
 
 <script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
 <script>
 let S=null, CLOCK=0;
@@ -446,6 +448,7 @@ function applyMpCols(){
 function mpColDrop(over){ if(!MPCOL_DRAG||MPCOL_DRAG===over){ MPCOL_DRAG=null; return; } let o=mpColOrder(); const f=o.indexOf(MPCOL_DRAG), t=o.indexOf(over); MPCOL_DRAG=null; if(f<0||t<0)return; o.splice(t,0,o.splice(f,1)[0]); CURRENT_USER.prefs=CURRENT_USER.prefs||{}; CURRENT_USER.prefs.mpColOrder=o; if(window.API&&API._post) API._post({op:"savePrefs",prefs:{mpColOrder:o}}).catch(()=>{}); renderMassPlan(); }
 function renderMassPlan(){
   if(!can("op_massplan")) return;
+  const camBtn=document.getElementById("mp_camera_btn"); if(camBtn) camBtn.style.display=canEdit("op_scan")?"":"none";
   const body=document.getElementById("mp_body");
   const machines=orderedMachines((DB.machines||[]).slice());
   if(!machines.length){ body.innerHTML='<div class="empty"><span class="material-symbols-rounded">precision_manufacturing</span><h3>No machines yet</h3><p>Add machines in Admin and they will appear here to plan.</p></div>'; return; }

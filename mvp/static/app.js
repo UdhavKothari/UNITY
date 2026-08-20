@@ -1005,3 +1005,180 @@ async function submitChangePw(){
 }
 function toast(msg){ let t=document.getElementById("toast"); if(!t){t=document.createElement("div");t.id="toast";document.body.appendChild(t);} t.textContent=msg; t.classList.add("on"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("on"),2200); }
 const esc = s => String(s===undefined||s===null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ================= QR camera scan: Batch planner "camera" button -> phone photographs the register
+   (no login on the phone — the QR's token is a short-lived bearer credential for that session only)
+   -> Gemini reads it -> reviewed HERE by the desktop user who opened the code, then punched into real
+   batches. Server ops: scanSessionStart/Status/Read/Apply/Cancel. See rel-dyeing-design-insight. ========= */
+let SCANQR = null;   // {id, token, url, poll, program:{machines:[]}, errors:[], reading, applying, pairCount}
+
+function openScanCamera(){
+  if(!canEdit("op_scan")){ toast("You don't have access to the camera scan"); return; }
+  const ex=document.getElementById("scanqrOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="scanqrOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:440px"><div class="m-h"><h3><span class="material-symbols-rounded">qr_code_scanner</span>Scan a register</h3>'
+    +'<button class="x" onclick="scanQrClose()">&times;</button></div>'
+    +'<div class="m-b" id="scanqr_body" style="max-height:70vh;overflow:auto"><div class="scanqr-wait"><span class="material-symbols-rounded" style="font-size:36px;color:var(--accent)">hourglass_top</span><p>Starting…</p></div></div></div>';
+  document.body.appendChild(o);
+  scanQrStart();
+}
+async function scanQrStart(){
+  const res = await API._post({op:"scanSessionStart"});
+  if(!res || !res.ok){ toast((res&&res.error)||"Couldn't start a scan session"); scanQrClose(); return; }
+  SCANQR = {id:res.id, token:res.token, url: location.origin+"/scan_upload.html?t="+res.token,
+            program:{machines:[]}, errors:[], reading:false, applying:false, pairCount:0, poll:null};
+  scanQrRenderWait();
+  scanQrPollStart();
+}
+function scanQrRenderWait(){
+  const body = document.getElementById("scanqr_body"); if(!body || !SCANQR) return;
+  let qrSvg = "";
+  try{ const qr = qrcode(0, "M"); qr.addData(SCANQR.url); qr.make(); qrSvg = qr.createSvgTag({cellSize:5, margin:2}); }
+  catch(e){ qrSvg = ""; }
+  body.innerHTML = '<div class="scanqr-qr">'+qrSvg+'</div>'
+    + '<div class="scanqr-url">'+esc(SCANQR.url)+'</div>'
+    + '<div class="scanqr-wait"><p>Scan this with a phone on the factory Wi-Fi. Photograph each spread — left page, then right page — and send. They\'ll appear here automatically; no login needed on the phone.</p></div>'
+    + '<div class="scanqr-count"><span class="material-symbols-rounded">photo_camera</span><span id="scanqr_countline">Waiting for photos…</span></div>';
+}
+function scanQrPollStart(){
+  if(SCANQR && SCANQR.poll) clearInterval(SCANQR.poll);
+  if(!SCANQR) return;
+  SCANQR.poll = setInterval(scanQrPollTick, 3000);
+}
+async function scanQrPollTick(){
+  if(!SCANQR || SCANQR.reading || SCANQR.applying) return;
+  const id = SCANQR.id;
+  const res = await API._post({op:"scanSessionStatus", id});
+  if(!res || !res.ok || !SCANQR || SCANQR.id!==id) return;   // modal was closed/replaced mid-request
+  SCANQR.pairCount = res.pairCount;
+  const cl = document.getElementById("scanqr_countline");
+  if(cl) cl.textContent = res.pairCount ? (res.pairCount+" spread"+(res.pairCount!=1?"s":"")+" received") : "Waiting for photos…";
+  // the phone signals "finished" when it sends its batch (or the link simply expired mid-way) —
+  // either way, read whatever arrived so it shows up here without the user having to click anything.
+  if((res.status==="finished" || res.expired) && res.unreadCount>0) await scanQrReadNow();
+}
+async function scanQrReadNow(){
+  if(!SCANQR || SCANQR.reading) return;
+  SCANQR.reading = true;
+  scanQrRenderReading();
+  const res = await API._post({op:"scanSessionRead", id:SCANQR.id});
+  if(!SCANQR){ return; }
+  SCANQR.reading = false;
+  if(!res || res.ok===false){ toast((res&&res.error)||"Read failed"); scanQrRenderWait(); return; }
+  (res.machines||[]).forEach(mc => { const n = scanQrNormalizeMc(mc); if(n.batches.length) SCANQR.program.machines.push(n); });
+  SCANQR.errors = res.errors||[];
+  if(!SCANQR.program.machines.length){
+    scanQrRenderWait();
+    if(SCANQR.errors.length) toast(SCANQR.errors[0].error);
+    return;
+  }
+  if(SCANQR.poll){ clearInterval(SCANQR.poll); SCANQR.poll = null; }   // review is now a static snapshot to edit
+  scanQrRenderPreview();
+}
+function scanQrRenderReading(){
+  const body = document.getElementById("scanqr_body"); if(!body) return;
+  body.innerHTML = '<div class="scan-reading-card"><span class="material-symbols-rounded">hourglass_top</span>'
+    + '<div><b>Reading the photos…</b><br><span class="small muted">The Gemini reader is transcribing what was sent — usually under a minute.</span></div></div>';
+}
+
+/* ---- normalize + cross-check a Gemini-read machine block against the live DB, mirroring the field
+   shape the old phone-side reviewer used, so nothing else about the review UX had to change. ---- */
+function scanQrMatchMachine(name){ const raw=String(name==null?"":name).trim(); if(!raw) return "";
+  const norm=s=>String(s==null?"":s).replace(/\W/g,"").toUpperCase();
+  const hit=(DB.machines||[]).find(m=>norm(m.id)===norm(raw)); return hit?hit.id:raw; }
+function scanQrNormalizeMc(mc){
+  const machine = scanQrMatchMachine(mc.machine);
+  const batches = ((mc.batches)||[]).map(b => ({
+    srNo: b.srNo!=null?b.srNo:"",
+    lots: ((b.lots)||[]).map(l => ({ lotNo:String(l.lotNo!=null?l.lotNo:(l.lotId!=null?l.lotId:"")).trim(),
+      pcs:l.pcs!=null?l.pcs:"", mtr:l.mtr!=null?l.mtr:"", weight:l.weight!=null?l.weight:"" })).filter(l=>l.lotNo||l.pcs||l.mtr||l.weight),
+    quality:String(b.quality!=null?b.quality:"").trim(), shade:String(b.shade!=null?b.shade:"").trim(),
+    pageNo:String(b.pageNo!=null?b.pageNo:"").trim(), inTime:String(b.inTime!=null?b.inTime:"").trim(),
+    outTime:String(b.outTime!=null?b.outTime:"").trim(), ph:String(b.ph!=null?b.ph:"").trim(),
+    remarks:String(b.remarks!=null?b.remarks:"").trim() })).filter(b => b.lots.length);
+  return {machine, batches};
+}
+function scanQrLotKnown(id){ return !!id && (DB.lots||[]).some(l => String(l.id)===String(id)); }
+function scanQrQualKnown(name){ const n=String(name||"").trim().toLowerCase(); return !n || (DB.qualities||[]).some(q => String(q.name||"").toLowerCase()===n); }
+function scanQrShadeKnown(q,sh){ const s=String(sh||"").trim().toLowerCase(); if(!s) return true;
+  return (DB.shadeRecipes||[]).some(r => String(r.shade||"").toLowerCase()===s && (!q || String(r.quality||"").toLowerCase()===String(q||"").toLowerCase())); }
+function scanQrMcKnown(id){ return (DB.machines||[]).some(m => String(m.id)===String(id)); }
+
+function scanQrSet(mi,bi,f,v){ SCANQR.program.machines[mi].batches[bi][f]=v; scanQrRenderPreview(); }
+function scanQrSetLot(mi,bi,li,f,v){ SCANQR.program.machines[mi].batches[bi].lots[li][f]=v; scanQrRenderPreview(); }
+function scanQrSetMachine(mi,v){ SCANQR.program.machines[mi].machine=v; scanQrRenderPreview(); }
+function scanQrRemoveLot(mi,bi,li){ const b=SCANQR.program.machines[mi].batches[bi]; b.lots.splice(li,1); if(!b.lots.length) scanQrRemoveBatch(mi,bi); else scanQrRenderPreview(); }
+function scanQrRemoveBatch(mi,bi){ const m=SCANQR.program.machines[mi]; m.batches.splice(bi,1); if(!m.batches.length) SCANQR.program.machines.splice(mi,1);
+  if(!SCANQR.program.machines.length){ scanQrRenderWait(); scanQrPollStart(); return; } scanQrRenderPreview(); }
+
+function scanQrRenderPreview(){
+  const body = document.getElementById("scanqr_body"); if(!body || !SCANQR) return;
+  const scrollY = body.scrollTop;
+  const P = SCANQR.program; let flags = 0;
+  const mcOptions = (sel) => '<option value="">— pick machine —</option>' + (DB.machines||[]).slice()
+      .sort((a,b)=>String(a.id).localeCompare(String(b.id),undefined,{numeric:true}))
+      .map(m => '<option'+(String(m.id)===String(sel)?' selected':'')+'>'+esc(m.id)+'</option>').join("")
+      + (sel && !scanQrMcKnown(sel) ? '<option selected>'+esc(sel)+'</option>' : '');
+  const cards = P.machines.map((mc, mi) => {
+    const mcBad = !scanQrMcKnown(mc.machine); if(mcBad) flags++;
+    const batches = mc.batches.map((b, bi) => {
+      const qBad = !scanQrQualKnown(b.quality), shBad = !scanQrShadeKnown(b.quality, b.shade);
+      if(qBad) flags++; if(shBad) flags++;
+      const lots = b.lots.map((l, li) => { const lBad = !scanQrLotKnown(l.lotNo); if(lBad) flags++;
+        return '<div class="sp-lot">'
+          + '<input class="sp-in lot'+(lBad?' bad':'')+'" value="'+esc(l.lotNo)+'" placeholder="lot no" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'lotNo\',this.value)">'
+          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.pcs)+'" placeholder="pcs" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'pcs\',this.value)">'
+          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.mtr)+'" placeholder="mtr" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'mtr\',this.value)">'
+          + '<input class="sp-in num" inputmode="numeric" value="'+esc(l.weight)+'" placeholder="kg" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'weight\',this.value)">'
+          + (b.lots.length>1 ? '<button class="sp-rm" title="remove lot" onclick="scanQrRemoveLot('+mi+','+bi+','+li+')"><span class="material-symbols-rounded">delete</span></button>' : '<span class="sp-rm-sp"></span>')
+          + (lBad ? '<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>not in system</span>' : '') + '</div>'; }).join("");
+      return '<div class="sp-batch">'
+        + '<div class="sp-brow"><span class="sp-seq">#'+esc(b.srNo||(bi+1))+'</span>'
+          + '<input class="sp-in q'+(qBad?' bad':'')+'" value="'+esc(b.quality)+'" placeholder="quality" onchange="scanQrSet('+mi+','+bi+',\'quality\',this.value)">'
+          + '<input class="sp-in q'+(shBad?' bad':'')+'" value="'+esc(b.shade)+'" placeholder="shade" onchange="scanQrSet('+mi+','+bi+',\'shade\',this.value)">'
+          + '<button class="sp-rm" title="remove batch" onclick="scanQrRemoveBatch('+mi+','+bi+')"><span class="material-symbols-rounded">delete</span></button></div>'
+        + ((qBad||shBad) ? '<div class="sp-flagline">'+(qBad?'<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>quality new</span>':'')+(shBad?'<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>shade new</span>':'')+'</div>' : '')
+        + '<div class="sp-lots">'+lots+'</div>'
+        + '<div class="sp-meta">'
+          + '<label>Pg<input class="sp-in sm" value="'+esc(b.pageNo)+'" onchange="scanQrSet('+mi+','+bi+',\'pageNo\',this.value)"></label>'
+          + '<label>In<input class="sp-in sm" value="'+esc(b.inTime)+'" onchange="scanQrSet('+mi+','+bi+',\'inTime\',this.value)"></label>'
+          + '<label>Out<input class="sp-in sm" value="'+esc(b.outTime)+'" onchange="scanQrSet('+mi+','+bi+',\'outTime\',this.value)"></label>'
+          + '<label>pH<input class="sp-in sm" value="'+esc(b.ph)+'" onchange="scanQrSet('+mi+','+bi+',\'ph\',this.value)"></label></div>'
+        + '<label class="sp-rem">Remarks<input class="sp-in" value="'+esc(b.remarks)+'" onchange="scanQrSet('+mi+','+bi+',\'remarks\',this.value)"></label></div>'; }).join("");
+    return '<div class="card sp-mc"><div class="sp-mch"><select class="sp-in mc'+(mcBad?' bad':'')+'" onchange="scanQrSetMachine('+mi+',this.value)">'+mcOptions(mc.machine)+'</select>'
+      + '<span class="sp-count">'+mc.batches.length+' batch'+(mc.batches.length!=1?'es':'')+'</span></div>'
+      + (mcBad ? '<div class="sp-flagline"><span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>machine not recognised — pick one</span></div>' : '')
+      + batches + '</div>'; }).join("");
+  const total = P.machines.reduce((a,m)=>a+m.batches.length,0);
+  const head = '<div class="card sp-top"><div><b>'+total+' batch'+(total!=1?'es':'')+'</b> · '+P.machines.length+' machine'+(P.machines.length!=1?'s':'')+'</div>'
+    + (flags ? '<div class="sp-flagsum"><span class="material-symbols-rounded">priority_high</span>'+flags+' to review</div>' : '<div class="sp-okline"><span class="material-symbols-rounded">check_circle</span>all recognised</div>')+'</div>';
+  const errline = (SCANQR.errors&&SCANQR.errors.length) ? '<div class="scan-err"><span class="material-symbols-rounded">warning</span><span>'+SCANQR.errors.map(e=>'Spread '+e.spread+' couldn\'t be read — recapture it on the phone and send again.').join('<br>')+'</span></div>' : '';
+  body.innerHTML = errline + head + cards
+    + '<div class="sp-actions" style="margin-top:12px"><button class="btn ghost" onclick="scanQrClose()">Close</button>'
+    + '<button class="btn" '+(SCANQR.applying?'disabled':'')+' onclick="scanQrApply()"><span class="material-symbols-rounded">check</span>'+(SCANQR.applying?'Punching…':('Confirm & punch '+total))+'</button></div>';
+  body.scrollTop = scrollY;
+}
+async function scanQrApply(){
+  if(!SCANQR || SCANQR.applying) return;
+  const bad = SCANQR.program.machines.filter(m=>!scanQrMcKnown(m.machine));
+  if(bad.length){ toast("Pick a valid machine for each program first"); return; }
+  SCANQR.applying = true; scanQrRenderPreview();
+  const res = await API._post({op:"scanSessionApply", id:SCANQR.id, program:SCANQR.program});
+  if(!SCANQR) return;
+  SCANQR.applying = false;
+  if(!res || res.error){ toast((res&&res.error)||"Punch failed"); scanQrRenderPreview(); return; }
+  toast((res.created||0)+" batch"+(res.created!=1?"es":"")+" added");
+  scanQrClose(true);
+  await API.db();
+  if(typeof draw==="function") draw();
+  const mp = document.getElementById("v-massplan");
+  if(typeof renderMassPlan==="function" && mp && mp.style.display!=="none") renderMassPlan();
+}
+function scanQrClose(applied){
+  if(SCANQR){
+    if(SCANQR.poll) clearInterval(SCANQR.poll);
+    if(!applied && SCANQR.id) API._post({op:"scanSessionCancel", id:SCANQR.id}).catch(()=>{});
+  }
+  SCANQR = null;
+  const ex=document.getElementById("scanqrOverlay"); if(ex) ex.remove();
+}
