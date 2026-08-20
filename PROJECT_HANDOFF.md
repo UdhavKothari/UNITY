@@ -430,3 +430,80 @@ do everything there" to a **QR handoff**:
 
 ⚠ Not done / left for the owner: Gemini API pricing and rate limits weren't sized against real
 scan volume — worth watching usage on https://aistudio.google.com/ once this is in daily use.
+
+### 31. PLC water-spend tracking + machine-wise 24h in/out log + mobile page RBAC
+`Act_MV_Litre` is a **point-in-time vat gauge**, not a running total, so "current water" and "water
+spent on this batch" are different numbers and both are now shown.
+
+- **`plcWaterTotal` on the batch record.** `_plc_apply()` now captures the previous poll's `plcLive`
+  reading before overwriting it, and — only while the machine is in a **FILL step** (`PLC_FILL_STEPS
+  = {1, 7}`, i.e. FILL NORMAL / FILL RECO) — adds the **positive delta** between this poll and the
+  last onto `b["plcWaterTotal"]` for whichever batch is currently running on that machine. Drain
+  steps are ignored on purpose (the water was already counted when it went in); a delta is only
+  accepted if `0 < delta <= capMax*3` to reject garbage readings. Resets naturally per batch since
+  it's a field on the batch dict, not a machine-level counter. Verified with a synthetic
+  LOAD→FILL→FILL→FILL→HEAT→DRAIN→DRAIN→FILL RECO→FILL RECO→FILL RECO→MAAL UNLOAD sequence: total
+  came out to exactly the sum of the fill-phase deltas.
+- **Machine-wise 24h LOAD/UNLOAD log, decoupled from batch bookkeeping.** New `_plc_log_event(db,
+  machine_id, kind)` writes to `db["plcEvents"]` (pruned to the last `PLC_EVENT_RETAIN_DAYS = 7`
+  once the list passes 200 entries), fired **edge-triggered** — only when the decoded step actually
+  *transitions into* LOAD (6) or MAAL UNLOAD (12), not on every 10s poll while parked there — so a
+  batch that sits in LOAD for an hour logs one "in" event, not 360. This is deliberately independent
+  of whatever batch the plan-reconciliation logic currently thinks is running on that machine, per
+  the owner's ask: the phone is for maintenance, and maintenance doesn't care which batch a load/
+  unload belonged to, just that fabric went in or came out and when.
+- **Mobile Activity tab.** `UNITY-MOBILE/m.js` gained a `/log` route (`renderMachineLog()`) showing
+  the last 24h of `plcEvents` newest-first, gated on a new permission key **`op_mob_log`** — wired
+  through the mobile app's existing `can()`/`canEdit()`/`TABS`/`NEEDS()`/`route()` RBAC (which
+  already existed and just needed a page key for this feature; nothing new had to be built for
+  per-role mobile page access itself). The machine panel and a batch's detail sheet both now show
+  `plcWaterTotal` next to the live litre reading, with tooltips distinguishing "now" from "total
+  spent."
+- New page keys in server `ALL_PAGES`: **`op_mob_log`** (mobile-only) and **`lotHistory`** (see #32) —
+  both need to be granted to non-Administrator roles in Admin → Roles before those users see them.
+
+### 32. Batch History: PLC columns; new Lot History page with workflow-adherence check
+- **Batch History** (`admin.html`) gained **PLC in / PLC out / Water (L)** columns, sourced from
+  `b.actInTime||b.plcIn`, `b.actOutTime||b.plcOut`, `b.plcWaterTotal` — in both the on-screen table
+  and the Excel export.
+- **New "Lot History" page** (`lotHistory` permission, Admin nav group "History & audit"): a
+  searchable master list of lots with a workflow-adherence status column, expanding into a detail
+  view per lot showing every batch it was assigned to (machine, times, water), and whether the
+  actual batch trail matches the workflow assigned to that lot's quality.
+  - Workflows are stored as a **node+edge graph** (`wfbuilder.js`: `nodes`/`edges`, not a flat
+    ordered list), so `wfExpectedChain()` walks the graph forward from the `"input"`-kind node to
+    derive the canonical step order.
+  - Batches created via a quality's assigned workflow already store `b.proc` (the processType id)
+    directly on the batch record, so the comparison (`wfCompareLot`) doesn't need to re-derive
+    machine-type matching — it does a **subsequence match** against the expected chain (not a strict
+    order-and-completeness check), since legitimate re-work/extra wash cycles shouldn't be flagged
+    as failures.
+
+### 33. Dispatch report import: taka-level removal from active stock → Lot History
+New CSV-inbox pipeline mirroring the existing lot importer, for the mill's daily "Dispatch Report"
+export (own SQL query supplied by the owner, `dbo.GREYRET`/`dbo.CHALTRN` joined on `CARDNO`, filtered
+to `MASTER = 'DYEING (SM)'` and yesterday's `CUTDATE`).
+
+- **Drop location:** `mvp/inbox_dispatch/` (new folder, auto-created on server start), polled every
+  45s by `_dispatch_watcher()`. **CSV only** — `.xlsx`/`.xls` are rejected with a friendly error,
+  same convention as the existing lot inbox.
+- **Header matching** (`DISPATCH_COL_ALIASES`/`_dispatch_colmap()`/`_find_dispatch_header()`) is
+  order-independent and skips SQL-dump noise above the real header row, matching the exact column
+  names from the owner's query: `Lot_No`/`Lot_No_Display`, `Challan_CardNo`, `Dispatch_Date`,
+  `Master`, `Quality`, `Job_Challan`, `Taka_No`, `Taka_Mts`, `Taka_Wt`, `Remark`.
+- **`_apply_dispatch()`** removes each dispatched taka (by taka Sr. No.) from its lot's `takas`/
+  `takaNos`/`takaWts` parallel arrays, recomputes `pcs`/`meters`/`weight` from what remains, and
+  flips the lot's `status` to `"dispatched"` once every taka is gone (stays `"in stock"` on a
+  partial dispatch). Every dispatch — matched or not — is appended to a new `lotDispatches` history
+  table (feeds the Lot History detail view's "Dispatches" section); an unmatched lot number is still
+  logged, just flagged, rather than silently dropped.
+- Processed files move to `done/`/`error/` with a `.log`, pruned to the newest 30 — same pattern as
+  `inbox/`.
+- Files changed: `mvp/server.py` (§28–33 all landed together this session), `mvp/static/admin.html`,
+  `mvp/static/style.css` (new `tr.tap{cursor:pointer}` rule for the clickable Lot History rows),
+  `UNITY-MOBILE/m.js`.
+
+⚠ Requires a **server restart** to pick up the `server.py` changes (new ops, new watcher thread,
+new `ALL_PAGES` entries). `admin.html`/`m.js`/`style.css` only need a browser/app refresh. New
+permissions `op_mob_log` and `lotHistory` are Administrator-only until granted to other roles via
+Admin → Roles.
