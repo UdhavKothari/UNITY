@@ -244,8 +244,17 @@ function _lotSearchIndex(){
 function lotLabel(id){
   const l=_lotById()[id]; if(!l) return id;
   const a=lotAllocation(id);
-  const qty = a.used ? (a.remainingPcs+" pcs / "+a.remaining+" m left  (of "+a.totalPcs+" / "+a.total+" m)")
-                     : (a.totalPcs+" pcs / "+a.total+" m");
+  let qty;
+  if(a.hasWorkflow){
+    const p=a.progress;
+    qty = a.totalPcs+" pcs / "+a.total+" m"
+      + (p.doneAll ? "  \u00b7  ready to dispatch"
+         : p.nextStep ? ("  \u00b7  next: "+p.nextStep.name)
+         : "  \u00b7  not started");
+  } else {
+    qty = a.used ? (a.remainingPcs+" pcs / "+a.remaining+" m left  (of "+a.totalPcs+" / "+a.total+" m)")
+                 : (a.totalPcs+" pcs / "+a.total+" m");
+  }
   return id+"  \u00b7  "+(l.customer||"no customer")+"  \u00b7  "+(l.quality||"no quality")+"  \u00b7  "+qty;
 }
 function batchLabel(id){
@@ -278,15 +287,61 @@ function lotRemainingTakas(lotId){
   const m=_lotAllocMap()[lotId];
   return m ? m.pool.slice() : [];
 }
+/* ---- griege-to-dyed lifecycle: a lot is NOT consumed by one batch anymore — it physically walks
+   every step of its quality's assigned workflow (one batch per step, on whatever machine), and only
+   once EVERY taka has cleared the LAST step is it actually done and ready to dispatch. "blocked" for
+   a workflow-active lot therefore means "finished the whole flow" (or genuinely out of stock), not
+   "some batch once touched it" — see lotProgress() for the per-step breakdown this is built on. ---- */
+function lotProgress(lotId){
+  const l=_lotById()[lotId];
+  if(!l) return {hasWorkflow:false};
+  const steps=wfStepsFull(l.quality);
+  if(!steps.length) return {hasWorkflow:false};
+  const nos=lotNos(lotId), total=nos.length;
+  const rows=steps.map(s=>{
+    const doneSet=_nosAtStepStatus(lotId, s.node, ["done"]);
+    const activeSet=_nosAtStepStatus(lotId, s.node, ["planned","running"]);
+    return Object.assign({}, s, {doneCount:doneSet.size, activeCount:activeSet.size, doneAll: total>0 && doneSet.size>=total});
+  });
+  let lastDoneIdx=-1; rows.forEach((r,i)=>{ if(r.doneCount>0) lastDoneIdx=i; });
+  const doneAll = total>0 && rows.length>0 && rows[rows.length-1].doneAll;
+  const nextIdx = doneAll ? -1 : rows.findIndex(r=>!r.doneAll);
+  return {hasWorkflow:true, steps:rows, total,
+    lastDone: lastDoneIdx>=0 ? rows[lastDoneIdx] : null,
+    nextStep: nextIdx>=0 ? rows[nextIdx] : null,
+    doneAll};
+}
+/* taka numbers of a lot that CLEARED `node` under a given set of batch statuses (e.g. ["done"] for
+   "physically finished that step", vs ["planned","running"] for "committed but not through yet").
+   Mirrors _nosAtStep but status-filtered — _nosAtStep itself stays status-blind on purpose (it drives
+   picking-eligibility / double-booking prevention, where a merely-planned batch must still count). */
+function _nosAtStepStatus(lotId, node, statuses, excludeId){
+  const set=new Set();
+  (DB.batches||[]).forEach(b=>{ if(b.wash||(b.stepNode||"")!==node||b.id===excludeId) return;
+    if(statuses && statuses.indexOf(b.status||"planned")<0) return;
+    (b.lots||[]).forEach(r=>{ if(r.lotId!==lotId) return;
+      const nos=(r.takaNos&&r.takaNos.length)?r.takaNos.map(Number):null;
+      if(nos) nos.forEach(n=>set.add(n));
+      else lotNos(lotId).slice(0, +r.pcs||0).forEach(n=>set.add(n)); }); });
+  return set;
+}
 function lotAllocation(lotId){
-  const m=_lotAllocMap()[lotId];
-  if(!m) return {used:false, blocked:false, batches:[], pcs:0, mtr:0, total:0, totalPcs:0, remaining:0, remainingPcs:0};
   const t=lotTotals([lotId]);
+  const prog=lotProgress(lotId);
+  if(prog.hasWorkflow){
+    const blocked = prog.doneAll || t.pcs<=0;
+    const m=_lotAllocMap()[lotId];
+    return {used: !!prog.lastDone, blocked, batches: m?[...new Set(m.by)]:[],
+            pcs:t.pcs, mtr:t.mtr, total:t.mtr, totalPcs:t.pcs, remaining:t.mtr, remainingPcs:t.pcs,
+            hasWorkflow:true, progress:prog};
+  }
+  const m=_lotAllocMap()[lotId];
+  if(!m) return {used:false, blocked:false, batches:[], pcs:0, mtr:0, total:0, totalPcs:0, remaining:0, remainingPcs:0, hasWorkflow:false};
   const remaining=Math.round(m.pool.reduce((a,b2)=>a+b2,0));
   const remainingPcs=m.pool.length;
   return {used:m.by.length>0, blocked:remaining<=0 && m.by.length>0,
           batches:[...new Set(m.by)], pcs:m.pcs, mtr:Math.round(m.mtr),
-          total:t.mtr, totalPcs:t.pcs, remaining:remaining, remainingPcs:remainingPcs};
+          total:t.mtr, totalPcs:t.pcs, remaining:remaining, remainingPcs:remainingPcs, hasWorkflow:false};
 }
 function lotsAvailable(quality){
   return (DB.lots||[]).filter(l=> (!quality || l.quality===quality) && !lotAllocation(l.id).blocked );
@@ -426,8 +481,12 @@ function wireLotPicker(root, opts){
     if(!ids.length){ menu.innerHTML='<div class="lotpick-empty">No matching lots</div>'; menu.classList.add("on"); place(); hi=-1; return; }
     menu.innerHTML=ids.map(id=>{
       const a=lotAllocation(id), blocked=a.blocked && id!==root.dataset.val;
-      return '<div class="lotpick-opt'+(blocked?' disabled':'')+'" data-id="'+esc(id)+'">'+esc(lotLabel(id))
-        +(a.blocked?' <span class="flag">fully used</span>':a.used?' <span class="muted">part used</span>':'')+'</div>';
+      // workflow lots are pickable throughout their whole journey — only flag once truly finished
+      // (ready to dispatch) or out of stock; legacy single-pass lots keep the old used/fully-used wording.
+      const flag = a.hasWorkflow
+        ? (a.blocked ? ' <span class="flag">'+(a.progress.doneAll?'workflow complete':'no stock left')+'</span>' : '')
+        : (a.blocked ? ' <span class="flag">fully used</span>' : a.used ? ' <span class="muted">part used</span>' : '');
+      return '<div class="lotpick-opt'+(blocked?' disabled':'')+'" data-id="'+esc(id)+'">'+esc(lotLabel(id))+flag+'</div>';
     }).join("");
     menu.classList.add("on"); place(); hi=-1;
   }
@@ -1006,6 +1065,50 @@ async function submitChangePw(){
 function toast(msg){ let t=document.getElementById("toast"); if(!t){t=document.createElement("div");t.id="toast";document.body.appendChild(t);} t.textContent=msg; t.classList.add("on"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("on"),2200); }
 const esc = s => String(s===undefined||s===null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+/* ---------- fuzzy string matching (Levenshtein similarity, no dependency) ----------
+   Used to pre-correct OCR'd camera-scan fields against the real DB values before the review
+   screen ever renders, so a handwriting misread ("CHIFON" -> "CHIFFON") is fixed automatically
+   instead of needing a manual retype. Only auto-accepts when confident: near-exact, OR a clear
+   best match with a real margin over the runner-up — otherwise the raw OCR text is left alone
+   and the existing exact-match "unknown" flag still catches it for manual review. */
+function _lev(a,b){
+  a=String(a||""); b=String(b||"");
+  const m=a.length, n=b.length;
+  if(!m) return n; if(!n) return m;
+  let prev=new Array(n+1); for(let j=0;j<=n;j++) prev[j]=j;
+  for(let i=1;i<=m;i++){
+    const cur=[i];
+    for(let j=1;j<=n;j++){
+      const cost=a.charCodeAt(i-1)===b.charCodeAt(j-1)?0:1;
+      cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost);
+    }
+    prev=cur;
+  }
+  return prev[n];
+}
+function _sim(a,b){                        // normalized similarity, 0..1 (1 = identical, case/space-insensitive)
+  a=String(a||"").trim().toLowerCase(); b=String(b||"").trim().toLowerCase();
+  if(!a && !b) return 1; if(!a || !b) return 0;
+  const L=Math.max(a.length,b.length);
+  return L?1-_lev(a,b)/L:1;
+}
+/* best fuzzy match of `raw` among `candidates` (keyFn extracts the comparable string from each).
+   Returns {value, item, score, confident, exact} or null if candidates is empty/raw is blank. */
+function fuzzyBestMatch(raw, candidates, keyFn){
+  const s=String(raw||"").trim(); if(!s || !candidates || !candidates.length) return null;
+  keyFn=keyFn||(x=>x);
+  let best=null, bestScore=-1, second=-1;
+  candidates.forEach(c=>{
+    const score=_sim(s, keyFn(c));
+    if(score>bestScore){ second=bestScore; bestScore=score; best=c; }
+    else if(score>second){ second=score; }
+  });
+  if(!best) return null;
+  const exact = bestScore>=0.999;
+  const confident = exact || (bestScore>=0.72 && (bestScore-Math.max(second,0))>=0.08);
+  return {value:keyFn(best), item:best, score:bestScore, confident, exact};
+}
+
 /* ================= QR camera scan: Batch planner "camera" button -> phone photographs the register
    (no login on the phone — the QR's token is a short-lived bearer credential for that session only)
    -> Gemini reads it -> reviewed HERE by the desktop user who opened the code, then punched into real
@@ -1083,21 +1186,62 @@ function scanQrRenderReading(){
 }
 
 /* ---- normalize + cross-check a Gemini-read machine block against the live DB, mirroring the field
-   shape the old phone-side reviewer used, so nothing else about the review UX had to change. ---- */
-function scanQrMatchMachine(name){ const raw=String(name==null?"":name).trim(); if(!raw) return "";
+   shape the old phone-side reviewer used, so nothing else about the review UX had to change.
+   Each match function first tries the old exact/punctuation-normalized check, then falls back to
+   fuzzyBestMatch — so a confident fuzzy hit REWRITES the value to the canonical DB spelling before
+   the review screen ever renders (the caller records the original OCR text in a _raw* field so the
+   preview can show a small "auto-corrected" hint instead of silently hiding the change). ---- */
+function scanQrMatchMachine(name){ const raw=String(name==null?"":name).trim(); if(!raw) return {value:"",raw:"",corrected:false};
   const norm=s=>String(s==null?"":s).replace(/\W/g,"").toUpperCase();
-  const hit=(DB.machines||[]).find(m=>norm(m.id)===norm(raw)); return hit?hit.id:raw; }
+  const hit=(DB.machines||[]).find(m=>norm(m.id)===norm(raw));
+  if(hit) return {value:hit.id, raw, corrected:hit.id!==raw};
+  const fm=fuzzyBestMatch(raw, DB.machines||[], m=>m.id);
+  if(fm && fm.confident) return {value:fm.value, raw, corrected:true};
+  return {value:raw, raw, corrected:false};
+}
+function scanQrMatchQuality(name){ const raw=String(name==null?"":name).trim(); if(!raw) return {value:"",raw:"",corrected:false};
+  const hit=(DB.qualities||[]).find(q=>String(q.name||"").toLowerCase()===raw.toLowerCase());
+  if(hit) return {value:hit.name, raw, corrected:hit.name!==raw};
+  const fm=fuzzyBestMatch(raw, DB.qualities||[], q=>q.name);
+  if(fm && fm.confident) return {value:fm.value, raw, corrected:true};
+  return {value:raw, raw, corrected:false};
+}
+function scanQrMatchShade(name, quality){ const raw=String(name==null?"":name).trim(); if(!raw) return {value:"",raw:"",corrected:false};
+  const pool=(DB.shadeRecipes||[]).filter(r=>!quality || String(r.quality||"").toLowerCase()===String(quality||"").toLowerCase());
+  const hit=pool.find(r=>String(r.shade||"").toLowerCase()===raw.toLowerCase());
+  if(hit) return {value:hit.shade, raw, corrected:hit.shade!==raw};
+  const fm=fuzzyBestMatch(raw, pool.length?pool:(DB.shadeRecipes||[]), r=>r.shade);
+  if(fm && fm.confident) return {value:fm.value, raw, corrected:true};
+  return {value:raw, raw, corrected:false};
+}
+function scanQrMatchLot(id){ const raw=String(id==null?"":id).trim(); if(!raw) return {value:"",raw:"",corrected:false};
+  const hit=(DB.lots||[]).find(l=>String(l.id)===raw);
+  if(hit) return {value:hit.id, raw, corrected:false};
+  const fm=fuzzyBestMatch(raw, DB.lots||[], l=>String(l.id));
+  if(fm && fm.confident) return {value:fm.value, raw, corrected:true};
+  return {value:raw, raw, corrected:false};
+}
 function scanQrNormalizeMc(mc){
-  const machine = scanQrMatchMachine(mc.machine);
-  const batches = ((mc.batches)||[]).map(b => ({
-    srNo: b.srNo!=null?b.srNo:"",
-    lots: ((b.lots)||[]).map(l => ({ lotNo:String(l.lotNo!=null?l.lotNo:(l.lotId!=null?l.lotId:"")).trim(),
-      pcs:l.pcs!=null?l.pcs:"", mtr:l.mtr!=null?l.mtr:"", weight:l.weight!=null?l.weight:"" })).filter(l=>l.lotNo||l.pcs||l.mtr||l.weight),
-    quality:String(b.quality!=null?b.quality:"").trim(), shade:String(b.shade!=null?b.shade:"").trim(),
-    pageNo:String(b.pageNo!=null?b.pageNo:"").trim(), inTime:String(b.inTime!=null?b.inTime:"").trim(),
-    outTime:String(b.outTime!=null?b.outTime:"").trim(), ph:String(b.ph!=null?b.ph:"").trim(),
-    remarks:String(b.remarks!=null?b.remarks:"").trim() })).filter(b => b.lots.length);
-  return {machine, batches};
+  const mm=scanQrMatchMachine(mc.machine);
+  const batches = ((mc.batches)||[]).map(b => {
+    const qm=scanQrMatchQuality(b.quality);
+    const shRaw=String(b.shade!=null?b.shade:"").trim();
+    const sm=scanQrMatchShade(shRaw, qm.value);
+    return {
+      srNo: b.srNo!=null?b.srNo:"",
+      lots: ((b.lots)||[]).map(l => {
+        const raw=String(l.lotNo!=null?l.lotNo:(l.lotId!=null?l.lotId:"")).trim();
+        const lm=scanQrMatchLot(raw);
+        return { lotNo:lm.value, _rawLotNo: lm.corrected?lm.raw:"",
+          pcs:l.pcs!=null?l.pcs:"", mtr:l.mtr!=null?l.mtr:"", weight:l.weight!=null?l.weight:"" };
+      }).filter(l=>l.lotNo||l.pcs||l.mtr||l.weight),
+      quality:qm.value, _rawQuality: qm.corrected?qm.raw:"",
+      shade:sm.value, _rawShade: sm.corrected?sm.raw:"",
+      pageNo:String(b.pageNo!=null?b.pageNo:"").trim(), inTime:String(b.inTime!=null?b.inTime:"").trim(),
+      outTime:String(b.outTime!=null?b.outTime:"").trim(), ph:String(b.ph!=null?b.ph:"").trim(),
+      remarks:String(b.remarks!=null?b.remarks:"").trim() };
+  }).filter(b => b.lots.length);
+  return {machine:mm.value, _rawMachine: mm.corrected?mm.raw:"", batches};
 }
 function scanQrLotKnown(id){ return !!id && (DB.lots||[]).some(l => String(l.id)===String(id)); }
 function scanQrQualKnown(name){ const n=String(name||"").trim().toLowerCase(); return !n || (DB.qualities||[]).some(q => String(q.name||"").toLowerCase()===n); }
@@ -1105,9 +1249,9 @@ function scanQrShadeKnown(q,sh){ const s=String(sh||"").trim().toLowerCase(); if
   return (DB.shadeRecipes||[]).some(r => String(r.shade||"").toLowerCase()===s && (!q || String(r.quality||"").toLowerCase()===String(q||"").toLowerCase())); }
 function scanQrMcKnown(id){ return (DB.machines||[]).some(m => String(m.id)===String(id)); }
 
-function scanQrSet(mi,bi,f,v){ SCANQR.program.machines[mi].batches[bi][f]=v; scanQrRenderPreview(); }
-function scanQrSetLot(mi,bi,li,f,v){ SCANQR.program.machines[mi].batches[bi].lots[li][f]=v; scanQrRenderPreview(); }
-function scanQrSetMachine(mi,v){ SCANQR.program.machines[mi].machine=v; scanQrRenderPreview(); }
+function scanQrSet(mi,bi,f,v){ const b=SCANQR.program.machines[mi].batches[bi]; b[f]=v; if(f==="quality") b._rawQuality=""; if(f==="shade") b._rawShade=""; scanQrRenderPreview(); }
+function scanQrSetLot(mi,bi,li,f,v){ const l=SCANQR.program.machines[mi].batches[bi].lots[li]; l[f]=v; if(f==="lotNo") l._rawLotNo=""; scanQrRenderPreview(); }
+function scanQrSetMachine(mi,v){ SCANQR.program.machines[mi].machine=v; SCANQR.program.machines[mi]._rawMachine=""; scanQrRenderPreview(); }
 function scanQrRemoveLot(mi,bi,li){ const b=SCANQR.program.machines[mi].batches[bi]; b.lots.splice(li,1); if(!b.lots.length) scanQrRemoveBatch(mi,bi); else scanQrRenderPreview(); }
 function scanQrRemoveBatch(mi,bi){ const m=SCANQR.program.machines[mi]; m.batches.splice(bi,1); if(!m.batches.length) SCANQR.program.machines.splice(mi,1);
   if(!SCANQR.program.machines.length){ scanQrRenderWait(); scanQrPollStart(); return; } scanQrRenderPreview(); }
@@ -1117,20 +1261,23 @@ function scanQrRenderPreview(){
   const modal = document.getElementById("scanqr_modal"); if(modal) modal.style.width="min(95vw,1360px)";   // widen to a real register sheet once there's something to review
   const scrollY = body.scrollTop;
   const P = SCANQR.program; let flags = 0;
+  let corrections = 0;
+  const autoHint = raw => raw ? ' <span class="sp-auto material-symbols-rounded" title="Auto-matched — read as \''+esc(raw)+'\'">auto_fix_high</span>' : '';
   const mcOptions = (sel) => '<option value="">— pick machine —</option>' + (DB.machines||[]).slice()
       .sort((a,b)=>String(a.id).localeCompare(String(b.id),undefined,{numeric:true}))
       .map(m => '<option'+(String(m.id)===String(sel)?' selected':'')+'>'+esc(m.id)+'</option>').join("")
       + (sel && !scanQrMcKnown(sel) ? '<option selected>'+esc(sel)+'</option>' : '');
   const sheets = P.machines.map((mc, mi) => {
-    const mcBad = !scanQrMcKnown(mc.machine); if(mcBad) flags++;
+    const mcBad = !scanQrMcKnown(mc.machine); if(mcBad) flags++; if(mc._rawMachine) corrections++;
     const rows = mc.batches.map((b, bi) => {
       const qBad = !scanQrQualKnown(b.quality), shBad = !scanQrShadeKnown(b.quality, b.shade);
       if(qBad) flags++; if(shBad) flags++;
+      if(b._rawQuality) corrections++; if(b._rawShade) corrections++;
       const n = b.lots.length;
       return b.lots.map((l, li) => {
-        const lBad = !scanQrLotKnown(l.lotNo); if(lBad) flags++;
+        const lBad = !scanQrLotKnown(l.lotNo); if(lBad) flags++; if(l._rawLotNo) corrections++;
         const lotCells =
-            '<td><input class="'+(lBad?'bad':'')+'" title="'+(lBad?'Lot not in system':'')+'" value="'+esc(l.lotNo)+'" placeholder="lot no" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'lotNo\',this.value)"></td>'
+            '<td><span class="sp-fcell"><input class="'+(lBad?'bad':'')+'" title="'+(lBad?'Lot not in system':'')+'" value="'+esc(l.lotNo)+'" placeholder="lot no" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'lotNo\',this.value)">'+autoHint(l._rawLotNo)+'</span></td>'
           + '<td><input class="tnum" inputmode="numeric" value="'+esc(l.pcs)+'" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'pcs\',this.value)"></td>'
           + '<td><input class="tnum" inputmode="numeric" value="'+esc(l.mtr)+'" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'mtr\',this.value)"></td>'
           + '<td><span class="sp-kgcell"><input class="tnum" inputmode="numeric" value="'+esc(l.weight)+'" onchange="scanQrSetLot('+mi+','+bi+','+li+',\'weight\',this.value)">'
@@ -1140,8 +1287,8 @@ function scanQrRenderPreview(){
         return '<tr class="sp-brow0">'
           + '<td class="tnum" rowspan="'+n+'">#'+esc(b.srNo||(bi+1))+'</td>'
           + lotCells
-          + '<td rowspan="'+n+'"><input class="'+(qBad?'bad':'')+'" title="'+(qBad?'Quality not in system':'')+'" value="'+esc(b.quality)+'" placeholder="quality" onchange="scanQrSet('+mi+','+bi+',\'quality\',this.value)"></td>'
-          + '<td rowspan="'+n+'"><input class="'+(shBad?'bad':'')+'" title="'+(shBad?'Shade not in system':'')+'" value="'+esc(b.shade)+'" placeholder="shade" onchange="scanQrSet('+mi+','+bi+',\'shade\',this.value)"></td>'
+          + '<td rowspan="'+n+'"><span class="sp-fcell"><input class="'+(qBad?'bad':'')+'" title="'+(qBad?'Quality not in system':'')+'" value="'+esc(b.quality)+'" placeholder="quality" onchange="scanQrSet('+mi+','+bi+',\'quality\',this.value)">'+autoHint(b._rawQuality)+'</span></td>'
+          + '<td rowspan="'+n+'"><span class="sp-fcell"><input class="'+(shBad?'bad':'')+'" title="'+(shBad?'Shade not in system':'')+'" value="'+esc(b.shade)+'" placeholder="shade" onchange="scanQrSet('+mi+','+bi+',\'shade\',this.value)">'+autoHint(b._rawShade)+'</span></td>'
           + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.pageNo)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'pageNo\',this.value)"></td>'
           + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.inTime)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'inTime\',this.value)"></td>'
           + '<td rowspan="'+n+'"><input class="tnum" value="'+esc(b.outTime)+'" placeholder="—" onchange="scanQrSet('+mi+','+bi+',\'outTime\',this.value)"></td>'
@@ -1152,7 +1299,7 @@ function scanQrRenderPreview(){
       }).join("");
     }).join("");
     return '<div class="sp-mcsheet">'
-      + '<div class="sp-mch2"><select class="'+(mcBad?'bad':'')+'" onchange="scanQrSetMachine('+mi+',this.value)">'+mcOptions(mc.machine)+'</select>'
+      + '<div class="sp-mch2"><span class="sp-fcell"><select class="'+(mcBad?'bad':'')+'" onchange="scanQrSetMachine('+mi+',this.value)">'+mcOptions(mc.machine)+'</select>'+autoHint(mc._rawMachine)+'</span>'
         + '<span class="sp-count">'+mc.batches.length+' batch'+(mc.batches.length!=1?'es':'')+'</span>'
         + (mcBad ? '<span class="sp-flag"><span class="material-symbols-rounded">priority_high</span>machine not recognised — pick one</span>' : '')
         + '</div>'
@@ -1160,6 +1307,7 @@ function scanQrRenderPreview(){
         + '<tbody>'+rows+'</tbody></table></div></div>'; }).join("");
   const total = P.machines.reduce((a,m)=>a+m.batches.length,0);
   const head = '<div class="card sp-top"><div><b>'+total+' batch'+(total!=1?'es':'')+'</b> · '+P.machines.length+' machine'+(P.machines.length!=1?'s':'')+'</div>'
+    + (corrections ? '<div class="sp-autosum"><span class="material-symbols-rounded">auto_fix_high</span>'+corrections+' field(s) auto-matched to the system spelling — hover the marked ones to see the original OCR text</div>' : '')
     + (flags ? '<div class="sp-flagsum"><span class="material-symbols-rounded">priority_high</span>'+flags+' to review</div>' : '<div class="sp-okline"><span class="material-symbols-rounded">check_circle</span>all recognised</div>')+'</div>';
   const errline = (SCANQR.errors&&SCANQR.errors.length) ? '<div class="scan-err"><span class="material-symbols-rounded">warning</span><span>'+SCANQR.errors.map(e=>'Spread '+e.spread+' couldn\'t be read — recapture it on the phone and send again.').join('<br>')+'</span></div>' : '';
   body.innerHTML = errline + head + sheets

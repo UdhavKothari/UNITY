@@ -410,90 +410,95 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-del .material-symbols-rounded{color:var(--muted)}
 .mp-del:hover{border-color:#f0cccc;background:var(--danger-soft)}
 .mp-del:hover .material-symbols-rounded{color:var(--danger)}
-.mp-editor{display:flex;flex-direction:column;gap:18px}
-.mp-editor-scroll{overflow-x:auto;padding:12px;background:var(--accent-soft)}
-/* create mode: Seq | lots(2–5) | Quality | Shade | Pg No. | Remarks | actions — In/Out/PH hidden (always empty
-   on a new batch). Shade/Pg No. are kept narrow (numbers/short codes don't need width) so Remarks can sit right
-   next to Pg No. instead of on its own full-width row below. minmax(0,·) keeps every track purely fractional so
-   the header grid and the row grid compute identical widths (a select's intrinsic width can't stretch a row
-   track past its header). */
-.mp-editor-head,.mp-editor-row{display:grid;gap:6px;min-width:980px;
-  grid-template-columns:minmax(0,.4fr) minmax(0,1.5fr) minmax(0,.5fr) minmax(0,.55fr) minmax(0,.62fr) minmax(0,1.25fr) minmax(0,.5fr) minmax(0,.3fr) minmax(0,1.4fr) 200px}
-/* edit mode: also show the read-only In / Out / PH columns */
-.mp-editor.editing .mp-editor-head,.mp-editor.editing .mp-editor-row{min-width:1200px;
-  grid-template-columns:minmax(0,.4fr) minmax(0,1.25fr) minmax(0,.48fr) minmax(0,.5fr) minmax(0,.58fr) minmax(0,1.05fr) minmax(0,.45fr) minmax(0,.28fr) minmax(0,1.2fr) minmax(0,.6fr) minmax(0,.6fr) minmax(0,.5fr) 200px}
-.mp-editor-head{padding:0 2px 6px;font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-.mp-editor-row{align-items:start}
-.mp-ed-seq{align-self:center;padding:10px 2px;font:500 12px/1 var(--mono);color:var(--ink-2)}
-.mp-hd-lots{grid-column:2 / span 4}                 /* the lot block header spans lot·pcs·mtr·kg */
-.mp-ed-lots{grid-column:2 / span 4;min-width:0}
-.mp-ed-lots .lotq-head{display:none}                /* lot inputs are self-labelled by their placeholders */
-.mp-ed-lots .mp-lotline{margin-bottom:6px}
-.mp-ed-lots .mp-lotline:last-child{margin-bottom:0}
-.mp-editor-row>.mp-ed-f{min-width:0}                /* the shared grid controls width, not the field's own min-width */
-.mp-editor-row>.mp-ed-f select,.mp-editor-row>.mp-ed-f input{min-height:38px}
+.mp-editor{display:flex;flex-direction:column;gap:12px}
+.mp-editor-scroll{padding:0;display:flex;flex-direction:column;gap:10px}
+.mp-ed-seqline{display:flex;align-items:center;gap:10px}
+.mp-ed-seq{font:600 12.5px/1 var(--mono);color:var(--ink-2);background:rgba(255,255,255,.65);border-radius:var(--r-s);padding:5px 9px}
+/* Two visually distinct panels — Lots (a variable-length list of lot·pcs·mtr·kg lines) is kept apart
+   from Quality & details (the fixed per-batch fields) so the two kinds of data read as separate groups
+   at a glance, instead of one long undifferentiated row. */
+.mp-ed-panel{background:rgba(255,255,255,.55);border:1px solid #c9d5ea;border-radius:var(--r-c);padding:10px 12px}
+.mp-ed-panel-h{display:flex;align-items:center;gap:6px;font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:9px;padding-bottom:8px;border-bottom:1px solid #d7e0ef}
+.mp-ed-panel-h .material-symbols-rounded{font-size:14px;color:var(--accent)}
+.mp-ed-panel-hint{margin-left:auto;font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)}
+#mp_lots .lotq-head{display:none}                /* lot inputs are self-labelled by their placeholders */
+/* lot line: lot no. gets most of the width; pcs/mtr/kg are short numbers and stay narrow (kg narrowest —
+   it's a read-back of mtr via the GSM formula, not something typed at length). Scoped to #mp_lots so the
+   Admin batch maker's own (differently-shaped) .lotqrow is untouched. */
+#mp_lots .lotqrow{display:grid;grid-template-columns:2fr .5fr .6fr .42fr;gap:8px;align-items:center;margin-bottom:8px;animation:riseIn .18s var(--ease) both}
+#mp_lots .lotqrow select,#mp_lots .lotqrow input{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);
+  font:inherit;font-family:var(--mono);font-size:12.5px;background:var(--surface);color:var(--ink)}
+#mp_lots .lotqrow select:focus,#mp_lots .lotqrow input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+#mp_lots .mp-lotline{margin-bottom:6px}
+#mp_lots .mp-lotline:last-child{margin-bottom:0}
 .mp-ed-readonly{justify-content:center;align-items:center;min-height:38px;text-align:center}
-.mp-ed-readonly span{font-size:9px;color:var(--muted)}
 .mp-ed-readonly b{font:600 12px/1.2 var(--mono);color:var(--ink)}
-.mp-ed-f{display:flex;flex-direction:column;gap:4px;font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);min-width:180px}
-.mp-ed-f select{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;text-transform:none;letter-spacing:0;background:var(--surface);color:var(--ink);transition:border-color var(--dur),box-shadow var(--dur)}
-.mp-ed-f input{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;text-transform:none;letter-spacing:0;background:var(--surface);color:var(--ink)}
+.mp-ed-metarow{display:flex;flex-wrap:wrap;gap:12px}
+.mp-ed-f{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:110px}
+.mp-ed-f label{font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.mp-ed-shade{flex:1.7 1 200px}                      /* widened — this is the field operators scan for, and it no longer shares its row with an add-shade button */
+.mp-ed-remarks{flex:2.2 1 220px}
+.mp-ed-f select{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;background:var(--surface);color:var(--ink);transition:border-color var(--dur),box-shadow var(--dur)}
+.mp-ed-f input{width:100%;padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;background:var(--surface);color:var(--ink)}
 .mp-ed-f select:hover{border-color:#c9d2df}
 .mp-ed-f select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .mp-ed-f select.locked{background:var(--surface-2);color:var(--ink-2);cursor:not-allowed;border-style:dashed}
 .mp-sh-row{display:flex;gap:6px;align-items:stretch}
 .mp-sh-row select,.mp-sh-row .mp-sh-input{flex:1 1 auto;min-width:0}
-.mp-sh-input{padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;text-transform:none;letter-spacing:0;background:var(--surface);color:var(--ink);transition:border-color var(--dur),box-shadow var(--dur)}
+.mp-sh-input{padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;background:var(--surface);color:var(--ink);transition:border-color var(--dur),box-shadow var(--dur)}
 .mp-sh-input::placeholder{color:var(--faint)}
 .mp-sh-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-.mp-sh-add,.mp-sh-ok{flex:0 0 auto;padding:0 10px}
+.mp-sh-ok{flex:0 0 auto;padding:0 10px}
 .mp-sh-ok .material-symbols-rounded{color:var(--accent)}   /* affirmative sub-action, still secondary vs the batch Save */
-.mp-ed-actions{display:flex;gap:5px;align-items:center;align-self:center;justify-content:flex-end}
+.mp-ed-step{display:flex;flex-direction:column;gap:4px;margin-top:10px;font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.mp-ed-step select{padding:9px 10px;border:1px solid var(--line-2);border-radius:var(--r-c);font:inherit;font-size:13px;background:var(--surface);color:var(--ink)}
+.mp-ed-actions{display:flex;gap:5px;align-items:center}
 .mp-ed-actions .btn{white-space:nowrap}
-.mp-ed-lhead{margin-top:2px}
-.mp-lotline{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-c);padding:8px;margin-bottom:6px}
-.mp-add-lot{margin-top:4px}
-.mp-ed-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.mp-ed-total{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+/* footer: Add / Select taka / Remove lot read as one group (all three act on lots), the running total
+   sits next, Save/Cancel are pushed to the far right */
+.mp-ed-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mp-ed-total{font-family:var(--mono);font-size:12px;color:var(--ink-2);margin-left:auto}
 .mp-ed-total .flag{color:var(--danger);font-family:var(--font);margin-left:6px}
+.mp-add-lot{margin:0}
 
-/* ===== Sleek batch editor — one calm blue panel behind the WHOLE batch (fields + notes + add-lot);
-   fields are transparent with a hairline underline as the divider (no boxed white inputs), lifting to
-   white on focus. Scoped to .mp-editor so the Admin batch maker keeps its own boxed inputs. ===== */
-.mp-editor{background:var(--accent-soft);border-radius:var(--r);padding:14px 16px;gap:12px}   /* no inner border — the machine card's accent outline is the only outline */
-.mp-editor-scroll{padding:0;background:transparent}
+/* ===== Sleek batch editor — one calm blue outer panel behind the whole batch; the two inner
+   .mp-ed-panel cards read as pale surfaces against it, and their fields are transparent with a
+   hairline underline (no boxed white inputs), lifting to white on focus. Scoped to .mp-editor so
+   the Admin batch maker keeps its own boxed inputs. ===== */
+.mp-editor{background:var(--accent-soft);border-radius:var(--r);padding:14px 16px}   /* no inner border — the machine card's accent outline is the only outline */
 .mp-editor .mp-lotline{background:transparent;border:0;padding:0}
-.mp-editor .lotqrow{grid-template-columns:1.6fr .25fr .28fr .8fr auto 38px}   /* pcs/mtr shrunk to ~35% — they're short numbers; frees width for Remarks up in the row */
-.mp-editor .mp-ed-lots .mp-lotline + .mp-lotline{border-top:1px solid #c9d5ea;padding-top:8px;margin-top:2px}   /* divider between stacked lots */
+.mp-editor #mp_lots .mp-lotline + .mp-lotline{border-top:1px solid #c9d5ea;padding-top:8px;margin-top:2px}   /* divider between stacked lots */
+.mp-editor #mp_lots .lotqrow.active .lotpick-in,
+.mp-editor #mp_lots .lotqrow.active input{border-bottom-color:var(--accent)}   /* the lot line Select taka / Remove lot will act on */
 .mp-editor .mp-ed-f select,
 .mp-editor .mp-ed-f input,
 .mp-editor .mp-sh-input,
-.mp-editor .lotqrow .lotpick-in,
-.mp-editor .lotqrow input{
+.mp-editor .mp-ed-step select,
+.mp-editor #mp_lots .lotqrow .lotpick-in,
+.mp-editor #mp_lots .lotqrow input{
   background:transparent;border:0;border-bottom:1.5px solid #c3d0e8;border-radius:0;
   padding:8px 6px 7px;box-shadow:none;transition:border-color var(--dur),background var(--dur)}
 .mp-editor .mp-ed-f select:hover,
-.mp-editor .lotqrow .lotpick-in:hover,
-.mp-editor .lotqrow input:hover{border-bottom-color:#9cafd4}
+.mp-editor #mp_lots .lotqrow .lotpick-in:hover,
+.mp-editor #mp_lots .lotqrow input:hover{border-bottom-color:#9cafd4}
 .mp-editor .mp-ed-f select:focus,
 .mp-editor .mp-ed-f input:focus,
 .mp-editor .mp-sh-input:focus,
-.mp-editor .lotqrow .lotpick-in:focus,
-.mp-editor .lotqrow input:focus{
+.mp-editor #mp_lots .lotqrow .lotpick-in:focus,
+.mp-editor #mp_lots .lotqrow input:focus{
   outline:none;border-bottom-color:var(--accent);box-shadow:none;
   background:rgba(255,255,255,.7);border-radius:var(--r-s) var(--r-s) 0 0}
 .mp-editor input::placeholder,.mp-editor .lotpick-in::placeholder{color:var(--muted)}
-.mp-editor .lotqrow .b-takabtn{background:transparent;border:0;color:var(--ink-2);height:auto;padding:6px 7px}
-.mp-editor .lotqrow .b-takabtn:hover{background:rgba(255,255,255,.65);color:var(--accent)}
-.mp-editor .lotqrow .rm{background:transparent;border:0;color:var(--danger);height:auto;padding:6px 8px}
-.mp-editor .lotqrow .rm:hover{background:var(--danger-soft)}
-.mp-editor .mp-sh-add,.mp-editor .mp-sh-ok{background:transparent;border:0;color:var(--ink-2)}
-.mp-editor .mp-sh-add:hover,.mp-editor .mp-sh-ok:hover{background:rgba(255,255,255,.65);color:var(--accent)}
+.mp-editor .mp-sh-ok{background:transparent;border:0;color:var(--ink-2)}
+.mp-editor .mp-sh-ok:hover{background:rgba(255,255,255,.65);color:var(--accent)}
 .mp-editor .mp-sh-ok .material-symbols-rounded{color:var(--accent)}
-.mp-editor .mp-add-lot{background:transparent;border:1px dashed #b7c6e4;color:var(--ink-2)}
-.mp-editor .mp-add-lot:hover{background:rgba(255,255,255,.55);border-color:var(--accent);color:var(--accent)}
+.mp-editor .mp-add-lot,.mp-editor .mp-ed-foot>.btn.ghost{background:transparent;border:1px dashed #b7c6e4;color:var(--ink-2)}
+.mp-editor .mp-add-lot:hover,.mp-editor .mp-ed-foot>.btn.ghost:hover{background:rgba(255,255,255,.55);border-color:var(--accent);color:var(--accent)}
+.mp-editor .mp-ed-foot .mp-del{color:var(--ink-2)}
+.mp-editor .mp-ed-foot .mp-del:hover{border-color:#f0cccc;color:var(--danger);background:var(--danger-soft)}
 .mp-editor .mp-ed-actions .btn.ghost{background:transparent;border:0;color:var(--ink-2)}   /* cancel reads subtle; Save batch stays the one solid primary */
 .mp-editor .mp-ed-actions .btn.ghost:hover{background:rgba(255,255,255,.65);color:var(--ink)}
+@media(max-width:720px){#mp_lots .lotqrow{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){
   .mp-machine.editing{width:calc(100vw - 16px);margin-left:calc((100% - 100vw + 16px)/2)}
 }
@@ -645,6 +650,8 @@ tr.linked td{background:var(--success-soft)}
 .sp-flagsum .material-symbols-rounded{font-size:16px}
 .sp-okline{display:inline-flex;align-items:center;gap:5px;font-weight:700;font-size:13px;color:var(--success);background:var(--success-soft);padding:6px 11px;border-radius:20px}
 .sp-okline .material-symbols-rounded{font-size:16px}
+.sp-autosum{display:inline-flex;align-items:center;gap:5px;font-weight:600;font-size:12.5px;color:var(--accent);background:var(--accent-soft);padding:6px 11px;border-radius:20px}
+.sp-autosum .material-symbols-rounded{font-size:15px}
 /* ---- register review: a real sheet per machine (table, not stacked cards) — reuses the app's
    standard table (sticky mono header, hover row tint) with cells as inline-editable, borderless-until-
    focus inputs so it reads like an actual spreadsheet, not a form. Flags = amber cell + tooltip
@@ -674,6 +681,11 @@ tr.linked td{background:var(--success-soft)}
 .sp-rm2:hover{background:var(--danger-soft)}
 .sp-flag{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;color:var(--warning);background:var(--warning-soft);padding:3px 8px;border-radius:7px;white-space:nowrap}
 .sp-flag .material-symbols-rounded{font-size:14px}
+/* small "auto-matched by fuzzy search" hint next to a pre-corrected field — the original OCR text
+   lives in its title tooltip so the correction is visible on hover, never hidden. */
+.sp-fcell{display:flex;align-items:center;gap:3px;min-width:0}
+.sp-fcell input,.sp-fcell select{flex:1 1 auto;min-width:0}
+.sp-auto{flex:none;font-size:15px!important;color:var(--accent);cursor:help}
 .sp-actions{display:flex;gap:10px;margin-top:4px}
 .sp-actions .btn{width:auto;flex:1}
 

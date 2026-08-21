@@ -12,7 +12,7 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections, copy
 import base64, urllib.request, urllib.error   # base64: decode uploaded scan photos · urllib: the Gemini API call (the one deliberate outbound-internet call in this app)
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1103,6 +1103,64 @@ class Handler(BaseHTTPRequestHandler):
                 _log(db, u["username"], to, "batches", b["id"], "batch " + b["id"] + " -> " + to)
                 save_db(db)
                 return self._send(200, {"ok": True, "row": b})
+
+            if op == "batchAddAddition":
+                # mid-batch dye ADDITION: the jet is cooled to pull a sample, the supervisor calls for
+                # more of some dye (or a different one) to correct the shade WHILE the fabric is still
+                # inside the machine. Logged on the batch itself — no new batch, no cap on how many times
+                # (an addition is a small top-up, not a full re-run). Distinct from a REDYE (below).
+                if _need_edit(("batches", "op_batch")):
+                    return self._send(403, {"error": "forbidden"})
+                b = next((x for x in db.get("batches", []) if x.get("id") == req.get("id")), None)
+                if not b:
+                    return self._send(404, {"error": "batch not found"})
+                note = str(req.get("note") or "").strip()
+                if not note:
+                    return self._send(400, {"error": "Add a note describing what was added"})
+                entry = {"id": "AD-" + uuid.uuid4().hex[:6], "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                         "by": u["username"], "note": note}
+                b.setdefault("additions", []).append(entry)
+                _log(db, u["username"], "addition", "batches", b["id"], "logged a dye addition on " + b["id"] + ": " + note)
+                save_db(db)
+                return self._send(200, {"ok": True, "row": b})
+
+            if op == "batchRedye":
+                # REDYE: the fabric already came OUT of the jet (batch completed) and there's a colour
+                # mismatch, so the whole piece has to go back in. This is a NEW batch (same lots/takas/
+                # quality/shade/machine as the original, same workflow step) linked back via redyeOf, so
+                # Lot history / Batch history can show the lineage. Capped at 5 redyes per ORIGINAL batch
+                # (redyeOf always points at the root of the chain, so redyeing a redye still counts
+                # against the same cap rather than resetting it).
+                if _need_edit(("batches", "op_batch")):
+                    return self._send(403, {"error": "forbidden"})
+                orig = next((x for x in db.get("batches", []) if x.get("id") == req.get("id")), None)
+                if not orig:
+                    return self._send(404, {"error": "batch not found"})
+                if orig.get("status") != "done":
+                    return self._send(400, {"error": "Only a completed batch (fabric already out of the machine) can be redyed"})
+                note = str(req.get("note") or "").strip()
+                if not note:
+                    return self._send(400, {"error": "Add a note describing the colour mismatch"})
+                root = orig.get("redyeOf") or orig["id"]
+                existing = [x for x in db.get("batches", []) if x.get("redyeOf") == root]
+                next_no = len(existing) + 1
+                if next_no > 5:
+                    return self._send(400, {"error": "This batch has already been redyed 5 times — the maximum."})
+                row = {"lots": copy.deepcopy(orig.get("lots") or []), "lotIds": list(orig.get("lotIds") or []),
+                       "quality": orig.get("quality", ""), "shadeNo": orig.get("shadeNo", ""),
+                       "machine": orig.get("machine", ""), "mcPin": orig.get("mcPin") or orig.get("machine", ""),
+                       "pgNo": orig.get("pgNo", ""), "pcs": orig.get("pcs", 0), "mtr": orig.get("mtr", 0),
+                       "weight": orig.get("weight", 0), "status": "planned",
+                       "redyeOf": root, "redyeNo": next_no, "redyeNote": note,
+                       "seq": max([int(x.get("seq") or 0) for x in db.get("batches", []) if x.get("machine") == orig.get("machine")] or [0]) + 1}
+                if orig.get("stepNode"):
+                    row["stepNode"] = orig["stepNode"]; row["proc"] = orig.get("proc", "")
+                row["id"] = _batch_id(db, row)
+                db.setdefault("batches", []).append(row)
+                _log(db, u["username"], "redye", "batches", row["id"],
+                     "redye #%d of %s (from %s): %s" % (next_no, root, orig["id"], note))
+                save_db(db)
+                return self._send(200, {"ok": True, "row": row, "redyeNo": next_no})
 
             if op == "systemUpdate":
                 # pull the latest code from GitHub so the system can be updated WITHOUT visiting the PC.

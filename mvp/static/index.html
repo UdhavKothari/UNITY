@@ -118,99 +118,10 @@ document.getElementById("secTabs").addEventListener("click",e=>{
 function show(s){document.querySelector(`#secTabs button[data-s="${s}"]`).click();}
 
 /* init */
-/* ---------- batch maker ---------- */
-function bLotCount(){ const c=document.getElementById("b_lotCount"),b=document.getElementById("b_lotBox"); if(c&&b) c.textContent=b.children.length+" / 8"; }
-function bLotFilter(l){
-  const q=document.getElementById("b_qual").value;
-  const locked=document.getElementById("b_qual").disabled;
-  const ordEl=document.getElementById("b_order");
-  const ord=(DB.orders||[]).find(o=>o.id===(ordEl?ordEl.value:""));
-  return (!q || sameFabric(l.quality,q) || !locked) && (!ord || l.customer===ord.cust);
-}
-function bLotRow(){
-  return `<div class="lotqrow">
-    ${lotPickerHTML("", "b-lot")}
-    <input class="b-pcs" type="number" min="0" placeholder="pcs">
-    <input class="b-mtr" type="number" min="0" placeholder="m">
-    <input class="b-wt"  type="number" min="0" step="0.1" placeholder="kg">
-    <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span>Takas</button>
-    <button type="button" class="rm" title="remove" onclick="this.closest('.lotqrow').remove();bLotCount();bSyncTotals();bRefreshOrders();bLockQuality()">&times;</button>
-    <div class="taka-pick"></div></div>`;
-}
-function bAddLot(){
-  const box=document.getElementById("b_lotBox");
-  if(!(DB.lots||[]).length){ toast("No lots yet — add them in Admin → Lot master"); return; }
-  if(box.children.length>=8){ toast("A batch can hold at most 8 lots"); return; }
-  box.insertAdjacentHTML("beforeend", bLotRow());
-  const row=box.lastElementChild;
-  wireLotPicker(row.querySelector(".b-lot"), { filterFn: bLotFilter,
-    onSelect: ()=>{ bLockQuality(); bPrefillRow(row); bSyncTotals(); bRefreshOrders(); } });
-  row.querySelectorAll(".b-pcs,.b-mtr,.b-wt").forEach(i=>i.oninput=bSyncTotals);
-  row.querySelector(".b-mtr").addEventListener("input",()=>bSuggestWeight(row));
-  row.querySelector(".b-mtr").addEventListener("change",()=>{ bSnapRow(row); bSyncTotals(); });
-  bLockQuality(); bPrefillRow(row); bLotCount(); bSyncTotals(); bRefreshOrders();
-}
-function bPrefillRow(row){                       // start from what is still LEFT in the lot
-  const id=lotPickVal(row.querySelector(".b-lot")), a=lotAllocation(id);
-  row.querySelector(".b-mtr").value=a.remaining||"";
-  row.querySelector(".b-mtr").max=a.remaining||undefined;
-  row.querySelector(".b-pcs").max=a.remainingPcs||undefined;
-  bSnapRow(row);
-}
-
-/* ---- a taka cannot be cut: round the ask up to whole takas ---- */
-function bSnapRow(row){
-  const id=lotPickVal(row.querySelector(".b-lot"));
-  const out=row.querySelector(".taka-pick");
-  const want=+row.querySelector(".b-mtr").value||0;
-  if(!id || !want){ row.dataset.takas="[]"; if(out) out.innerHTML=""; return; }
-  const pool=lotRemainingTakas(id);
-  const pick=pickTakas(pool, want);
-  row.dataset.takas=JSON.stringify(pick.takas);
-  row.querySelector(".b-pcs").value=pick.pcs;
-  row.querySelector(".b-mtr").value=pick.total;
-  bSuggestWeight(row);
-  if(!out) return;
-  if(!pick.takas.length){ out.innerHTML='<span class="flag">nothing left in this lot</span>'; return; }
-  const over=pick.total-want;
-  out.innerHTML='<span class="material-symbols-rounded">straighten</span>'
-    + '<b>'+pick.pcs+'</b> whole takas &middot; '+pick.takas.join(' + ')+' = <b class="tnum">'+pick.total+' m</b>'
-    + (pick.short ? ' <span class="flag">only '+pick.total+' m left — short by '+(want-pick.total)+' m</span>'
-      : over>0 ? ' <span class="muted">(asked '+want+' m; +'+over+' m — takas cannot be cut)</span>' : '');
-}
-
-/* ---- M/C No: dropdown of dye-capable machines for the selected quality ---- */
-function bRefreshMachines(){
-  const q=Q(document.getElementById("b_qual").value);
-  const sel=document.getElementById("b_mc"); if(!sel) return;
-  const cur=sel.value;
-  const dyeType = q ? routeStep(q, dyeStepOf(q)).mc : "";
-  const list = dyeType ? DB.machines.filter(m=>m.type===dyeType) : [];
-  sel.innerHTML = '<option value="">— auto-assign —</option>'
-    + list.map(m=>'<option value="'+esc(m.id)+'"'+(m.id===cur?" selected":"")+'>'+esc(m.id)+' ('+m.capMax+' kg)</option>').join("");
-}
-
-/* ---- one batch = one fabric: the first lot decides it — rebranded names (shared fabric
-   group tag) are treated as the same fabric and can combine in one batch ---- */
-function bLockQuality(){
-  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>lotPickVal(s2)).filter(Boolean);
-  const names=ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.quality;}).filter(Boolean);
-  const qs=[...new Set(names)];
-  const groupKey=n=>{ const q=Q(n); return (q&&q.fabricGroup)||n; };
-  const groups=[...new Set(names.map(groupKey))];
-  const sel=document.getElementById("b_qual"), hint=document.getElementById("b_qualHint");
-  if(groups.length===1 && names.length && sel.value!==names[0]){ sel.value=names[0]; bRefreshShades(); bRefreshOrders(); bRefreshMachines(); }
-  sel.disabled = qs.length>0;
-  sel.classList.toggle("locked", qs.length>0);
-  if(hint) hint.innerHTML = qs.length
-    ? '<span class="material-symbols-rounded">lock</span>Locked by '+esc(ids[0])+(qs.length>1?' — combining rebranded names as one fabric':'')+' — a batch cannot mix different fabrics'
-    : 'Pick a quality, or just add a lot and it will set itself';
-}
-function bSuggestWeight(row){                    // weight suggested from meters x gsm, still editable
-  const q=Q(document.getElementById("b_qual").value);
-  const m=+row.querySelector(".b-mtr").value||0;
-  if(q && m) row.querySelector(".b-wt").value=Math.round(kgOf(m,q.gsm,q.width)*10)/10;
-}
+/* ---- shared taka picker: a per-lot "pick exact takas" popover. Used only by Mass Planning now —
+   the old free-standing "Batch maker" form this was built alongside (bLotBox/bLotRow/submitBatch/
+   etc) had no DOM to attach to (no #b_lotBox anywhere in this page — Mass Planning replaced it
+   outright a while back) and was pure dead code; removed rather than left to rot. ---- */
 function openTakaPicker(row){
   const lotId=lotPickVal(row.querySelector(".b-lot"));
   if(!lotId){ toast("Pick a lot first"); return; }
@@ -249,171 +160,14 @@ function tpApply(btn){
   row.dataset.takaNos=JSON.stringify(tot.takaNos);
   row.querySelector(".b-pcs").value=tot.pcs;
   row.querySelector(".b-mtr").value=tot.mtr;
-  const inMass=row.closest("#mp_lots");            // taka picker is shared by the batch maker and the mass-plan editor
-  if(inMass) mpEditorSuggestWeight(row); else bSuggestWeight(row);   // weight must track the picked takas (spec §5.2)
+  mpEditorSuggestWeight(row);                       // weight must track the picked takas
   panel.remove();
-  if(inMass) mpEditorSync(); else bSyncTotals();
-}
-function bRows(){
-  return [...document.querySelectorAll('#b_lotBox .lotqrow')].map(r=>({
-    lotId:lotPickVal(r.querySelector(".b-lot")),
-    pcs:+r.querySelector(".b-pcs").value||0,
-    mtr:+r.querySelector(".b-mtr").value||0,
-    weight:+r.querySelector(".b-wt").value||0,
-    takas:JSON.parse(r.dataset.takas||"[]"),
-    takaNos: r.dataset.takaNos ? JSON.parse(r.dataset.takaNos) : [] })).filter(x=>x.lotId);
-}
-function bSyncTotals(){
-  const rows=bRows(), el=document.getElementById("b_totals"); if(!el) return;
-  const pcs=rows.reduce((a,r)=>a+r.pcs,0), mtr=rows.reduce((a,r)=>a+r.mtr,0),
-        wt=Math.round(rows.reduce((a,r)=>a+r.weight,0)*10)/10;
-  const q=Q(document.getElementById("b_qual").value), cap=q&&q.maxBatch;
-  const willSplit = cap && wt>cap;
-  el.innerHTML = rows.length
-    ? `<span class="material-symbols-rounded">functions</span><b>Batch total</b>
-       <span><b class="tnum">${pcs}</b> pcs</span><span><b class="tnum">${mtr}</b> m</span><span><b class="tnum">${wt}</b> kg</span>`
-       + (willSplit ? ` <span class="flag">exceeds ${cap} kg max for ${esc(q.name)} — will save as ${Math.ceil(wt/cap)} separate batches</span>` : '')
-    : '<span class="muted">add a lot to build the batch</span>';
-}
-function bLotCustomers(){
-  const ids=[...document.querySelectorAll('#b_lotBox .b-lot')].map(s2=>lotPickVal(s2)).filter(Boolean);
-  const names=ids.map(id=>{const l=(DB.lots||[]).find(x=>x.id===id); return l&&l.customer;}).filter(Boolean);
-  return [...new Set(names)];
-}
-function bRefreshOrders(){
-  const q=document.getElementById("b_qual").value, sel=document.getElementById("b_order"), cur=sel.value;
-  const cs=bLotCustomers();
-  let list=(DB.orders||[]).filter(o=>!q || o.qual===q);
-  if(cs.length===1) list=list.filter(o=>o.cust===cs[0]);   // a customer's fabric fulfils that customer's order
-  else if(cs.length>1) list=[];
-  sel.innerHTML='<option value="">— none —</option>'
-    + list.map(o=>`<option value="${esc(o.id)}"${o.id===cur?" selected":""}>${esc(orderLabel(o.id))}</option>`).join("");
-  const hint=document.getElementById("b_orderHint");
-  if(hint) hint.innerHTML = cs.length>1
-      ? '<span class="flag">Lots belong to different customers — use one customer\'s fabric per batch</span>'
-      : cs.length===1 ? ('Showing <b>'+esc(cs[0])+'</b> orders only — their fabric fulfils their order')
-                      : 'Pick lots first — orders are filtered to that customer';
-}
-function bRefreshShades(){
-  const q=document.getElementById("b_qual").value;
-  const ordEl=document.getElementById("b_order");
-  const ord=(DB.orders||[]).find(o=>o.id===(ordEl?ordEl.value:""));
-  let list=shadesForQuality(q);
-  if(ord){                                        // only the shades this order actually asked for
-    const want=(ord.lines||[]).map(l=>l.shade);
-    list=list.filter(s=>want.indexOf(s.shade)>=0);
-  }
-  const sh=document.getElementById("b_shade");
-  sh.innerHTML = list.length
-    ? list.map(s=>`<option>${esc(s.shade)}</option>`).join("")
-    : `<option value="">— ${ord?"this order has no matching shade":"no shades for this quality"} —</option>`;
-  const hint=document.getElementById("b_shadeHint");
-  if(hint) hint.innerHTML = ord ? ('Limited to the shades on <b>'+esc(ord.id)+'</b>') : 'All shades for this quality';
-}
-async function submitBatch(){
-  const q=document.getElementById("b_qual").value;
-  if(!q){ toast("Pick a quality first"); return; }
-  const g=id=>document.getElementById(id).value;
-  const rows=bRows();
-  for(const r of rows){ const a=lotAllocation(r.lotId);
-    if(a.blocked){ toast(r.lotId+" is fully used by "+a.batches.join(", ")); return; } }
-  if(!rows.length){ toast("Add at least one lot"); return; }
-  for(const r of rows){ const a=lotAllocation(r.lotId);
-    if(r.mtr > a.remaining){ toast(r.lotId+" has only "+a.remaining+" m left"); return; } }
-  const quals=[...new Set(rows.map(r=>{const l=(DB.lots||[]).find(x=>x.id===r.lotId); return l&&l.quality;}).filter(Boolean))];
-  const groupKey=n=>{ const qq=Q(n); return (qq&&qq.fabricGroup)||n; };
-  if(new Set(quals.map(groupKey)).size>1){ toast("This batch mixes "+quals.join(" and ")+" — different fabrics, one fabric per batch"); return; }
-  if(quals.length===1 && groupKey(quals[0])!==groupKey(q)){ toast("The lots are "+quals[0]+", a different fabric than "+q); return; }
-  for(const r of rows){ if(!(r.takas||[]).length){ toast(r.lotId+": pick whole takas (enter the meters you need)"); return; } }
-  const custs=bLotCustomers();
-  if(custs.length>1){ toast("This batch mixes fabric from "+custs.join(" and ")+" — use one customer per batch"); return; }
-
-  const qObj=Q(q), cap=qObj&&qObj.maxBatch;
-  const mpMachine=document.getElementById("b_mc").dataset.mpMachine||g("b_mc");
-  const mpDay=document.getElementById("b_mc").dataset.mpDay||new Date().toISOString().slice(0,10);
-  const manualMode=!!document.getElementById("b_mc").dataset.mpMachine;   // came from Mass planning "Add batch"
-
-  // Manual mode (Mass planning): one batch = one machine load. Block if the picked takas are
-  // heavier than the assigned machine's cap — never auto-split. The legacy Batch-maker form keeps
-  // the oversize whole-taka split (splitBatchRows) so a too-big order still becomes runnable loads.
-  let groups;
-  if(manualMode){
-    const totalWt=Math.round(rows.reduce((a,r)=>a+(+r.weight||0),0)*10)/10;
-    if(!mpCapacityOk(mpMachine, totalWt)){
-      toast(mpMachine+" holds "+((DB.machines.find(x=>x.id===mpMachine)||{}).capMax)+" kg — this "+totalWt+" kg batch is too heavy. Remove takas or pick a bigger machine.");
-      return;   // pins stay set so the operator can adjust takas and re-submit this same manual add
-    }
-    groups=[rows];
-  } else {
-    groups=splitBatchRows(rows, cap, cfg().minMeters||300);
-  }
-
-  const created=[];
-  let mpSeq=nextSeq(mpMachine, mpDay);   // local counter: DB doesn't refresh mid-loop, so nextSeq() alone would repeat for multi-group splits
-  for(const grp of groups){
-    const tot={pcs:grp.reduce((a,r)=>a+r.pcs,0), mtr:grp.reduce((a,r)=>a+r.mtr,0),
-               weight:Math.round(grp.reduce((a,r)=>a+r.weight,0)*10)/10};
-    const row={ lots:grp, lotIds:grp.map(r=>r.lotId),
-      orderId:g("b_order"), quality:q, shadeNo:g("b_shade"),
-      mcPin:g("b_mc"), machine:mpMachine, planDay:mpDay, seq:mpSeq++,
-      pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight,
-      status:"planned", notes:g("b_notes") };   // in/out time, pH, operator & shift are filled by the operator at the machine
-    const res=await API.save("batches",row);
-    if(res && res.error){ toast(res.error); return; }
-    created.push({id:(res.row&&res.row.id)||"Batch", pcs:tot.pcs, mtr:tot.mtr, weight:tot.weight});
-  }
-  delete document.getElementById("b_mc").dataset.mpMachine;
-  delete document.getElementById("b_mc").dataset.mpDay;
-  // DB patched in place by each API.save above — no full reload needed
-  const r=document.getElementById("batchResult"); r.classList.add("on");
-  r.innerHTML = created.length>1
-    ? `<h3>✓ Split into ${created.length} batches</h3>
-       <div class="small muted">${esc(q)}'s max batch is ${cap} kg — this load was too heavy for one machine, so it was saved as ${created.length} separate batches.</div>
-       <div style="margin:8px 0">${created.map(c=>`<span class="chip">${esc(c.id)} · ${c.pcs} pcs · ${c.mtr} m · ${c.weight} kg</span>`).join("")}</div>`
-    : `<h3>✓ ${esc(created[0].id)} created</h3>
-       <div class="small muted">${created[0].pcs} pcs · ${created[0].mtr} m · ${created[0].weight} kg · ${esc(q)}${g("b_shade")?" · "+esc(g("b_shade")):""}</div>`;
-  document.getElementById("b_lotBox").innerHTML=""; bLotCount(); bSyncTotals();
-  document.getElementById("b_notes").value="";
-  document.getElementById("b_mc").value="";
-  renderBatchList(); draw(created.map(c=>c.id));
-  toast(created.length>1 ? "Split into "+created.length+" batches \u2014 added to the schedule" : "Batch created \u2014 added to the schedule");
+  mpEditorSync();
 }
 const STATUS_ICON={planned:"schedule",running:"bolt",done:"check_circle"};
 function batchStatusPill(b){
   const s=b.status||"planned";
   return `<span class="bstatus ${s}"><span class="material-symbols-rounded">${STATUS_ICON[s]}</span>${s}</span>`;
-}
-function batchLifeCell(b){
-  const s=b.status||"planned";
-  const auto=(cfg().completionMode==="auto");
-  const autoNote=auto?'<div class="blife-auto">sensor-driven (manual override)</div>':'';
-  if(!can("op_batch")){
-    if(s==="running") return `<div class="blife-meta">started ${esc(dmyt(b.startedAt||""))}${b.startedBy?" · "+esc(b.startedBy):""}</div>`;
-    if(s==="done")    return `<div class="blife-meta">done ${esc(dmyt(b.completedAt||""))}${b.completedBy?" · "+esc(b.completedBy):""}</div>`;
-    return '<span class="muted">—</span>';
-  }
-  if(s==="planned")
-    return `<button class="blifebtn go" onclick="setBatchStatus('${esc(b.id)}','running')"><span class="material-symbols-rounded">play_arrow</span>Start</button>${autoNote}`;
-  if(s==="running")
-    return `<button class="blifebtn go" onclick="setBatchStatus('${esc(b.id)}','done')"><span class="material-symbols-rounded">check</span>Complete</button>`
-         + `<div class="blife-meta">started ${esc(dmyt(b.startedAt||""))}${b.startedBy?" · "+esc(b.startedBy):""}</div>${autoNote}`;
-  // done
-  return `<div class="blife-meta">done ${esc(dmyt(b.completedAt||""))}${b.completedBy?" · "+esc(b.completedBy):""}</div>`
-       + `<button class="blifebtn" onclick="setBatchStatus('${esc(b.id)}','planned')"><span class="material-symbols-rounded">undo</span>Reopen</button>`;
-}
-async function setBatchStatus(id,to){
-  const res=await API.batchStatus(id,to);
-  if(res&&res.error){ toast(res.error); return; }
-  renderBatchList(); draw();       // Gantt advances immediately (DB patched in place)
-  toast(to==="running"?"Batch started":to==="done"?"Batch marked complete":"Batch reopened");
-}
-function renderBatchList(){
-  const el=document.getElementById("batchList"), list=(DB.batches||[]).slice().reverse();
-  document.getElementById("batchCount").textContent=list.length+" batch(es)";
-  if(!list.length){ el.innerHTML='<div class="empty"><span class="material-symbols-rounded">widgets</span><h3>No batches yet</h3><p>Create your first batch above — pick a quality, add its lots, and save.</p></div>'; return; }
-  el.innerHTML='<table><thead><tr><th>Lot no(s)</th><th>Status</th><th>Action</th><th>Quality</th><th>Shade</th><th>Pcs</th><th>Mtr</th><th>Kg</th></tr></thead><tbody>'
-    +list.map(b=>`<tr><td>${(b.lotIds||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("")||'<span class="muted">—</span>'}</td><td>${batchStatusPill(b)}</td><td>${batchLifeCell(b)}</td><td>${esc(b.quality)}</td><td>${esc(b.shadeNo||"")}</td><td class="tnum">${esc(b.pcs)}</td><td class="tnum">${esc(b.mtr)}</td><td class="tnum">${esc(b.weight)}</td></tr>`).join("")
-    +'</tbody></table>';
 }
 let MP_EDIT = null;   // {machineId} while an inline "new batch" editor is open
 let MC_DRAG=null;
@@ -461,8 +215,11 @@ function renderMassPlan(){
     const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
     const acts=b=>`${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}`
+      +`${(b.additions&&b.additions.length)?`<span class="sp-autosum" style="padding:2px 7px;font-size:10.5px" title="${esc(b.additions.map(a=>a.note).join(" · "))}"><span class="material-symbols-rounded" style="font-size:12px">colorize</span>${b.additions.length}</span>`:''}`
+      +`${b.redyeOf?`<span class="sp-flag" title="${esc(b.redyeNote||"")}">redye #${b.redyeNo||"?"}/5</span>`:''}`
       +`${mayEdit?`<span class="mp-drag material-symbols-rounded" draggable="true" title="drag to reorder" ondragstart="mpDragStart(event)" ondragend="mpDragEnd(event)">drag_indicator</span>`:''}`
       +`${mayEdit&&!b.wash?`<button class="btn ghost sm" title="edit shade / takas / weight" onclick="mpEditBatch('${esc(b.id)}')"><span class="material-symbols-rounded">edit</span></button>`:''}`
+      +`${mayEdit&&!b.wash&&b.status==="running"?`<button class="btn ghost sm" title="log a mid-run dye addition (jet cooled, sample checked, more dye added)" onclick="mpAddAddition('${esc(b.id)}')"><span class="material-symbols-rounded">colorize</span></button>`:''}`
       +`${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}`
       +`${mayEdit?`<button class="btn ghost sm mp-del" title="delete" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}`;
     const bodyRows = (rows.length ? rows.map(b=>{
@@ -495,30 +252,45 @@ function renderMassPlan(){
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
   if(MP_EDIT) mpInitEditor();
 }
-/* ---- inline batch editor (the Excel-like quick path) ---- */
+/* ---- inline batch editor (the Excel-like quick path) ----
+   Two visually separate panels: Lots (variable-length list of lot·pcs·mtr·kg lines) and Details
+   (quality/shade/pg no./remarks — fixed fields for the whole batch). Select-taka / remove-lot are no
+   longer per-row buttons; they act on whichever lot line is "active" (clicked/focused), and live in the
+   footer next to Add new lot so all three lot actions read as one group. */
 function mpEditorHTML(m){
   const editing=MP_EDIT&&MP_EDIT.editId;
   const existing=editing?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
   const timeValue=v=>v?esc(String(v).replace("T"," ").slice(11,16)):"—";
   // In/Out/PH are read-only (logged via the time modal) and always empty on a new batch — only show them when editing.
-  const roHead = editing ? '<span>In time</span><span>Out time</span><span>PH</span>' : '';
-  const roRow  = editing ? `<div class="mp-ed-f mp-ed-readonly"><b>${timeValue(existing&&existing.startedAt)}</b></div><div class="mp-ed-f mp-ed-readonly"><b>${timeValue(existing&&existing.completedAt)}</b></div><div class="mp-ed-f mp-ed-readonly"><b>${esc((existing&&existing.ph)||"—")}</b></div>` : '';
+  const roFields = editing ? `<div class="mp-ed-f mp-ed-readonly"><label>In time</label><b>${timeValue(existing&&existing.startedAt)}</b></div>
+      <div class="mp-ed-f mp-ed-readonly"><label>Out time</label><b>${timeValue(existing&&existing.completedAt)}</b></div>
+      <div class="mp-ed-f mp-ed-readonly"><label>PH</label><b>${esc((existing&&existing.ph)||"—")}</b></div>` : '';
   return `<div class="mp-editor${editing?' editing':''}">
     <div class="mp-editor-scroll">
-      <div class="mp-editor-head"><span>Seq</span><span class="mp-hd-lots">Lot no. · pcs · mtr · kg</span><span>Quality</span><span>Shade</span><span>Pg No.</span><span>Remarks</span>${roHead}<span></span></div>
-      <div class="mp-editor-row">
-        <span class="mp-ed-seq">${editing?esc(existing&&existing.seq||""):"+"+nextSeq(m.id)}</span>
-        <div class="mp-ed-lots"><div id="mp_lots"></div></div>
-        <div class="mp-ed-f"><select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></div>
-        <div class="mp-ed-f"><span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></div>
-        <div class="mp-ed-f"><input id="mp_pgno" type="text" placeholder="Page"></div>
-        <div class="mp-ed-f"><input id="mp_remarks" type="text" placeholder="Remarks (optional)"></div>
-        ${roRow}
-        <div class="mp-ed-actions"><button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${editing?"Save changes":"Save batch"}</button><button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button></div>
+      <div class="mp-ed-seqline"><span class="mp-ed-seq">${editing?esc(existing&&existing.seq||""):"+"+nextSeq(m.id)}</span>${editing?`<span class="small muted">editing <b class="tnum">${esc(MP_EDIT.editId)}</b></span>`:''}</div>
+      <div class="mp-ed-panel mp-ed-panel-lots">
+        <div class="mp-ed-panel-h"><span class="material-symbols-rounded">layers</span>Lots<span class="mp-ed-panel-hint">lot no. · pcs · mtr · kg</span></div>
+        <div id="mp_lots"></div>
       </div>
-      <label class="mp-ed-f mp-ed-step" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
+      <div class="mp-ed-panel mp-ed-panel-meta">
+        <div class="mp-ed-panel-h"><span class="material-symbols-rounded">info</span>Quality &amp; details</div>
+        <div class="mp-ed-metarow">
+          <div class="mp-ed-f"><label for="mp_q">Quality</label><select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></div>
+          <div class="mp-ed-f mp-ed-shade"><label for="mp_sh">Shade</label><span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select></span></div>
+          <div class="mp-ed-f"><label for="mp_pgno">Pg No.</label><input id="mp_pgno" type="text" placeholder="Page"></div>
+          <div class="mp-ed-f mp-ed-remarks"><label for="mp_remarks">Remarks</label><input id="mp_remarks" type="text" placeholder="Remarks (optional)"></div>
+          ${roFields}
+        </div>
+        <label class="mp-ed-step" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
+      </div>
     </div>
-    <div class="mp-ed-foot"><button class="btn ghost sm mp-add-lot" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button><span class="mp-ed-total" id="mp_ed_total"></span></div>
+    <div class="mp-ed-foot">
+      <button class="btn ghost sm mp-add-lot" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add new lot</button>
+      <button class="btn ghost sm" title="pick specific takas for the selected lot" onclick="mpTakaBtnActive()"><span class="material-symbols-rounded">tune</span>Select taka</button>
+      <button class="btn ghost sm mp-del" title="remove the selected lot" onclick="mpRemoveActiveLot()"><span class="material-symbols-rounded">delete</span>Remove lot</button>
+      <span class="mp-ed-total" id="mp_ed_total"></span>
+      <div class="mp-ed-actions"><button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${editing?"Save changes":"Save batch"}</button><button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button></div>
+    </div>
   </div>`;
 }
 function mpAddBatch(machineId){ MP_EDIT={machineId}; renderMassPlan(); }
@@ -542,8 +314,32 @@ function mpInitEditor(){
     mpEditorRefreshShades(); mpEditorRefreshSteps();
     if(!document.querySelector('#mp_lots .lotqrow')) mpAddEditorLot();
   }
-  document.getElementById("mp_lots").addEventListener("input", mpEditorSync);
+  const lotsBox=document.getElementById("mp_lots");
+  lotsBox.addEventListener("input", mpEditorSync);
+  lotsBox.addEventListener("click", e=>{ const row=e.target.closest('.lotqrow'); if(row) mpMarkActiveLot(row); });
+  lotsBox.addEventListener("focusin", e=>{ const row=e.target.closest('.lotqrow'); if(row) mpMarkActiveLot(row); });
   mpEditorSync();
+}
+/* ---- which lot line the footer's Select taka / Remove lot buttons act on ---- */
+function mpMarkActiveLot(row){
+  document.querySelectorAll('#mp_lots .lotqrow.active').forEach(r=>r.classList.remove('active'));
+  if(row) row.classList.add('active');
+}
+function mpActiveLotRow(){
+  return document.querySelector('#mp_lots .lotqrow.active') || document.querySelector('#mp_lots .lotqrow:last-child');
+}
+function mpTakaBtnActive(){
+  const row=mpActiveLotRow(); if(!row){ toast("Add a lot first"); return; }
+  openTakaPicker(row);
+}
+function mpRemoveActiveLot(){
+  const row=mpActiveLotRow(); if(!row){ toast("Add a lot first"); return; }
+  if(row.classList.contains('lot-locked')){ toast("This lot is locked while editing — cancel and start a new batch to change lots"); return; }
+  const rows=[...document.querySelectorAll('#mp_lots .lotqrow')];
+  if(rows.length<=1){ toast("A batch needs at least one lot"); return; }
+  row.remove();
+  mpLockQuality(); mpEditorSync();
+  mpMarkActiveLot(document.querySelector('#mp_lots .lotqrow:last-child'));
 }
 function mpEditorRefreshShades(){
   const mq=document.getElementById("mp_q"), sh=document.getElementById("mp_sh");
@@ -559,11 +355,12 @@ function mpShadeSelChanged(){                                // picking "+ Add n
   mpEditorSync();
 }
 /* quick-add a shade right from the planner — an inline field (no browser prompt), matching the
-   Excel-like editor. Saves a minimal recipe now; finish family/tone/program later in Admin. */
-function mpShadeRow(sel){                                    // (re)build the shade field: select + quick-add button
+   Excel-like editor. Saves a minimal recipe now; finish family/tone/program later in Admin.
+   Reached via the dropdown's own "+ Add new shade…" entry (mpShadeSelChanged) — there's no separate
+   add-shade button next to the field anymore, since that would just duplicate it. */
+function mpShadeRow(sel){                                    // (re)build the shade field back to a plain select
   const row=document.querySelector(".mp-sh-row"); if(!row) return;
-  row.innerHTML='<select id="mp_sh" onchange="mpShadeSelChanged()"></select>'
-    +'<button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button>';
+  row.innerHTML='<select id="mp_sh" onchange="mpShadeSelChanged()"></select>';
   mpEditorRefreshShades();
   if(sel){ const sh=document.getElementById("mp_sh"); if(sh) sh.value=sel; }
 }
@@ -632,8 +429,6 @@ function mpAddEditorLot(pf){
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
     <input class="b-mtr" type="number" min="0" placeholder="mtr">
     <input class="b-wt" type="number" min="0" step="0.1" placeholder="kg">
-    <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
-    ${locked?'':`<button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpLockQuality();mpEditorSync()">&times;</button>`}
     <div class="taka-pick"></div>`;
   box.appendChild(wrap);
   const row=box.lastElementChild;
@@ -650,6 +445,7 @@ function mpAddEditorLot(pf){
     row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
     row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
   }
+  mpMarkActiveLot(row);                          // newest lot line becomes the target of Select taka / Remove lot
   mpEditorSync();
 }
 function mpPrefillRow(row){                       // start from what is still LEFT in the lot, then snap to takas
@@ -874,6 +670,34 @@ async function mpSaveLog(id){
   const ov=document.getElementById("logOverlay"); if(ov) ov.remove();
   renderMassPlan(); draw();                              // DB patched in place by API.save
   toast(en ? id+" finished — moved to history" : st ? id+" started" : id+" times cleared");
+}
+/* ---- dye addition: batch still running, jet cooled for a sample, supervisor adds more dye —
+   logged as a note on the SAME batch, no new batch, no cap (unlike a redye). ---- */
+function mpAddAddition(id){
+  const b=(DB.batches||[]).find(x=>x.id===id); if(!b) return;
+  const ex=document.getElementById("addOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="addOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:420px;max-width:94vw">'
+    +'<div class="m-h"><h3><span class="material-symbols-rounded">colorize</span>Log dye addition</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<div class="logbatch"><b class="tnum">'+esc(id)+'</b> &middot; '+esc(b.quality||"")+(b.shadeNo?' &middot; shade '+esc(b.shadeNo):'')+' &middot; '+(b.weight||0)+' kg</div>'
+    +'<div class="loghint"><span class="material-symbols-rounded">info</span>Jet cooled, sample checked, supervisor is adding more of some or another dye — this stays on batch '+esc(id)+', it does not create a new batch.</div>'
+    +'<label class="fld">What was added<textarea id="add_note" rows="3" placeholder="e.g. +20g/L Navy Blue, sample too light"></textarea></label>'
+    +'</div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Cancel</button>'
+    +'<button class="btn" onclick="mpSaveAddition(\''+esc(id)+'\')"><span class="material-symbols-rounded">check</span>Save</button></div></div>';
+  document.body.appendChild(o);
+  setTimeout(()=>{ const f=document.getElementById("add_note"); if(f) f.focus(); },10);
+}
+async function mpSaveAddition(id){
+  const note=((document.getElementById("add_note")||{}).value||"").trim();
+  if(!note){ toast("Describe what was added"); return; }
+  const res=await API._post({op:"batchAddAddition", id, note});
+  if(res && res.error){ toast(res.error); return; }
+  if(res && res.row){ const i=(DB.batches||[]).findIndex(x=>x.id===id); if(i>=0) DB.batches[i]=res.row; }
+  const ov=document.getElementById("addOverlay"); if(ov) ov.remove();
+  renderMassPlan(); draw();
+  toast("Addition logged on "+id);
 }
 async function mpMove(batchId, dir){
   const b=(DB.batches||[]).find(x=>x.id===batchId); if(!b) return;
