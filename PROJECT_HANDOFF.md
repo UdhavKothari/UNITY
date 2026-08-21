@@ -507,3 +507,88 @@ to `MASTER = 'DYEING (SM)'` and yesterday's `CUTDATE`).
 new `ALL_PAGES` entries). `admin.html`/`m.js`/`style.css` only need a browser/app refresh. New
 permissions `op_mob_log` and `lotHistory` are Administrator-only until granted to other roles via
 Admin → Roles.
+
+### 34. Fuzzy-match auto-correction before the camera-scan review screen
+The QR/Gemini camera scan (`app.js`) now runs a hand-rolled Levenshtein-based fuzzy matcher on
+every OCR'd field — machine, quality, shade, lot no. — **before** the review table is shown, so an
+operator sees the corrected value straight away instead of having to catch the OCR's typo.
+- `_lev`/`_sim`/`fuzzyBestMatch(raw, candidates, keyFn)` (new, right after the `esc` helper): plain
+  edit-distance + normalized similarity, no external dependency.
+- `scanQrMatchMachine`/`scanQrMatchQuality`/`scanQrMatchShade`/`scanQrMatchLot` each try an exact
+  match first, then fall back to fuzzy — confidence threshold is near-exact OR score ≥ 0.72 with a
+  ≥0.08 margin over the runner-up, otherwise the raw OCR value is left alone for manual review.
+- `scanQrNormalizeMc` calls all four and sets `_rawMachine`/`_rawQuality`/`_rawShade`/`_rawLotNo`
+  only when a correction actually happened; the review UI shows a small hover-tooltip "auto-
+  corrected" indicator on those cells (`.sp-fcell`/`.sp-auto` in `style.css`) rather than hiding the
+  change. Editing a field manually (`scanQrSet`/`scanQrSetLot`/`scanQrSetMachine`) clears its `_raw*`
+  flag.
+
+### 35. Redye vs. Addition — up to 5 redyes per batch lineage, with a remark on each
+Two distinct concepts, per the mill floor's own vocabulary:
+- **Addition** — batch is still running; jet is cooled, a sample is pulled, the supervisor adds
+  more of some/another dye. Logged as a note on the **same** batch, no new batch, no cap.
+  `server.py` op **`batchAddAddition`** `{id, note}` appends `{id, at, by, note}` to `batch.additions[]`.
+- **Redye** — fabric already came out of the machine and the colour is wrong, so it's redyed.
+  Creates a **new** batch (status `planned`, same lots/quality/shade/machine as the original) linked
+  back via `redyeOf` + `redyeNo` (1–5) + `redyeNote`. `redyeOf` always points to the **root** of the
+  chain (not the immediate parent), so the 5-per-lineage cap counts correctly even through repeated
+  redyes. `server.py` op **`batchRedye`** `{id, note}` — 403s past redye #5, and rejects a batch
+  that isn't `status:"done"` yet (redye only applies to fabric that's already out).
+- UI: Mass Planning's row actions gained a "+ Addition" button (shown while a batch is `running`);
+  Batch History (admin.html) gained a "Redye" button (shown once a batch is `done`, disabled and
+  showing a block icon once its lineage hits 5/5). Both open a small remark-entry modal
+  (`mpAddAddition`/`saveRedye` + friends) matching the existing `mpLogTime` modal pattern. Redye/
+  addition badges also show up on the batch trail in Lot History's detail view.
+
+### 36. Lot tracking rebuilt around "griege fabric walking a workflow", not "used/blocked"
+The core model change this session: **a lot is not consumed by one batch anymore.** It's griege
+fabric that walks every step of its quality's assigned workflow (one batch per step, on possibly-
+different machines), and is only "ready to dispatch" once every taka has cleared the **last** step.
+- New `lotProgress(lotId)` (app.js) walks `wfStepsFull(quality)` (the existing topo-sorted
+  workflow graph — handles branching, unlike the old buggy linear `wfExpectedChain`) and, per step,
+  status-filters which taka numbers are `done` vs. `planned/running` for that lot
+  (`_nosAtStepStatus`, a status-aware sibling of the existing `_nosAtStep`). Returns
+  `{hasWorkflow, steps, lastDone, nextStep, doneAll}`.
+- **`lotAllocation(lotId)`/`_lotAllocMap()` — the one function every lot-picker/table in the app
+  calls — was rewritten to branch on `lotProgress().hasWorkflow`.** For a workflow-active quality,
+  `blocked` now means "finished the whole workflow" (`doneAll`) rather than "some batch, anywhere in
+  the workflow, ate its total meter pool" (the old bug: a lot that had only cleared step 1 of 4
+  could show as fully used everywhere). Non-workflow qualities keep the exact old pool-based logic
+  untouched. Because this is the single shared function, the fix automatically applies to the
+  Storage picker, Admin Lot master, every generic lot dropdown, and Mass Planning's own picker —
+  none of those callers needed to change.
+- Lot History (admin.html) now shows explicit **Last process / Next process** columns and a status
+  pill (`NOT STARTED` / `IN PROCESS` / `READY TO DISPATCH`) instead of a binary used/unused flag,
+  plus a per-step progress pill-strip in the lot detail view. Replaced the old `wfExpectedChain`/
+  `wfCompareLot` (subsequence-match, wrongly counted a merely-`planned` batch as "done") with calls
+  into the shared `wfStepsFull`/`lotProgress`.
+- Admin → Lots' `status` field is now `["in stock","dispatched"]` (was a stale
+  `["in-stock","allocated","consumed"]` enum that no longer matched how lots are actually used).
+- **Retired the legacy "Batch maker" form** in `index.html` — it turned out to already be fully gone
+  from the UI in an earlier out-of-session change (no `#b_lotBox` or sibling ids anywhere in the
+  markup), just dead `<script>` code (`bLotCount`/`bAddLot`/`submitBatch`/`renderBatchList`/etc.,
+  confirmed via caller grep before deleting). Mass Planning is the only batch-creation UI now.
+
+### 37. Mass Planner batch editor: visual separation + consolidated lot actions
+Reworked the inline batch editor (`mpEditorHTML` + friends, `index.html`/`style.css`) for
+readability on the floor:
+- **Lots** (variable-length list of lot·pcs·mtr·kg lines) and **Quality & details**
+  (quality/shade/pg no./remarks, fixed per batch) are now two visually distinct bordered panels
+  instead of one flat grid row.
+- **Select taka** and **Remove lot** are no longer per-row buttons — they moved to the footer, right
+  next to **Add new lot**, and act on whichever lot line is currently "active" (clicked/focused,
+  tracked via `mpMarkActiveLot`/`mpActiveLotRow`; the active row gets an accent underline). Reduces
+  clutter in each lot line and reads as one group of lot actions.
+- The **kg** input is now the narrowest column in a lot line (was as wide as pcs/mtr); the **shade**
+  input is wider, and the redundant "+" add-shade button next to it is gone — the shade dropdown's
+  own `+ Add new shade…` entry (`mpShadeSelChanged`) already opens the same inline quick-add.
+
+⚠ Requires a **server restart** to pick up the `server.py` changes (new `batchAddAddition`/
+`batchRedye` ops). `index.html`/`admin.html`/`app.js`/`style.css` only need a browser refresh.
+
+### Pending
+- **New challan format**: the user uploaded a sample (`CHALLAN_R00085 2.PDF`) asking for
+  `challan_parser.py`/`challan_watch.py` to be updated to handle it, but the file never became
+  accessible in the session's filesystem (checked `/mnt/user-data/uploads`, the whole container —
+  genuinely never landed, not a code issue). Still outstanding — re-attach the PDF in a fresh
+  message to pick this up.
