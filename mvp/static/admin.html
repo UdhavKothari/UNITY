@@ -867,18 +867,19 @@ function handleReconFile(e){
 async function commitDispatchReconcile(){
   const csvText=window._reconCsvText; if(!csvText) return;
   const btn=document.getElementById("reconCommitBtn"); btn.disabled=true; btn.textContent="Reconciling…";
-  await runReconcile(csvText, document.getElementById("reconReport"));
-  btn.disabled=false; btn.textContent="Reconcile";
-}
-/* shared by the "Reconcile from file" upload modal AND "Reconcile from this file" inside Processed
-   files — runs op dispatchReconcile against csvText and renders the per-lot report into `el`. */
-async function runReconcile(csvText, el){
   const res=await API._post({op:"dispatchReconcile", csvText});
+  btn.disabled=false; btn.textContent="Reconcile";
+  const el=document.getElementById("reconReport");
   if(res&&res.error){ el.innerHTML='<div class="flag">'+esc(res.error)+'</div>'; return; }
-  const report=res.report||[];
+  renderReconcileReport(res.report||[], el);
+  await API.db(); render();
+  toastReconcileSummary(res.report||[]);
+}
+/* shared renderer for a dispatchReconcile-shaped {report:[...]} result — used by the upload modal
+   AND the Processed files "Reprocess" action on a dispatch-report row. */
+function renderReconcileReport(report, el){
   const done=report.filter(r=>!r.skipped), skipped=report.filter(r=>r.skipped);
   const totalFlagged=done.reduce((a,r)=>a+((r.flagged||[]).length),0);
-  const restored=done.reduce((a,r)=>a+(r.takasRestored||0),0);
   const rows=report.map(r=>{
     if(r.skipped) return '<div class="small" style="padding:8px 0;border-top:1px solid var(--line)"><b class="tnum">'+esc(r.lotId)+'</b> — <span class="muted">'+esc(r.reason)+'</span></div>';
     const flags=(r.flagged||[]).map(f=>'<div class="sp-flag'+(f.severity==="unrecoverable"?" sev-danger":"")+'" style="display:flex;margin:4px 0;white-space:normal"><span class="material-symbols-rounded" style="font-size:14px">'+(f.severity==="unrecoverable"?"error":"warning")+'</span>'
@@ -890,23 +891,32 @@ async function runReconcile(csvText, el){
   el.innerHTML='<div class="lot-totals"><span class="material-symbols-rounded">functions</span>'
     +'<b class="tnum">'+done.length+'</b> lot(s) reconciled'+(skipped.length?', <b class="tnum">'+skipped.length+'</b> skipped':'')
     +(totalFlagged?', <b class="tnum">'+totalFlagged+'</b> taka(s) flagged for manual verification':'')+'</div>'+rows;
-  await API.db(); render();
+}
+function toastReconcileSummary(report){
+  const done=report.filter(r=>!r.skipped);
+  const restored=done.reduce((a,r)=>a+(r.takasRestored||0),0);
+  const totalFlagged=done.reduce((a,r)=>a+((r.flagged||[]).length),0);
   toast('Reconciled '+done.length+' lot(s), restored '+restored+' taka(s)'+(totalFlagged?' — '+totalFlagged+' flagged, check the report':''));
 }
 
 /* ---- Processed files: read-only view of what has accumulated in inbox/done, inbox_dispatch/done and
    inbox_challan/done (+ their error/ siblings) — so the mill can see what the automatic watchers have
    already filed without needing to open the server's file system. Each row expands in place to show the
-   file's raw content (op processedFileRead); a dispatch-report row also gets a "Reconcile from this
-   file" action so an old report already sitting in inbox_dispatch/done can be reconciled with one click
-   instead of having to find and re-upload the same file by hand. ---- */
+   file's raw content (op processedFileRead). Every row also carries a "Reprocess" action that re-runs
+   THAT ONE FILE through the exact same import pipeline its watcher would use on it every 45s — as if it
+   had just been dropped back into inbox/ (or inbox_dispatch/, inbox_challan/) — via op reprocessFile.
+   Lot-import and challan files are naturally idempotent (their own apply logic skips anything already
+   on record), so reprocessing one that's already in is always a safe no-op. Dispatch reports are NOT
+   safe to blindly re-subtract, so a dispatch row's reprocess routes through the same undo-then-reapply
+   reconcile logic as "Reconcile from file" elsewhere on this page (see server.py op reprocessFile). ---- */
 let _pfCache={};   // "kind|status|file" -> file text, so re-expanding a row doesn't re-fetch
 function _pfKey(f,kind){ return kind+"|"+f.status+"|"+f.file; }
+const PF_EDIT_PAGE={lots:"lots", dispatch:"dispatch", challan:"challans"};
 async function openProcessedFiles(){
   const ex=document.getElementById("filesOverlay"); if(ex) ex.remove();
   _pfCache={};
   const o=document.createElement("div"); o.id="filesOverlay"; o.className="modal-bg on";
-  o.innerHTML='<div class="modal" style="width:860px;max-width:96vw">'
+  o.innerHTML='<div class="modal" style="width:900px;max-width:96vw">'
     +'<div class="m-h"><h3>Processed files</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
     +'<div class="m-b" id="filesBody"><div class="small muted">Loading…</div></div>'
     +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
@@ -915,22 +925,25 @@ async function openProcessedFiles(){
   const body=document.getElementById("filesBody"); if(!body) return;
   if(res&&res.error){ body.innerHTML='<div class="flag">'+esc(res.error)+'</div>'; return; }
   window._pfData=res;
-  const mayEdit=canEdit("dispatch");
   const section=(title,icon,kind,items)=>{
     if(!items.length) return '<h4 style="margin:16px 0 6px;font-size:13px">'+icon+' '+esc(title)+'</h4><div class="small muted">Nothing processed yet.</div>';
+    const mayEdit=canEdit(PF_EDIT_PAGE[kind]);
     const rows=items.map((f,i)=>{
       const key=_pfKey(f,kind);
-      return '<tr class="tap" onclick="togglePfRow(this,\''+kind+'\',\''+i+'\')"><td class="small">'
+      const reprocBtn=mayEdit
+        ? '<button class="btn ghost sm" title="Reprocess — re-run this file through the import pipeline, exactly as if it had just landed in the inbox folder" onclick="event.stopPropagation();reprocessFile(this,\''+kind+'\','+i+')"><span class="material-symbols-rounded">autorenew</span>Reprocess</button>'
+        : '';
+      return '<tr class="tap" onclick="togglePfRow(this,\''+kind+'\','+i+')"><td class="small">'
         +'<span class="material-symbols-rounded pf-chev" style="font-size:16px;vertical-align:-3px;color:var(--muted)">chevron_right</span>'
         +esc(f.name)+'</td>'
         +'<td>'+(f.status==="ok"?'<span class="pill run">OK</span>':'<span class="pill maint">ERROR</span>')+'</td>'
-        +'<td class="small tnum">'+esc(f.at)+'</td><td class="small muted">'+esc(f.summary||"—")+'</td></tr>'
-        +'<tr class="pf-detail" data-key="'+esc(key)+'" style="display:none"><td colspan="4"></td></tr>';
+        +'<td class="small tnum">'+esc(f.at)+'</td><td class="small muted">'+esc(f.summary||"—")+'</td>'
+        +'<td onclick="event.stopPropagation()">'+reprocBtn+'</td></tr>'
+        +'<tr class="pf-detail" data-key="'+esc(key)+'" style="display:none"><td colspan="5"></td></tr>';
     }).join("");
     return '<h4 style="margin:16px 0 6px;font-size:13px">'+icon+' '+esc(title)+' <span class="muted">('+items.length+')</span></h4>'
-      +'<div class="tbl-wrap" style="max-height:280px;overflow:auto"><table><thead><tr><th>File</th><th>Status</th><th>Processed</th><th>Summary</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      +'<div class="tbl-wrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>File</th><th>Status</th><th>Processed</th><th>Summary</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   };
-  window._pfMayEdit=mayEdit;
   body.innerHTML=section("Lot imports","<span class=\"material-symbols-rounded\" style=\"font-size:15px;vertical-align:-3px\">inventory_2</span>", "lots", res.lots||[])
     +section("Dispatch reports","<span class=\"material-symbols-rounded\" style=\"font-size:15px;vertical-align:-3px\">local_shipping</span>", "dispatch", res.dispatch||[])
     +section("Challans","<span class=\"material-symbols-rounded\" style=\"font-size:15px;vertical-align:-3px\">receipt_long</span>", "challan", res.challan||[]);
@@ -941,6 +954,9 @@ async function togglePfRow(tr,kind,i){
   const open=detail.style.display!=="none";
   if(open){ detail.style.display="none"; chev.textContent="chevron_right"; return; }
   detail.style.display=""; chev.textContent="expand_more";
+  await _pfRenderPreview(detail, kind, i);
+}
+async function _pfRenderPreview(detail, kind, i){
   const cell=detail.querySelector("td");
   const f=((window._pfData||{})[kind]||[])[+i]; if(!f) return;
   const key=_pfKey(f,kind);
@@ -951,18 +967,30 @@ async function togglePfRow(tr,kind,i){
   }
   const got=_pfCache[key];
   if(got.error){ cell.innerHTML='<div class="flag" style="padding:8px 0">'+esc(got.error)+'</div>'; return; }
-  const reconBtn = (kind==="dispatch" && window._pfMayEdit)
-    ? '<button class="btn ghost sm" style="margin-bottom:8px" onclick="event.stopPropagation();reconcileFromProcessedFile(\''+esc(key)+'\')"><span class="material-symbols-rounded">restore</span>Reconcile from this file</button><div id="pfReport-'+esc(cssEscape(key))+'"></div>'
-    : '';
-  cell.innerHTML='<div style="padding:8px 0" onclick="event.stopPropagation()">'+reconBtn
+  cell.innerHTML='<div style="padding:8px 0" onclick="event.stopPropagation()"><div id="pfReport-'+esc(cssEscape(key))+'"></div>'
     +'<pre style="max-height:260px;overflow:auto;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-all;font-family:var(--mono);font-size:11.5px;color:var(--ink)">'+esc(got.text)+'</pre></div>';
 }
 function cssEscape(s){ return String(s).replace(/[^a-zA-Z0-9_-]/g,"_"); }
-async function reconcileFromProcessedFile(key){
-  const got=_pfCache[key]; if(!got||!got.text) return;
-  const el=document.getElementById("pfReport-"+cssEscape(key)); if(!el) return;
-  el.innerHTML='<div class="small muted">Reconciling…</div>';
-  await runReconcile(got.text, el);
+async function reprocessFile(tr,kind,i){
+  const f=((window._pfData||{})[kind]||[])[+i]; if(!f) return;
+  const detail=tr.nextElementSibling;
+  const key=_pfKey(f,kind);
+  delete _pfCache[key];             // the file's content on disk hasn't changed, but force a fresh read
+  if(detail && detail.style.display==="none"){ await togglePfRow(tr,kind,i); }
+  else if(detail){ await _pfRenderPreview(detail,kind,i); }
+  const res=await API._post({op:"reprocessFile", kind, status:f.status, file:f.file});
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); render();
+  if(kind==="lots"){
+    toast('Reprocessed '+f.name+': '+res.added+' new, '+res.skipped+' already present (of '+res.total+' in file)');
+  } else if(kind==="challan"){
+    toast('Reprocessed '+f.name+': '+res.added+' new challan(s) (of '+res.total+' in file)');
+  } else if(kind==="dispatch"){
+    const report=res.report||[];
+    const reportEl=document.getElementById("pfReport-"+cssEscape(key));
+    if(reportEl) renderReconcileReport(report, reportEl);
+    toastReconcileSummary(report);
+  }
 }
 function actionPill(a){
   if(a==="delete"||a==="reset") return "wash";

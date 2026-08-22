@@ -1316,6 +1316,60 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": str(e)})
                 return self._send(200, {"ok": True, "text": text})
 
+            if op == "reprocessFile":
+                # Processed files panel "Reprocess" button: re-run the SAME import pipeline the
+                # relevant watcher would (as if this file had just been dropped back into its inbox
+                # folder). Each kind's own apply logic already guards re-runs its own way:
+                #   - lots: _apply_lots_core skips any lot id already present -> always a safe no-op
+                #     for an already-imported lot, never double-adds.
+                #   - challan: _apply_challan_core's record ids are derived from the payload's own
+                #     content signature -> re-processing the identical file never double-adds either.
+                #   - dispatch: plain re-apply is NOT safe to repeat (nothing stops it subtracting the
+                #     same meters twice) - so this routes dispatch files through
+                #     _reconcile_dispatch_entries instead, which has its own already-reconciled guard
+                #     and is the same logic behind "Reconcile from this file" elsewhere on this page.
+                kind = req.get("kind")
+                if kind == "lots":
+                    if _need_edit(("lots",)):
+                        return self._send(403, {"error": "forbidden"})
+                elif kind == "dispatch":
+                    if _need_edit(("dispatch",)):
+                        return self._send(403, {"error": "forbidden"})
+                elif kind == "challan":
+                    if _need_edit(("challans",)):
+                        return self._send(403, {"error": "forbidden"})
+                else:
+                    return self._send(400, {"error": "unknown file kind"})
+                try:
+                    text = _read_processed_file(kind, req.get("status"), req.get("file"))
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                try:
+                    if kind == "lots":
+                        rows = list(_csv.reader(io.StringIO(text)))
+                        lots = _csv_to_lots(rows)
+                        if not lots:
+                            return self._send(400, {"error": "no lots found in that file"})
+                        added, skipped = _apply_lots_core(db, lots)
+                        save_db(db)
+                        return self._send(200, {"ok": True, "kind": "lots", "added": added, "skipped": skipped, "total": len(lots)})
+                    if kind == "dispatch":
+                        rows = list(_csv.reader(io.StringIO(text)))
+                        entries = _csv_to_dispatch(rows)
+                        if not entries:
+                            return self._send(400, {"error": "no dispatched takas found in that file"})
+                        report = _reconcile_dispatch_entries(db, entries, u["username"])
+                        save_db(db)
+                        return self._send(200, {"ok": True, "kind": "dispatch", "report": report})
+                    if kind == "challan":
+                        payload = json.loads(text)
+                        added = _apply_challan_core(db, payload)
+                        save_db(db)
+                        return self._send(200, {"ok": True, "kind": "challan", "added": added,
+                                                "total": len(payload.get("lots", []))})
+                except Exception as e:
+                    return self._send(400, {"error": "could not process that file: %s" % (e,)})
+
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
                 # shades, recipes and batches are left alone. Admin/edit-on-lots only, and logged.
@@ -1759,25 +1813,33 @@ def _read_processed_file(kind, status, name):
     with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         return f.read()
 
+def _apply_lots_core(db, lots):
+    """Lock-free core of the lot-inbox apply — same logic as always, just split out so a caller that
+    already holds LOCK + a loaded db (e.g. the Processed files 'Reprocess' button) can call it directly
+    instead of re-entering the lock (threading.Lock isn't reentrant - that would deadlock the server).
+    _apply_lots (below) is the locking, top-level entry the watcher itself uses."""
+    by_id = {l.get("id"): l for l in db.get("lots", [])}
+    added = skipped = 0
+    new_quals = set()
+    for lot in lots:
+        if lot["id"] in by_id:
+            skipped += 1                            # already imported — leave the existing record
+            continue                                #   untouched (guard against re-runs / double entry)
+        db.setdefault("lots", []).append(lot); by_id[lot["id"]] = lot; added += 1
+        new_quals.add((lot.get("quality") or "").strip())
+    aq = ash = 0                                    # quick-add each NEW lot's quality + a shade '0'
+    for q in new_quals:
+        a, s = _ensure_quality_and_shade(db, q); aq += a; ash += s
+    linked = _reconcile_challans(db)                # a lot's inward challan may already be waiting
+    _log(db, "inbox", "lotImport", "lots", "",
+         "imported: %d new lots, %d already present (skipped); +%d qualities, +%d shades; linked %d challans"
+         % (added, skipped, aq, ash, linked))
+    return added, skipped
+
 def _apply_lots(lots):
     with LOCK:
         db = load_db()
-        by_id = {l.get("id"): l for l in db.get("lots", [])}
-        added = skipped = 0
-        new_quals = set()
-        for lot in lots:
-            if lot["id"] in by_id:
-                skipped += 1                            # already imported — leave the existing record
-                continue                                #   untouched (guard against re-runs / double entry)
-            db.setdefault("lots", []).append(lot); by_id[lot["id"]] = lot; added += 1
-            new_quals.add((lot.get("quality") or "").strip())
-        aq = ash = 0                                    # quick-add each NEW lot's quality + a shade '0'
-        for q in new_quals:
-            a, s = _ensure_quality_and_shade(db, q); aq += a; ash += s
-        linked = _reconcile_challans(db)                # a lot's inward challan may already be waiting
-        _log(db, "inbox", "lotImport", "lots", "",
-             "imported: %d new lots, %d already present (skipped); +%d qualities, +%d shades; linked %d challans"
-             % (added, skipped, aq, ash, linked))
+        added, skipped = _apply_lots_core(db, lots)
         save_db(db)
     return added, skipped
 
@@ -2259,37 +2321,44 @@ def _reconcile_challans(db):
             linked += 1
     return linked
 
-def _apply_challan(payload):
+def _apply_challan_core(db, payload):
+    """Lock-free core of the challan-inbox apply — split out so a caller that already holds LOCK + a
+    loaded db (e.g. the Processed files 'Reprocess' button) can call it directly instead of re-entering
+    the lock. _apply_challan (below) is the locking, top-level entry the watcher itself uses."""
     added = 0
+    by_id = {c.get("id"): c for c in db.get("challans", [])}
+    sig = payload.get("sig") or uuid.uuid4().hex[:10]
+    for i, lot in enumerate(payload.get("lots", [])):
+        cid = "CH-%s-%d" % (sig, i + 1)                 # stable id -> re-processing never duplicates
+        if cid in by_id:
+            continue
+        rolls = lot.get("rolls", [])
+        pkg = lot.get("packingListNo", "")
+        rec = {"id": cid, "sig": sig, "source": payload.get("source", ""),
+               "receivedAt": payload.get("receivedAt", ""), "status": "inward-pending", "page": i + 1,
+               "quality": _normalize_quality(lot.get("quality")), "customer": lot.get("customer", ""),
+               "toShade": lot.get("toShade", ""), "ownShade": lot.get("ownShade", ""),
+               "width": lot.get("width", 0), "po": lot.get("po", ""),
+               "packingListNo": pkg, "weaverChallanNo": pkg, "packingDate": lot.get("packingDate", ""),
+               "process": lot.get("process", ""), "processRemark": lot.get("processRemark", ""),
+               "totalTaka": lot.get("totalTaka", 0), "totalMeter": lot.get("totalMeter", 0),
+               "pcs": lot.get("pcs", len(lot.get("takas", []))), "meters": lot.get("meters", 0),
+               "realWeightKg": lot.get("realWeightKg", 0), "lotId": "",
+               "takas": lot.get("takas", []), "takaWts": lot.get("takaWts", []),
+               "rollNos": [r.get("rollNo", "") for r in rolls]}
+        db.setdefault("challans", []).append(rec); by_id[cid] = rec; added += 1
+    deduped = _dedupe_challans(db)                # a re-sent/corrected challan under the same ML no. supersedes the old one (logs its own entry)
+    linked = _reconcile_challans(db)              # a matching EMPIRE lot may already be here
+    if added or linked or deduped:
+        _log(db, "challan", "challanImport", "challans", "",
+             "imported %d challan lot(s) from %s; linked %d to lots" % (added, payload.get("source", "email"), linked))
+    return added
+
+def _apply_challan(payload):
     with LOCK:
         db = load_db()
-        by_id = {c.get("id"): c for c in db.get("challans", [])}
-        sig = payload.get("sig") or uuid.uuid4().hex[:10]
-        for i, lot in enumerate(payload.get("lots", [])):
-            cid = "CH-%s-%d" % (sig, i + 1)                 # stable id -> re-processing never duplicates
-            if cid in by_id:
-                continue
-            rolls = lot.get("rolls", [])
-            pkg = lot.get("packingListNo", "")
-            rec = {"id": cid, "sig": sig, "source": payload.get("source", ""),
-                   "receivedAt": payload.get("receivedAt", ""), "status": "inward-pending", "page": i + 1,
-                   "quality": _normalize_quality(lot.get("quality")), "customer": lot.get("customer", ""),
-                   "toShade": lot.get("toShade", ""), "ownShade": lot.get("ownShade", ""),
-                   "width": lot.get("width", 0), "po": lot.get("po", ""),
-                   "packingListNo": pkg, "weaverChallanNo": pkg, "packingDate": lot.get("packingDate", ""),
-                   "process": lot.get("process", ""), "processRemark": lot.get("processRemark", ""),
-                   "totalTaka": lot.get("totalTaka", 0), "totalMeter": lot.get("totalMeter", 0),
-                   "pcs": lot.get("pcs", len(lot.get("takas", []))), "meters": lot.get("meters", 0),
-                   "realWeightKg": lot.get("realWeightKg", 0), "lotId": "",
-                   "takas": lot.get("takas", []), "takaWts": lot.get("takaWts", []),
-                   "rollNos": [r.get("rollNo", "") for r in rolls]}
-            db.setdefault("challans", []).append(rec); by_id[cid] = rec; added += 1
-        deduped = _dedupe_challans(db)                # a re-sent/corrected challan under the same ML no. supersedes the old one (logs its own entry)
-        linked = _reconcile_challans(db)              # a matching EMPIRE lot may already be here
-        if added or linked or deduped:
-            _log(db, "challan", "challanImport", "challans", "",
-                 "imported %d challan lot(s) from %s; linked %d to lots" % (added, payload.get("source", "email"), linked))
-            save_db(db)
+        added = _apply_challan_core(db, payload)
+        save_db(db)
     return added
 
 def _challan_watcher():
