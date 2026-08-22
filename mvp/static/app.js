@@ -329,7 +329,12 @@ function lotAllocation(lotId){
   const t=lotTotals([lotId]);
   const prog=lotProgress(lotId);
   if(prog.hasWorkflow){
-    const blocked = prog.doneAll || t.pcs<=0;
+    // TEMPORARY (per user, 2026-08-22): a lot finishing its assigned workflow (doneAll) used to block it
+    // from the lot picker outright — but some lots are reading as workflow-complete/"dispatched" when
+    // they're not actually done, so that's wrongly hiding real usable stock. Until that data/workflow
+    // config is sorted out, only genuine zero physical stock blocks a lot — doneAll no longer does.
+    // Re-add "|| prog.doneAll" once the underlying issue is fixed.
+    const blocked = t.pcs<=0;
     const m=_lotAllocMap()[lotId];
     return {used: !!prog.lastDone, blocked, batches: m?[...new Set(m.by)]:[],
             pcs:t.pcs, mtr:t.mtr, total:t.mtr, totalPcs:t.pcs, remaining:t.mtr, remainingPcs:t.pcs,

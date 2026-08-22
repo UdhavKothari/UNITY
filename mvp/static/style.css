@@ -403,6 +403,11 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .mp-machine{margin-bottom:12px}
 .mp-table th{position:sticky;top:0}
+/* Weight is always a short number (kg) — narrow it; Shade carries a swatch + a recipe name that was
+   getting squeezed/clipped by neighbouring columns, so give it real room. data-col (not nth-child) so
+   this still targets the right column after a user drags columns into a different order. */
+.mp-table [data-col="weight"]{width:52px;max-width:52px}
+.mp-table [data-col="shade"]{min-width:170px}
 
 /* ---- Mass planning: inline batch editor ---- */
 .mp-machine.editing{width:calc(100vw - 32px);margin-left:calc((100% - 100vw + 32px)/2);border-color:var(--accent)}
