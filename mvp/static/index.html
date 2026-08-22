@@ -208,10 +208,11 @@ function renderMassPlan(){
   if(!machines.length){ body.innerHTML='<div class="empty"><span class="material-symbols-rounded">precision_manufacturing</span><h3>No machines yet</h3><p>Add machines in Admin and they will appear here to plan.</p></div>'; return; }
   let totB=0, totKg=0;
   body.innerHTML=machines.map(m=>{
-    const rows=planBatches(m.id).filter(b=>b.status!=="done");   // resolved (end-time logged) batches drop to history
-    totB+=rows.length; totKg+=rows.reduce((a,b)=>a+(+b.weight||0),0);
+    const rows=planBatches(m.id);   // resolved (done) batches stay visible — struck through — instead of vanishing to history
+    const activeRows=rows.filter(b=>b.status!=="done");
+    totB+=activeRows.length; totKg+=activeRows.reduce((a,b)=>a+(+b.weight||0),0);
     const head=`<div class="mp-head"><span><span class="material-symbols-rounded">${MC_ICON(m.type)}</span> <b class="tnum">${esc(m.id)}</b> <span class="mc-type">${esc(m.type||"")} · ${esc(m.capMax||"?")} kg</span></span>
-      <span class="small muted">${rows.length} batch(es) · ${Math.round(rows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${rows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
+      <span class="small muted">${activeRows.length} batch(es) · ${Math.round(activeRows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${activeRows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
     const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
     const acts=b=>`${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}`
@@ -224,7 +225,8 @@ function renderMassPlan(){
       +`${mayEdit?`<button class="btn ghost sm mp-del" title="delete" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}`;
     const bodyRows = (rows.length ? rows.map(b=>{
       const drag=`data-mid="${esc(m.id)}" data-bid="${esc(b.id)}" ondragover="mpDragOver(event)" ondrop="mpDrop(event)"`;
-      if(b.wash) return `<tr class="mp-wash" ${drag}><td class="tnum">${b.seq}</td><td class="tnum">—</td>
+      const doneCls=b.status==="done"?" mp-resolved":"";   // resolved batches stay visible, struck through, instead of dropping out of view
+      if(b.wash) return `<tr class="mp-wash${doneCls}" ${drag}><td class="tnum">${b.seq}</td><td class="tnum">—</td>
         <td colspan="9"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
         <td class="mp-actions">${acts(b)}</td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
@@ -237,8 +239,8 @@ function renderMassPlan(){
       const imAttr=inMachine?` style="--shln:${shadeColor(b.shadeNo,b.quality)};--shbg:${shadeColor(b.shadeNo,b.quality,0.12)}"`:"";
       const imCls=inMachine?" mp-inmachine":"";                       // 2px shade-hued marker on the top edge + subtle shade tint
       return lots.map((l,i)=> i===0
-        ? `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-btop${imCls}"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${esc(b.pgNo||"")||"—"}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
-        : `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-lotsub${imCls}"><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td></tr>`
+        ? `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-btop${imCls}${doneCls}"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${esc(b.pgNo||"")||"—"}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
+        : `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-lotsub${imCls}${doneCls}"><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td></tr>`
       ).join("");
     }).join("") : `<tr><td colspan="12" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (mayEdit ? (editing
@@ -252,45 +254,30 @@ function renderMassPlan(){
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
   if(MP_EDIT) mpInitEditor();
 }
-/* ---- inline batch editor (the Excel-like quick path) ----
-   Two visually separate panels: Lots (variable-length list of lot·pcs·mtr·kg lines) and Details
-   (quality/shade/pg no./remarks — fixed fields for the whole batch). Select-taka / remove-lot are no
-   longer per-row buttons; they act on whichever lot line is "active" (clicked/focused), and live in the
-   footer next to Add new lot so all three lot actions read as one group. */
+/* ---- inline batch editor (the Excel-like quick path) ---- */
 function mpEditorHTML(m){
   const editing=MP_EDIT&&MP_EDIT.editId;
   const existing=editing?(DB.batches||[]).find(b=>b.id===MP_EDIT.editId):null;
   const timeValue=v=>v?esc(String(v).replace("T"," ").slice(11,16)):"—";
   // In/Out/PH are read-only (logged via the time modal) and always empty on a new batch — only show them when editing.
-  const roFields = editing ? `<div class="mp-ed-f mp-ed-readonly"><label>In time</label><b>${timeValue(existing&&existing.startedAt)}</b></div>
-      <div class="mp-ed-f mp-ed-readonly"><label>Out time</label><b>${timeValue(existing&&existing.completedAt)}</b></div>
-      <div class="mp-ed-f mp-ed-readonly"><label>PH</label><b>${esc((existing&&existing.ph)||"—")}</b></div>` : '';
+  const roHead = editing ? '<span>In time</span><span>Out time</span><span>PH</span>' : '';
+  const roRow  = editing ? `<div class="mp-ed-f mp-ed-readonly"><b>${timeValue(existing&&existing.startedAt)}</b></div><div class="mp-ed-f mp-ed-readonly"><b>${timeValue(existing&&existing.completedAt)}</b></div><div class="mp-ed-f mp-ed-readonly"><b>${esc((existing&&existing.ph)||"—")}</b></div>` : '';
   return `<div class="mp-editor${editing?' editing':''}">
     <div class="mp-editor-scroll">
-      <div class="mp-ed-seqline"><span class="mp-ed-seq">${editing?esc(existing&&existing.seq||""):"+"+nextSeq(m.id)}</span>${editing?`<span class="small muted">editing <b class="tnum">${esc(MP_EDIT.editId)}</b></span>`:''}</div>
-      <div class="mp-ed-panel mp-ed-panel-lots">
-        <div class="mp-ed-panel-h"><span class="material-symbols-rounded">layers</span>Lots<span class="mp-ed-panel-hint">lot no. · pcs · mtr · kg</span></div>
-        <div id="mp_lots"></div>
+      <div class="mp-editor-head"><span>Seq</span><span class="mp-hd-lots">Lot no. · pcs · mtr · kg</span><span>Quality</span><span>Shade</span><span>Pg No.</span><span>Remarks</span>${roHead}<span></span></div>
+      <div class="mp-editor-row">
+        <span class="mp-ed-seq">${editing?esc(existing&&existing.seq||""):"+"+nextSeq(m.id)}</span>
+        <div class="mp-ed-lots"><div id="mp_lots"></div></div>
+        <div class="mp-ed-f"><select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></div>
+        <div class="mp-ed-f"><span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select><button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button></span></div>
+        <div class="mp-ed-f"><input id="mp_pgno" type="text" placeholder="Page"></div>
+        <div class="mp-ed-f"><input id="mp_remarks" type="text" placeholder="Remarks (optional)"></div>
+        ${roRow}
+        <div class="mp-ed-actions"><button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${editing?"Save changes":"Save batch"}</button><button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button></div>
       </div>
-      <div class="mp-ed-panel mp-ed-panel-meta">
-        <div class="mp-ed-panel-h"><span class="material-symbols-rounded">info</span>Quality &amp; details</div>
-        <div class="mp-ed-metarow">
-          <div class="mp-ed-f"><label for="mp_q">Quality</label><select id="mp_q" onchange="mpEditorRefreshShades();mpEditorRefreshSteps();mpEditorSync()"></select></div>
-          <div class="mp-ed-f mp-ed-shade"><label for="mp_sh">Shade</label><span class="mp-sh-row"><select id="mp_sh" onchange="mpShadeSelChanged()"></select></span></div>
-          <div class="mp-ed-f"><label for="mp_pgno">Pg No.</label><input id="mp_pgno" type="text" placeholder="Page"></div>
-          <div class="mp-ed-f mp-ed-remarks"><label for="mp_remarks">Remarks</label><input id="mp_remarks" type="text" placeholder="Remarks (optional)"></div>
-          ${roFields}
-        </div>
-        <label class="mp-ed-step" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
-      </div>
+      <label class="mp-ed-f mp-ed-step" id="mp_step_wrap" style="display:none">Process step<select id="mp_step" onchange="mpStepChanged()"></select></label>
     </div>
-    <div class="mp-ed-foot">
-      <button class="btn ghost sm mp-add-lot" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add new lot</button>
-      <button class="btn ghost sm" title="pick specific takas for the selected lot" onclick="mpTakaBtnActive()"><span class="material-symbols-rounded">tune</span>Select taka</button>
-      <button class="btn ghost sm mp-del" title="remove the selected lot" onclick="mpRemoveActiveLot()"><span class="material-symbols-rounded">delete</span>Remove lot</button>
-      <span class="mp-ed-total" id="mp_ed_total"></span>
-      <div class="mp-ed-actions"><button class="btn sm" title="save batch" onclick="mpSaveNew('${esc(m.id)}')"><span class="material-symbols-rounded">check</span>${editing?"Save changes":"Save batch"}</button><button class="btn ghost sm" title="cancel" onclick="mpCancelNew()"><span class="material-symbols-rounded">close</span></button></div>
-    </div>
+    <div class="mp-ed-foot"><button class="btn ghost sm mp-add-lot" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button><span class="mp-ed-total" id="mp_ed_total"></span></div>
   </div>`;
 }
 function mpAddBatch(machineId){ MP_EDIT={machineId}; renderMassPlan(); }
@@ -314,32 +301,8 @@ function mpInitEditor(){
     mpEditorRefreshShades(); mpEditorRefreshSteps();
     if(!document.querySelector('#mp_lots .lotqrow')) mpAddEditorLot();
   }
-  const lotsBox=document.getElementById("mp_lots");
-  lotsBox.addEventListener("input", mpEditorSync);
-  lotsBox.addEventListener("click", e=>{ const row=e.target.closest('.lotqrow'); if(row) mpMarkActiveLot(row); });
-  lotsBox.addEventListener("focusin", e=>{ const row=e.target.closest('.lotqrow'); if(row) mpMarkActiveLot(row); });
+  document.getElementById("mp_lots").addEventListener("input", mpEditorSync);
   mpEditorSync();
-}
-/* ---- which lot line the footer's Select taka / Remove lot buttons act on ---- */
-function mpMarkActiveLot(row){
-  document.querySelectorAll('#mp_lots .lotqrow.active').forEach(r=>r.classList.remove('active'));
-  if(row) row.classList.add('active');
-}
-function mpActiveLotRow(){
-  return document.querySelector('#mp_lots .lotqrow.active') || document.querySelector('#mp_lots .lotqrow:last-child');
-}
-function mpTakaBtnActive(){
-  const row=mpActiveLotRow(); if(!row){ toast("Add a lot first"); return; }
-  openTakaPicker(row);
-}
-function mpRemoveActiveLot(){
-  const row=mpActiveLotRow(); if(!row){ toast("Add a lot first"); return; }
-  if(row.classList.contains('lot-locked')){ toast("This lot is locked while editing — cancel and start a new batch to change lots"); return; }
-  const rows=[...document.querySelectorAll('#mp_lots .lotqrow')];
-  if(rows.length<=1){ toast("A batch needs at least one lot"); return; }
-  row.remove();
-  mpLockQuality(); mpEditorSync();
-  mpMarkActiveLot(document.querySelector('#mp_lots .lotqrow:last-child'));
 }
 function mpEditorRefreshShades(){
   const mq=document.getElementById("mp_q"), sh=document.getElementById("mp_sh");
@@ -355,12 +318,11 @@ function mpShadeSelChanged(){                                // picking "+ Add n
   mpEditorSync();
 }
 /* quick-add a shade right from the planner — an inline field (no browser prompt), matching the
-   Excel-like editor. Saves a minimal recipe now; finish family/tone/program later in Admin.
-   Reached via the dropdown's own "+ Add new shade…" entry (mpShadeSelChanged) — there's no separate
-   add-shade button next to the field anymore, since that would just duplicate it. */
-function mpShadeRow(sel){                                    // (re)build the shade field back to a plain select
+   Excel-like editor. Saves a minimal recipe now; finish family/tone/program later in Admin. */
+function mpShadeRow(sel){                                    // (re)build the shade field: select + quick-add button
   const row=document.querySelector(".mp-sh-row"); if(!row) return;
-  row.innerHTML='<select id="mp_sh" onchange="mpShadeSelChanged()"></select>';
+  row.innerHTML='<select id="mp_sh" onchange="mpShadeSelChanged()"></select>'
+    +'<button type="button" class="btn ghost sm mp-sh-add" title="Quick-add a new shade — onboard full details later" onclick="mpQuickShade()"><span class="material-symbols-rounded">add</span></button>';
   mpEditorRefreshShades();
   if(sel){ const sh=document.getElementById("mp_sh"); if(sh) sh.value=sel; }
 }
@@ -429,6 +391,8 @@ function mpAddEditorLot(pf){
     <input class="b-pcs" type="number" min="0" placeholder="pcs">
     <input class="b-mtr" type="number" min="0" placeholder="mtr">
     <input class="b-wt" type="number" min="0" step="0.1" placeholder="kg">
+    <button type="button" class="btn ghost sm b-takabtn" title="pick specific takas" onclick="openTakaPicker(this.closest('.lotqrow'))"><span class="material-symbols-rounded">tune</span></button>
+    ${locked?'':`<button type="button" class="rm" title="remove lot" onclick="this.closest('.lotqrow').remove();mpLockQuality();mpEditorSync()">&times;</button>`}
     <div class="taka-pick"></div>`;
   box.appendChild(wrap);
   const row=box.lastElementChild;
@@ -445,7 +409,6 @@ function mpAddEditorLot(pf){
     row.querySelector(".b-mtr").addEventListener("input",()=>mpEditorSuggestWeight(row));
     row.querySelector(".b-mtr").addEventListener("change",()=>{ mpSnapRow(row); mpEditorSync(); });
   }
-  mpMarkActiveLot(row);                          // newest lot line becomes the target of Select taka / Remove lot
   mpEditorSync();
 }
 function mpPrefillRow(row){                       // start from what is still LEFT in the lot, then snap to takas
