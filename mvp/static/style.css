@@ -423,10 +423,10 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
    the header grid and the row grid compute identical widths (a select's intrinsic width can't stretch a row
    track past its header). */
 .mp-editor-head,.mp-editor-row{display:grid;gap:6px;min-width:980px;
-  grid-template-columns:minmax(0,.4fr) minmax(0,1.5fr) minmax(0,.5fr) minmax(0,.55fr) minmax(0,.62fr) minmax(0,1.25fr) minmax(0,.5fr) minmax(0,.3fr) minmax(0,1.4fr) 200px}
+  grid-template-columns:minmax(0,.4fr) minmax(0,1.5fr) minmax(0,.5fr) minmax(0,.55fr) minmax(0,.35fr) minmax(0,1.25fr) minmax(0,.8fr) minmax(0,.3fr) minmax(0,1.4fr) 200px}
 /* edit mode: also show the read-only In / Out / PH columns */
 .mp-editor.editing .mp-editor-head,.mp-editor.editing .mp-editor-row{min-width:1200px;
-  grid-template-columns:minmax(0,.4fr) minmax(0,1.25fr) minmax(0,.48fr) minmax(0,.5fr) minmax(0,.58fr) minmax(0,1.05fr) minmax(0,.45fr) minmax(0,.28fr) minmax(0,1.2fr) minmax(0,.6fr) minmax(0,.6fr) minmax(0,.5fr) 200px}
+  grid-template-columns:minmax(0,.4fr) minmax(0,1.25fr) minmax(0,.48fr) minmax(0,.5fr) minmax(0,.3fr) minmax(0,1.05fr) minmax(0,.75fr) minmax(0,.28fr) minmax(0,1.2fr) minmax(0,.6fr) minmax(0,.6fr) minmax(0,.5fr) 200px}
 .mp-editor-head{padding:0 2px 6px;font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .mp-editor-row{align-items:start}
 .mp-ed-seq{align-self:center;padding:10px 2px;font:500 12px/1 var(--mono);color:var(--ink-2)}
@@ -468,7 +468,7 @@ table.mini td{padding:7px 10px;border-bottom:1px solid var(--line,#f0f3f8);font-
 .mp-editor{background:var(--accent-soft);border-radius:var(--r);padding:14px 16px;gap:12px}   /* no inner border — the machine card's accent outline is the only outline */
 .mp-editor-scroll{padding:0;background:transparent}
 .mp-editor .mp-lotline{background:transparent;border:0;padding:0}
-.mp-editor .lotqrow{grid-template-columns:1.6fr .25fr .28fr .8fr auto 38px}   /* pcs/mtr shrunk to ~35% — they're short numbers; frees width for Remarks up in the row */
+.mp-editor .lotqrow{grid-template-columns:1.6fr .25fr .28fr .4fr auto 38px}   /* pcs/mtr/kg all short numbers — kg halved from .8fr so lot/shade get the room instead */
 .mp-editor .mp-ed-lots .mp-lotline + .mp-lotline{border-top:1px solid #c9d5ea;padding-top:8px;margin-top:2px}   /* divider between stacked lots */
 .mp-editor .mp-ed-f select,
 .mp-editor .mp-ed-f input,
