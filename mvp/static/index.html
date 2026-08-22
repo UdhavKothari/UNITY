@@ -186,7 +186,7 @@ function saveMcOrder(ids){ CURRENT_USER.prefs=CURRENT_USER.prefs||{}; CURRENT_US
   if(window.API&&API._post){ API._post({op:"savePrefs",prefs:{mpMachineOrder:ids}}).catch(()=>{}); }
   renderMassPlan(); }
 let MPCOL_DRAG=null;
-const MP_COLS=["seq","lot","pcs","mtr","weight","quality","shade","pgno","intime","outtime","ph"];
+const MP_COLS=["seq","lot","pcs","mtr","weight","quality","shade","pgno","remarks","intime","outtime","ph"];
 function mpColOrder(){ let o=(window.CURRENT_USER&&CURRENT_USER.prefs&&CURRENT_USER.prefs.mpColOrder)||[]; o=o.filter(k=>MP_COLS.includes(k)); MP_COLS.forEach(k=>{ if(!o.includes(k)) o.push(k); }); return o; }
 function applyMpCols(){
   const order=mpColOrder(); const perm=order.map(k=>MP_COLS.indexOf(k));
@@ -215,40 +215,45 @@ function renderMassPlan(){
       <span class="small muted">${activeRows.length} batch(es) · ${Math.round(activeRows.reduce((a,b)=>a+(+b.weight||0),0))} kg · ${activeRows.reduce((a,b)=>a+(+b.mtr||0),0)} m</span></div>`;
     const mayEdit=canEdit("op_batch");             // create/delete batches needs EDIT on op_batch (server-enforced)
     const editing=MP_EDIT && MP_EDIT.machineId===m.id;
-    const acts=b=>`${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}`
-      +`${(b.additions&&b.additions.length)?`<span class="sp-autosum" style="padding:2px 7px;font-size:10.5px" title="${esc(b.additions.map(a=>a.note).join(" · "))}"><span class="material-symbols-rounded" style="font-size:12px">colorize</span>${b.additions.length}</span>`:''}`
-      +`${b.redyeOf?`<span class="sp-flag" title="${esc(b.redyeNote||"")}">redye #${b.redyeNo||"?"}/5</span>`:''}`
-      +`${mayEdit?`<span class="mp-drag material-symbols-rounded" draggable="true" title="drag to reorder" ondragstart="mpDragStart(event)" ondragend="mpDragEnd(event)">drag_indicator</span>`:''}`
-      +`${mayEdit&&!b.wash?`<button class="btn ghost sm" title="edit shade / takas / weight" onclick="mpEditBatch('${esc(b.id)}')"><span class="material-symbols-rounded">edit</span></button>`:''}`
-      +`${mayEdit&&!b.wash&&b.status==="running"?`<button class="btn ghost sm" title="log a mid-run dye addition (jet cooled, sample checked, more dye added)" onclick="mpAddAddition('${esc(b.id)}')"><span class="material-symbols-rounded">colorize</span></button>`:''}`
-      +`${mayEdit?`<button class="btn ghost sm" title="log start / end time" onclick="mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span></button>`:''}`
-      +`${mayEdit?`<button class="btn ghost sm mp-del" title="delete" onclick="mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span></button>`:''}`;
+    const acts=b=>{
+      const menu=[];
+      if(mayEdit&&!b.wash) menu.push(`<button onclick="closeDD(this);mpEditBatch('${esc(b.id)}')"><span class="material-symbols-rounded">edit</span>Edit shade / takas / weight</button>`);
+      if(mayEdit&&!b.wash&&b.status==="running") menu.push(`<button onclick="closeDD(this);mpAddAddition('${esc(b.id)}')"><span class="material-symbols-rounded">colorize</span>Log dye addition</button>`);
+      if(mayEdit) menu.push(`<button onclick="closeDD(this);mpLogTime('${esc(b.id)}')"><span class="material-symbols-rounded">schedule</span>Log start / end time</button>`);
+      if(mayEdit) menu.push(`<button class="dd-danger" onclick="closeDD(this);mpDeleteBatch('${esc(b.id)}')"><span class="material-symbols-rounded">delete</span>Delete batch</button>`);
+      return `${batchStatusPill(b)}${b.startedAt?`<span class="blife-meta">in ${esc((b.startedAt).slice(11,16))}</span>`:''}`
+        +`${(b.additions&&b.additions.length)?`<span class="sp-autosum" style="padding:2px 7px;font-size:10.5px" title="${esc(b.additions.map(a=>a.note).join(" · "))}"><span class="material-symbols-rounded" style="font-size:12px">colorize</span>${b.additions.length}</span>`:''}`
+        +`${b.redyeOf?`<span class="sp-flag" title="${esc(b.redyeNote||"")}">redye #${b.redyeNo||"?"}/5</span>`:''}`
+        +`${mayEdit?`<span class="mp-drag material-symbols-rounded" draggable="true" title="drag to reorder" ondragstart="mpDragStart(event)" ondragend="mpDragEnd(event)">drag_indicator</span>`:''}`
+        +(menu.length?`<div class="ddwrap"><button type="button" class="btn ghost sm" title="more actions" onclick="toggleDD(this)"><span class="material-symbols-rounded">more_vert</span></button><div class="dd-menu">${menu.join("")}</div></div>`:'');
+    };
     const bodyRows = (rows.length ? rows.map(b=>{
       const drag=`data-mid="${esc(m.id)}" data-bid="${esc(b.id)}" ondragover="mpDragOver(event)" ondrop="mpDrop(event)"`;
       const doneCls=b.status==="done"?" mp-resolved":"";   // resolved batches stay visible, struck through, instead of dropping out of view
       if(b.wash) return `<tr class="mp-wash${doneCls}" ${drag}><td class="tnum">${b.seq}</td><td class="tnum">—</td>
-        <td colspan="9"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
+        <td colspan="10"><span class="material-symbols-rounded" style="vertical-align:-5px;color:var(--accent)">bubble_chart</span> <b>Machine wash</b> <span class="muted">boil-out · ${(+b.washMins||60)} min</span></td>
         <td class="mp-actions">${acts(b)}</td></tr>`;
       const takas=(b.lots||[]).map(l=>`${esc(l.lotId)}·${(l.takaNos||l.takas||[]).length}tk`).join(", ");
       const lots=(b.lots&&b.lots.length)?b.lots:[{lotId:(b.lotIds&&b.lotIds[0])||"—",pcs:b.pcs,mtr:b.mtr,weight:b.weight}];
       const n=lots.length;
       const intime=b.startedAt?esc(b.startedAt.slice(11,16)):"—", outtime=b.completedAt?esc(b.completedAt.slice(11,16)):"—";
       const shadeCell=`<span class="swatch" style="background:${shadeColor(b.shadeNo,b.quality)}"></span> ${esc(b.shadeNo||"")}`;
+      const remarkCell=`<span class="mp-remark" title="${esc(b.notes||"")}">${esc(b.notes||"")||'<span class="muted">—</span>'}</span>`;
       const dbl=(mayEdit&&!b.wash)?`ondblclick="mpEditBatch('${esc(b.id)}')" title="Double-click to edit"`:"";   // double-click any row to edit
       const inMachine=!!(b.startedAt && !b.completedAt && !b.wash);   // in-time logged, no out-time = fabric is inside the machine
       const imAttr=inMachine?` style="--shln:${shadeColor(b.shadeNo,b.quality)};--shbg:${shadeColor(b.shadeNo,b.quality,0.12)}"`:"";
       const imCls=inMachine?" mp-inmachine":"";                       // 2px shade-hued marker on the top edge + subtle shade tint
       return lots.map((l,i)=> i===0
-        ? `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-btop${imCls}${doneCls}"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${esc(b.pgNo||"")||"—"}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
+        ? `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-btop${imCls}${doneCls}"><td class="tnum" rowspan="${n}">${b.seq}</td><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td><td rowspan="${n}">${esc(b.quality||"")}</td><td rowspan="${n}">${shadeCell}</td><td class="tnum small" rowspan="${n}">${esc(b.pgNo||"")||"—"}</td><td class="small" rowspan="${n}">${remarkCell}</td><td class="tnum small" rowspan="${n}">${intime}</td><td class="tnum small" rowspan="${n}">${outtime}</td><td class="tnum" rowspan="${n}">${esc(b.ph||"")||"—"}</td><td class="mp-actions" rowspan="${n}">${acts(b)}</td></tr>`
         : `<tr ${drag} ${dbl}${imAttr} class="mp-brow mp-lotsub${imCls}${doneCls}"><td>${esc(l.lotId||"—")}</td><td class="tnum">${l.pcs||0}</td><td class="tnum">${l.mtr||0}</td><td class="tnum">${l.weight||0}</td></tr>`
       ).join("");
-    }).join("") : `<tr><td colspan="12" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
+    }).join("") : `<tr><td colspan="13" class="muted" style="padding:10px">No batches on ${esc(m.id)} yet.</td></tr>`)
       + (mayEdit ? (editing
-          ? `<tr class="mp-editrow"><td colspan="12">${mpEditorHTML(m)}</td></tr>`
-          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="11"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
+          ? `<tr class="mp-editrow"><td colspan="13">${mpEditorHTML(m)}</td></tr>`
+          : `<tr class="mp-add"><td>+${nextSeq(m.id)}</td><td colspan="12"><button class="btn ghost sm" onclick="mpAddBatch('${esc(m.id)}')"><span class="material-symbols-rounded">add</span>Add batch to ${esc(m.id)}</button>${m.type==="jet"?`<button class="btn ghost sm" style="margin-left:8px" onclick="mpAddWash('${esc(m.id)}')"><span class="material-symbols-rounded">bubble_chart</span>Add wash cycle</button>`:''}</td></tr>`)
         : '');
     return `<div class="card mp-machine${editing?' editing':''}"><div class="card-b">${head}
-      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th data-col="seq">Seq</th><th data-col="lot">Lot no.</th><th data-col="pcs">Pcs</th><th data-col="mtr">Mtr</th><th data-col="weight">Weight</th><th data-col="quality">Quality</th><th data-col="shade">Shade</th><th data-col="pgno">Pg No.</th><th data-col="intime">In time</th><th data-col="outtime">Out time</th><th data-col="ph">PH</th><th></th></tr></thead>
+      <div class="tbl-wrap"><table class="mp-table"><thead><tr><th data-col="seq">Seq</th><th data-col="lot">Lot no.</th><th data-col="pcs">Pcs</th><th data-col="mtr">Mtr</th><th data-col="weight">Weight</th><th data-col="quality">Quality</th><th data-col="shade">Shade</th><th data-col="pgno">Pg No.</th><th data-col="remarks">Remarks</th><th data-col="intime">In time</th><th data-col="outtime">Out time</th><th data-col="ph">PH</th><th></th></tr></thead>
       <tbody>${bodyRows}</tbody></table></div></div></div>`;
   }).join("");
   document.getElementById("mp_note").textContent=`${machines.length} machines · ${totB} batches · ${Math.round(totKg)} kg planned`;
@@ -280,6 +285,13 @@ function mpEditorHTML(m){
     <div class="mp-ed-foot"><button class="btn ghost sm mp-add-lot" onclick="mpAddEditorLot()"><span class="material-symbols-rounded">add</span>Add another lot</button><span class="mp-ed-total" id="mp_ed_total"></span></div>
   </div>`;
 }
+/* ---- row-actions "more" menu — the same .ddwrap/.dd-menu component Admin uses for its Excel
+   Import/Export button, so a row's actions (edit / addition / log time / delete) read as one
+   compact trigger instead of a strip of icon buttons, freeing width for Remarks in the table. ---- */
+function toggleDD(btn){ const m=btn.nextElementSibling, open=m.classList.contains("on");
+  document.querySelectorAll(".dd-menu.on").forEach(x=>x.classList.remove("on")); if(!open) m.classList.add("on"); }
+function closeDD(el){ const m=el.closest(".dd-menu"); if(m) m.classList.remove("on"); }
+document.addEventListener("click",e=>{ if(!e.target.closest(".ddwrap")) document.querySelectorAll(".dd-menu.on").forEach(x=>x.classList.remove("on")); });
 function mpAddBatch(machineId){ MP_EDIT={machineId}; renderMassPlan(); }
 function mpCancelNew(){ MP_EDIT=null; renderMassPlan(); }
 function mpEditBatch(id){ const b=(DB.batches||[]).find(x=>x.id===id); if(!b||b.wash) return; MP_EDIT={machineId:b.machine, editId:id}; renderMassPlan(); }

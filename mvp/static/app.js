@@ -956,12 +956,22 @@ function refreshPlcModal(){
 
 /* ---------- live auto-sync: refresh the current view every few seconds without disturbing edits ---------- */
 let _autoSyncTimer=null, _dbEtag=null;
+// tables the server deliberately sends back EMPTY on every /api/db response (see _sanitized() in
+// server.py) — they're large/sensitive and only loaded on demand by their own page (challans via
+// loadChallans(), activityLog via logPage, programScans via scansList, scanSessions per-session).
+// Without this, every auto-sync tick (every 4s, on ANY change anywhere in the app) would silently
+// wipe out whichever of these a page had already loaded — e.g. Inward Pending losing its rows and
+// its pager breaking mid-session the moment something elsewhere in the ERP got saved.
+const _ONDEMAND_KEYS=["challans","activityLog","programScans","scanSessions"];
 async function _syncFetch(){
   try{
     const r=await fetch("/api/db",{headers:_dbEtag?{"If-None-Match":_dbEtag}:{}});
     if(r.status===304) return false;                 // nothing changed since last tick
     const et=r.headers.get("ETag"); if(et) _dbEtag=et;
-    const d=await r.json(); if(d && !d.error){ DB=d; return true; }
+    const d=await r.json(); if(d && !d.error){
+      for(const k of _ONDEMAND_KEYS){ if((!d[k]||!d[k].length) && DB && DB[k] && DB[k].length) d[k]=DB[k]; }
+      DB=d; return true;
+    }
     return false;
   }catch(e){ return false; }
 }

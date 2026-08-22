@@ -576,7 +576,7 @@ tr.linked td{background:var(--success-soft)}
 .mp-drag{cursor:grab;color:var(--muted);font-size:19px;vertical-align:-4px;user-select:none;padding:0 2px}
 .mp-drag:hover{color:var(--ink)} .mp-drag:active{cursor:grabbing}
 .mp-table tbody tr.mp-dragging{opacity:.55;background:var(--accent-soft)}
-.mp-remark{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-remark{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .mp-hold{position:relative;overflow:hidden;user-select:none}
 .mp-hold .hold-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,255,255,.30);pointer-events:none}
 .mp-hold .hold-lbl{position:relative;display:inline-flex;align-items:center;gap:6px}
@@ -607,6 +607,8 @@ tr.linked td{background:var(--success-soft)}
 .dd-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:0;background:none;border-radius:7px;font:inherit;font-size:13px;color:var(--ink);cursor:pointer;text-align:left}
 .dd-menu button:hover{background:var(--surface-3)}
 .dd-menu .material-symbols-rounded{font-size:18px;color:var(--muted)}
+.dd-menu button.dd-danger:hover{background:var(--danger-soft)}
+.dd-menu button.dd-danger:hover,.dd-menu button.dd-danger:hover .material-symbols-rounded{color:var(--danger)}
 
 /* ---- table pagination (200 rows per page, then stop) ---- */
 .pager{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-top:1px solid var(--line)}

@@ -417,6 +417,8 @@ def _migrate(db):
         if not c.get("weaverChallanNo") and c.get("packingListNo"):
             c["weaverChallanNo"] = c["packingListNo"]; changed = True
         c.setdefault("lotId", "")
+    if _dedupe_challans(db):                                # one-time cleanup of pre-existing re-sent challans
+        changed = True
     today = time.strftime("%Y-%m-%d")
     seq_by = {}
     for b in db.get("batches", []):
@@ -1853,6 +1855,42 @@ CHALLAN_DIR  = os.path.join(HERE, "inbox_challan")
 CHALLAN_DONE = os.path.join(CHALLAN_DIR, "done")
 CHALLAN_ERR  = os.path.join(CHALLAN_DIR, "error")
 
+def _challan_no_key(c):
+    """normalized Packing List / mill challan number ('ML05859/26') used to spot re-sends of the
+    same challan — case/whitespace-insensitive so 'ml05859/26' and 'ML05859 / 26' still collide."""
+    return re.sub(r"\s+", "", str(c.get("packingListNo") or c.get("weaverChallanNo") or "").strip().upper())
+
+def _dedupe_challans(db):
+    """The mill sometimes re-sends a corrected challan under the same Packing List (ML...) number —
+    challan_watch.py's dedup is by exact PDF content hash, so a corrected PDF (different bytes) comes
+    through as a brand-new record even though it's the same challan. Enforce one challan per number:
+    keep only the newest (by receivedAt, ties broken by original insertion order) and drop the rest.
+    If a dropped duplicate was already linked to an EMPIRE lot, the surviving (newer) challan takes
+    over that link so the correction actually reaches the lot instead of the link being lost."""
+    groups = {}
+    for c in db.get("challans", []):
+        key = _challan_no_key(c)
+        if not key:
+            continue
+        groups.setdefault(key, []).append(c)
+    removed = 0
+    for key, group in groups.items():
+        if len(group) <= 1:
+            continue
+        group.sort(key=lambda c: str(c.get("receivedAt") or ""))   # stable sort: ties keep insertion order
+        newest = group[-1]
+        for dupe in group[:-1]:
+            if newest.get("status") != "linked" and dupe.get("status") == "linked" and dupe.get("lotId"):
+                lot = next((l for l in db.get("lots", []) if l.get("id") == dupe["lotId"]), None)
+                if lot:
+                    _link_challan_to_lot(db, newest, lot)         # newer challan's data now reaches the lot
+            db["challans"].remove(dupe)
+            removed += 1
+    if removed:
+        _log(db, "system", "challanDedupe", "challans", "",
+             "removed %d superseded challan record(s) — a mill re-send under the same Packing List no. keeps only the newest" % removed)
+    return removed
+
 def _cl_match(c, lot):
     """does an inward-pending challan describe the same fabric as this EMPIRE lot?
     Match on quality + piece count + total meters (within tolerance). Dates are a week apart, so
@@ -1943,8 +1981,9 @@ def _apply_challan(payload):
                    "takas": lot.get("takas", []), "takaWts": lot.get("takaWts", []),
                    "rollNos": [r.get("rollNo", "") for r in rolls]}
             db.setdefault("challans", []).append(rec); by_id[cid] = rec; added += 1
+        deduped = _dedupe_challans(db)                # a re-sent/corrected challan under the same ML no. supersedes the old one (logs its own entry)
         linked = _reconcile_challans(db)              # a matching EMPIRE lot may already be here
-        if added or linked:
+        if added or linked or deduped:
             _log(db, "challan", "challanImport", "challans", "",
                  "imported %d challan lot(s) from %s; linked %d to lots" % (added, payload.get("source", "email"), linked))
             save_db(db)
