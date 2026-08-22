@@ -103,7 +103,7 @@ SESSION_TTL = 12 * 3600       # 12 hours
 # mobile-only (UNITY-MOBILE/m.js) — the other op_* keys are shared between the desktop page and the
 # mobile tab/view of the same name (op_floor, op_massplan).
 ALL_PAGES = ["op_floor","op_schedule","op_order","op_orderstatus","op_batch","op_storage","op_massplan","op_workflows","op_scan","op_mob_log",
-             "dashboard","machines","qualities","shadeRecipes","recipes","history","lotHistory",
+             "dashboard","machines","qualities","shadeRecipes","recipes","history","lotHistory","dispatch",
              "batches","lots","weavers","takaMaster",
              "customers","orders","challans","storageAreas","shelves","storageSlots","suppliers","operators","qcMetrics",
              "users","roles","plan","settings","activity","urgent_flag"]
@@ -1251,6 +1251,49 @@ class Handler(BaseHTTPRequestHandler):
                      % (res["qualitiesRemoved"], res["lotsRepointed"], res["shadesRemoved"]))
                 save_db(db)
                 return self._send(200, {"ok": True, **res})
+
+            if op == "dispatchReturn":
+                # undo one lotDispatches record (Admin -> Dispatch page): re-adds its itemized takas to
+                # the lot's active stock. Uses the ledger's own per-taka sr/mts/wt, so this is an exact
+                # restore, not a guess - covers a dispatch report matching the wrong lot, or matching a
+                # lot before it should have (see the Dispatch page's "Return dispatch" button).
+                if _need_edit(("dispatch",)):
+                    return self._send(403, {"error": "forbidden"})
+                did = req.get("id")
+                rec = next((d for d in db.get("lotDispatches", []) if d.get("id") == did), None)
+                if not rec:
+                    return self._send(404, {"error": "dispatch record not found"})
+                if rec.get("returnedAt"):
+                    return self._send(400, {"error": "already returned"})
+                lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(rec.get("lotId"))), None)
+                if not lot:
+                    return self._send(404, {"error": "lot " + str(rec.get("lotId")) + " no longer exists"})
+                lot.setdefault("takas", []); lot.setdefault("takaNos", [])
+                tracks_wt = "takaWts" in lot
+                if tracks_wt:
+                    lot.setdefault("takaWts", [])
+                existing = set(str(n) for n in (lot.get("takaNos") or []))
+                added = 0
+                for t in (rec.get("takas") or []):
+                    sr = t.get("sr")
+                    if sr is None or str(sr) in existing:
+                        continue                                    # already back in stock - don't double-add
+                    lot["takaNos"].append(sr); lot["takas"].append(t.get("mts") or 0)
+                    if tracks_wt:
+                        lot["takaWts"].append(t.get("wt") or 0)
+                    existing.add(str(sr)); added += 1
+                lot["pcs"] = len(lot["takas"])
+                lot["meters"] = round(sum(lot["takas"]) if lot["takas"] else 0)
+                if tracks_wt:
+                    lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
+                if lot.get("status") == "dispatched" and lot["takas"]:
+                    lot["status"] = "in stock"
+                rec["returnedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                rec["returnedBy"] = u["username"]
+                _log(db, u["username"], "dispatchReturn", "lots", lot.get("id"),
+                     "returned dispatch %s to stock (%d taka(s) restored)" % (did, added))
+                save_db(db)
+                return self._send(200, {"ok": True, "added": added, "lot": lot})
 
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,

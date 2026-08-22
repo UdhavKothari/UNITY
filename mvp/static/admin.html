@@ -69,7 +69,7 @@ function ic(name){
     operators:"badge", qcMetrics:"verified", users:"person",
     roles:"admin_panel_settings", plan:"calendar_view_week", settings:"tune",
     batches:"widgets", lots:"qr_code_2", weavers:"factory", recipes:"science",
-    activity:"history", takaMaster:"tag", history:"manage_history", challans:"mail", lotHistory:"timeline"
+    activity:"history", takaMaster:"tag", history:"manage_history", challans:"mail", lotHistory:"timeline", dispatch:"local_shipping"
   };
   return '<span class="material-symbols-rounded">'+(M[name]||"circle")+'</span>';
 }
@@ -305,7 +305,7 @@ const PAGES=[
   ["shelves","Shelves","Admin"],["storageSlots","Storage slots","Admin"],
   ["suppliers","Suppliers","Admin"],["operators","Operators","Admin"],["qcMetrics","QC metrics","Admin"],
   ["users","Users","Admin"],["roles","Roles","Admin"],["plan","Live plan","Admin"],["settings","Settings","Admin"],
-  ["takaMaster","Taka master","Admin"],["history","Batch history","Admin"],["lotHistory","Lot history","Admin"],["activity","Activity log","Admin"],
+  ["takaMaster","Taka master","Admin"],["history","Batch history","Admin"],["lotHistory","Lot history","Admin"],["dispatch","Dispatch","Admin"],["activity","Activity log","Admin"],
   ["op_mob_log","Machine activity (24h in/out log)","Mobile app"]];
 
 const NAV=[
@@ -318,7 +318,7 @@ const NAV=[
   {grp:"People & QC", items:[["operators","Operators"],["qcMetrics","QC metrics"]]},
   {grp:"Access", items:[["users","Users"],["roles","Roles"]]},
   {grp:"System", items:[["plan","Live plan"],["settings","Settings"]]},
-  {grp:"History & audit", items:[["history","Batch history"],["lotHistory","Lot history"],["activity","Activity log"]]}
+  {grp:"History & audit", items:[["history","Batch history"],["lotHistory","Lot history"],["dispatch","Dispatch"],["activity","Activity log"]]}
 ];
 
 let CUR="dashboard", editTable=null, editRow=null, LOTHIST_SEL=null;
@@ -452,6 +452,7 @@ function render(){
   if(CUR==="activity") return renderActivity(c);
   if(CUR==="history") return renderBatchHistory(c);
   if(CUR==="lotHistory") return renderLotHistory(c);
+  if(CUR==="dispatch") return renderDispatch(c);
   if(CUR==="takaMaster") return renderTakaMaster(c);
   if(CUR==="recipes") return renderRecipes(c);
   const sc=SCHEMAS[CUR];
@@ -778,6 +779,53 @@ function renderLotDetail(lotId){
     + '<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Challan</th><th>Job challan</th><th>Takas</th><th>Mtr</th><th>Kg</th></tr></thead><tbody>'+dispatchRows+'</tbody></table></div>'
     + '<button class="btn ghost sm" style="margin-top:14px" onclick="closeLotDetail()"><span class="material-symbols-rounded">close</span>Close</button>'
     + '</div>';
+}
+/* ---- Dispatch: every itemized "lot left stock" record (one per lot per dispatch report), across every
+   lot — vs. the per-lot dispatch history already shown inside Lot history's detail view. Exists so a bad/
+   premature match from the dispatch-report importer can be spotted and undone without hunting lot by lot. ---- */
+function dispatchRecStatus(d){ return d.returnedAt ? "returned" : "dispatched"; }
+function renderDispatch(c){
+  const term=(SEARCH.dispatch||"").toLowerCase();
+  const mayEdit=canEdit("dispatch");
+  const lotOf=id=>(DB.lots||[]).find(l=>l.id===id);
+  let recs=(DB.lotDispatches||[]).slice().sort((a,b)=>String(b.importedAt||"").localeCompare(String(a.importedAt||"")));
+  if(term) recs=recs.filter(d=>{ const l=lotOf(d.lotId);
+    return [d.lotId,d.cardNo,d.jobChallan,d.quality,(l&&l.customer)].some(v=>String(v||"").toLowerCase().indexOf(term)>=0); });
+  const rows=recs.map(d=>{
+    const l=lotOf(d.lotId), tk=d.takas||[], mts=tk.reduce((a,t)=>a+(+t.mts||0),0), wt=tk.reduce((a,t)=>a+(+t.wt||0),0);
+    const returned=!!d.returnedAt;
+    const statusPill=returned
+      ? '<span class="pill run" title="Restored to stock '+esc(d.returnedAt||"")+(d.returnedBy?(' by '+esc(d.returnedBy)):"")+'"><span class="material-symbols-rounded" style="font-size:14px">undo</span>RETURNED</span>'
+      : '<span class="pill free"><span class="material-symbols-rounded" style="font-size:14px">local_shipping</span>DISPATCHED</span>';
+    const lotCell = l ? '<a class="tap tnum" onclick="CUR=\'lotHistory\';renderNav();openLotDetail(\''+esc(d.lotId)+'\')" style="color:var(--accent);cursor:pointer">'+esc(d.lotId)+'</a>'
+                       : '<span class="tnum muted" title="This lot no longer exists in Lot master">'+esc(d.lotId)+'</span>';
+    const act = !mayEdit ? "" : returned ? '<span class="small muted">—</span>'
+      : '<button class="btn ghost sm" onclick="returnDispatch(\''+esc(d.id)+'\')"><span class="material-symbols-rounded">undo</span>Return dispatch</button>';
+    return '<tr><td>'+lotCell+'</td><td>'+esc((l&&l.customer)||"—")+'</td><td>'+esc(d.quality||(l&&l.quality)||"—")+'</td>'
+      +'<td class="small">'+esc(d.cardNo||"—")+'</td><td class="small">'+esc(d.jobChallan||"—")+'</td>'
+      +'<td class="tnum small">'+esc(d.date||"—")+'</td><td class="tnum">'+tk.length+'</td><td class="tnum">'+Math.round(mts)+'</td><td class="tnum">'+wt.toFixed(1)+'</td>'
+      +'<td>'+statusPill+'</td><td class="tnum small">'+esc(d.importedAt||"—")+'</td><td>'+act+'</td></tr>';
+  }).join("");
+  const totalTakas=recs.reduce((a,d)=>a+((d.takas||[]).length),0);
+  const returnedCount=recs.filter(d=>d.returnedAt).length;
+  c.innerHTML='<div class="page-head"><h1>Dispatch</h1><p>'+recs.length+' dispatch record(s) · '+totalTakas+' taka(s) total'
+      +(returnedCount?' · '+returnedCount+' returned':'')
+      +'. Each row is one lot on one dispatch report. If a lot got matched/removed by mistake, use Return dispatch to put its takas back into active stock.</p></div>'
+    +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
+    +'<input placeholder="Search lot / customer / quality / challan..." value="'+esc(SEARCH.dispatch||"")+'" oninput="onSearchInput(this)"></div>'
+    +'<div class="spacer"></div><span class="small muted">'+recs.length+' of '+(DB.lotDispatches||[]).length+'</span></div>'
+    +'<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr><th>Lot no.</th><th>Customer</th><th>Quality</th><th>Challan</th><th>Job challan</th>'
+      +'<th>Date</th><th>Takas</th><th>Mtr</th><th>Kg</th><th>Status</th><th>Imported</th><th></th></tr></thead><tbody>'
+      +(rows||'<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:26px">No dispatch records'+(term?' match your search':' yet — they\'re filed automatically when a "Dispatch Report" CSV is processed')+'.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+async function returnDispatch(id){
+  const d=(DB.lotDispatches||[]).find(x=>x.id===id); if(!d) return;
+  if(!confirm('Return this dispatch to stock?\n\nLot '+d.lotId+' · '+(d.takas||[]).length+' taka(s) will be added back to active stock.')) return;
+  const res=await API._post({op:"dispatchReturn", id});
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); render();
+  toast('Returned '+(res.added||0)+' taka(s) to lot '+(res.lot&&res.lot.id||d.lotId));
 }
 function actionPill(a){
   if(a==="delete"||a==="reset") return "wash";
