@@ -1268,6 +1268,47 @@ async function clearAllLots(){
   DB.lots=[]; PAGENO.lots=0; renderNav(); render();
   toast("Cleared "+res.cleared+" lots");
 }
+/* Settings -> Data maintenance: delete every 0-meter lot, then replay the full retained inbox
+   history (lots, then dispatch reports, then challans) so wiped lots come back from their original
+   file where one survives, and every dispatch since gets re-applied with the corrected logic. */
+async function flushAllLots(){
+  const emptyCount=(DB.lots||[]).filter(l=>!( (l.takas||[]).reduce((a,m)=>a+(+m||0),0) > 0 )).length;
+  if(!confirm("Flush all lots?\n\nThis deletes every lot currently at 0 meters ("+emptyCount+" right now), then replays every kept lot-import, dispatch-report and challan file to rebuild them. Lots with no surviving inbound file are deleted and NOT recreated — the report afterward lists any of those.\n\nQualities, shades, recipes and batches are not affected.")) return;
+  if((prompt('Type FLUSH to confirm:')||"").trim().toUpperCase()!=="FLUSH"){ toast("Cancelled"); return; }
+  const btn=document.getElementById("flushBtn");
+  if(btn){ btn.disabled=true; btn.innerHTML='<span class="material-symbols-rounded">autorenew</span>Flushing… this can take a minute'; }
+  const res=await API._post({op:"flushEmptyLots"});
+  if(btn){ btn.disabled=false; btn.innerHTML='<span class="material-symbols-rounded">cleaning_services</span>Flush all lots'; }
+  if(res&&res.error){ toast(res.error); return; }
+  await API.db(); render();
+  showFlushReport(res);
+  toast("Flush complete — deleted "+res.deletedLots+" empty lot(s), replayed "
+    +res.lots.files+" lot file(s), "+res.dispatch.files+" dispatch file(s), "+res.challan.files+" challan file(s)");
+}
+function showFlushReport(res){
+  const ex=document.getElementById("flushOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="flushOverlay"; o.className="modal-bg on";
+  const missing=res.stillMissing||[];
+  const missBlock=missing.length
+    ? '<div class="sp-flag sev-danger" style="display:flex;margin:8px 0;white-space:normal"><span class="material-symbols-rounded" style="font-size:14px">error</span>'
+      +missing.length+' lot(s) had no surviving inbound file and were deleted for good: '+missing.map(esc).join(", ")+'</div>'
+    : '';
+  o.innerHTML='<div class="modal" style="width:760px;max-width:96vw">'
+    +'<div class="m-h"><h3>Flush report</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b">'
+    +'<div class="lot-totals"><span class="material-symbols-rounded">delete_sweep</span><b class="tnum">'+res.deletedLots+'</b> empty lot(s) deleted</div>'
+    +missBlock
+    +'<h4 style="margin:16px 0 6px;font-size:13px">Lot imports replayed</h4>'
+    +'<div class="small">'+res.lots.files+' file(s) — <b class="tnum">'+res.lots.added+'</b> lot(s) recreated/added, '+res.lots.skipped+' already present'+(res.lots.failed?', <span style="color:var(--danger)">'+res.lots.failed+' failed to parse</span>':'')+'</div>'
+    +'<h4 style="margin:16px 0 6px;font-size:13px">Dispatch reports replayed</h4>'
+    +'<div class="small" style="margin-bottom:8px">'+res.dispatch.files+' file(s) — <b class="tnum">'+res.dispatch.touched+'</b> lot-touch(es), <b class="tnum">'+res.dispatch.restored+'</b> taka(s) restored'+(res.dispatch.flagged?', <b class="tnum">'+res.dispatch.flagged+'</b> flagged for verification':'')+(res.dispatch.failed?', <span style="color:var(--danger)">'+res.dispatch.failed+' failed to parse</span>':'')+'</div>'
+    +'<div id="flushDispatchDetail"></div>'
+    +'<h4 style="margin:16px 0 6px;font-size:13px">Challans replayed</h4>'
+    +'<div class="small">'+res.challan.files+' file(s) — <b class="tnum">'+res.challan.added+'</b> new challan(s)'+(res.challan.failed?', <span style="color:var(--danger)">'+res.challan.failed+' failed to parse</span>':'')+'</div>'
+    +'</div><div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
+  document.body.appendChild(o);
+  if((res.dispatch.report||[]).length) renderReconcileReport(res.dispatch.report, document.getElementById("flushDispatchDetail"));
+}
 
 /* Lots page: one click ensures every quality + a shade for it (and recipe shades) exist — used
    during setup so planners can pick fabrics/shades even before the catalog is fully entered */
@@ -1994,7 +2035,11 @@ function renderSettings(c){
    +(canEdit("lots")?('<div class="card" style="margin-top:16px"><div class="card-b">'
      +'<h2 style="margin:0 0 4px;font-size:15px">Data maintenance</h2>'
      +'<p class="small muted" style="margin:0 0 12px">Destructive — back up first (backup_db.bat). Qualities, shades, recipes and batches are not affected.</p>'
+     +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
      +'<button class="btn danger" onclick="clearAllLots()"><span class="material-symbols-rounded">delete_sweep</span>Clear all lots</button>'
+     +'<button class="btn danger" id="flushBtn" onclick="flushAllLots()"><span class="material-symbols-rounded">cleaning_services</span>Flush all lots</button>'
+     +'</div>'
+     +'<p class="small muted" style="margin:10px 0 0">Flush: deletes every lot currently at 0 meters, then replays every lot-import, dispatch-report and challan file the system has kept (up to the newest 30 of each) in order — as if they had all just been dropped into their inbox folders again. Recreates a wiped lot from its original file where one survives, then re-applies its real dispatch history with the corrected logic. Safe to run more than once.</p>'
      +'</div></div>'):'')
    +(canEdit("settings")?('<div class="card" style="margin-top:16px"><div class="card-b">'
      +'<h2 style="margin:0 0 4px;font-size:15px">PLC live import</h2>'

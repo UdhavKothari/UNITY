@@ -1370,6 +1370,15 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._send(400, {"error": "could not process that file: %s" % (e,)})
 
+            if op == "flushEmptyLots":
+                # Settings -> "Flush all lots". See _flush_empty_lots's docstring for exactly what
+                # this does; the op just gates permission, runs it, and saves.
+                if _need_edit(("lots",)):
+                    return self._send(403, {"error": "forbidden"})
+                result = _flush_empty_lots(db, u["username"])
+                save_db(db)
+                return self._send(200, dict({"ok": True}, **result))
+
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
                 # shades, recipes and batches are left alone. Admin/edit-on-lots only, and logged.
@@ -1813,6 +1822,24 @@ def _read_processed_file(kind, status, name):
     with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         return f.read()
 
+def _iter_processed_files(kind):
+    """Every processed file for one inbox kind, oldest first (by the fixed-width stamp prefix each
+    watcher renamed it with) - done and error folders merged into one chronological sequence, since
+    that's the order they'd have been dropped into the live inbox originally. Yields
+    (status, on-disk name) pairs; use _read_processed_file(kind, status, name) to get the text.
+    Powers Settings -> Flush all lots (reprocess EVERY file of every kind, in order)."""
+    done_dir, err_dir = PROCESSED_DIRS[kind]()
+    items = []
+    for status, d in (("ok", done_dir), ("error", err_dir)):
+        try:
+            names = [f for f in os.listdir(d) if not f.endswith(".log") and not f.startswith(".")]
+        except OSError:
+            continue
+        for name in names:
+            items.append((name, status, name))   # sort key is the stamped on-disk name itself
+    items.sort(key=lambda t: t[0])
+    return [(status, name) for _key, status, name in items]
+
 def _apply_lots_core(db, lots):
     """Lock-free core of the lot-inbox apply — same logic as always, just split out so a caller that
     already holds LOCK + a loaded db (e.g. the Processed files 'Reprocess' button) can call it directly
@@ -2107,7 +2134,7 @@ def _undo_dispatch_record(db, rec, actor):
     rec["returnedBy"] = actor
     return lot, added, touched_takas
 
-def _reconcile_dispatch_entries(db, entries, actor):
+def _reconcile_dispatch_entries(db, entries, actor, skip_undo_lots=None):
     """Manual 'Reconcile from file' upload (Dispatch page): the mill re-uploads an OLD dispatch report
     that was originally processed by the pre-fix, delete-based logic (which wiped a taka's entire
     stock just for being mentioned on a report, even when 0m was actually dispatched - see
@@ -2126,8 +2153,17 @@ def _reconcile_dispatch_entries(db, entries, actor):
       3. Re-apply this file's rows for the lot through the CORRECTED subtract logic
          (_apply_dispatch_one_lot), tagged source="reconcile", so the lot ends up in the state the
          corrected logic would have produced if it had run from the start.
-    Caller (do_POST's dispatchReconcile op) already holds LOCK and a loaded db, and is responsible
-    for calling save_db() after — this function does not lock or save itself."""
+
+    `skip_undo_lots` (Settings -> Flush all lots only): a set of lot ids that were JUST deleted and
+    freshly recreated from their original inbound file in this same operation, before this function
+    runs. Their current stock is the true, pristine original - NOT a post-old-delete survivor - so
+    step 2's undo must NOT run for them (there is nothing to undo: the old delete never touched this
+    fresh copy of the lot). Skipping straight to step 3 for these lots applies the report's meters once,
+    correctly, onto the pristine stock. Any OLD legacy ledger record for such a lot is left alone
+    (stale, but harmless — it no longer describes any lot state that still exists).
+    Caller (do_POST's dispatchReconcile / flushEmptyLots op) already holds LOCK and a loaded db, and
+    is responsible for calling save_db() after — this function does not lock or save itself."""
+    skip_undo_lots = skip_undo_lots or set()
     by_lot = {}
     for e in entries:
         by_lot.setdefault(e["lotNo"], []).append(e)
@@ -2144,7 +2180,8 @@ def _reconcile_dispatch_entries(db, entries, actor):
             report.append({"lotId": lotno, "skipped": True,
                             "reason": "already reconciled from this report — no changes made", "flagged": []})
             continue
-        legacy = [r for r in recs if str(r.get("lotId")) == str(lotno) and r.get("source") != "reconcile"
+        fresh = str(lotno) in {str(x) for x in skip_undo_lots}
+        legacy = [] if fresh else [r for r in recs if str(r.get("lotId")) == str(lotno) and r.get("source") != "reconcile"
                   and not r.get("returnedAt") and same_card(r)]
         flagged = []; undone = 0
         for r in legacy:
@@ -2360,6 +2397,81 @@ def _apply_challan(payload):
         added = _apply_challan_core(db, payload)
         save_db(db)
     return added
+
+def _flush_empty_lots(db, actor):
+    """Settings -> 'Flush all lots': delete every lot currently sitting at 0 meters (that's the shape
+    bad historical dispatch data leaves behind), then replay EVERY retained file across all three
+    inboxes, in order: lots first, then dispatch reports, then challans - exactly as if the whole
+    inbox history were being fed through the watchers again from scratch.
+
+    Deleting the empty lots FIRST matters: _apply_lots_core skips any lot id already on record, so a
+    wiped-but-still-present 0m lot would otherwise block its own original inbound file from ever
+    recreating it with its true taka data. Once it's gone, that same original file (if still sitting
+    in inbox/done or inbox/error - each watcher keeps only the newest 30 of each) recreates it fresh,
+    and the dispatch replay then re-subtracts whatever was legitimately dispatched since, using the
+    corrected subtract-not-delete logic (_reconcile_dispatch_entries, same as "Reconcile from file").
+
+    Lock-free: caller (do_POST's flushEmptyLots op) already holds LOCK + a loaded db and saves after.
+    A file that fails to parse/apply (or an already-corrupt one sitting in an error/ folder) is
+    skipped and counted, not allowed to abort the whole flush."""
+    lots = db.get("lots", [])
+    empty_ids = [l.get("id") for l in lots if sum(l.get("takas") or []) <= 0]
+    empty_set = {str(x) for x in empty_ids}
+    if empty_ids:
+        db["lots"] = [l for l in lots if l.get("id") not in set(empty_ids)]
+
+    lot_added = lot_skipped = lot_files = lot_failed = 0
+    for status, name in _iter_processed_files("lots"):
+        lot_files += 1
+        try:
+            text = _read_processed_file("lots", status, name)
+            parsed = _csv_to_lots(list(_csv.reader(io.StringIO(text))))
+            if parsed:
+                a, s = _apply_lots_core(db, parsed)
+                lot_added += a; lot_skipped += s
+        except Exception:
+            lot_failed += 1
+
+    dispatch_report = []; dispatch_files = 0; dispatch_failed = 0
+    for status, name in _iter_processed_files("dispatch"):
+        dispatch_files += 1
+        try:
+            text = _read_processed_file("dispatch", status, name)
+            entries = _csv_to_dispatch(list(_csv.reader(io.StringIO(text))))
+            if entries:
+                dispatch_report.extend(_reconcile_dispatch_entries(db, entries, actor, skip_undo_lots=empty_set))
+        except Exception:
+            dispatch_failed += 1
+
+    challan_added = challan_files = challan_failed = 0
+    for status, name in _iter_processed_files("challan"):
+        challan_files += 1
+        try:
+            text = _read_processed_file("challan", status, name)
+            challan_added += _apply_challan_core(db, json.loads(text))
+        except Exception:
+            challan_failed += 1
+
+    still_missing = [i for i in empty_ids
+                      if not any(str(l.get("id")) == str(i) for l in db.get("lots", []))]
+    dispatch_done = [r for r in dispatch_report if not r.get("skipped")]
+    dispatch_restored = sum(r.get("takasRestored", 0) for r in dispatch_done)
+    dispatch_flagged = sum(len(r.get("flagged") or []) for r in dispatch_done)
+    _log(db, actor, "flushLots", "lots", "",
+         "flush all lots: deleted %d empty lot(s) (%d could not be recreated - no surviving inbound file); "
+         "replayed %d lot file(s) (+%d new, %d already present, %d failed), "
+         "%d dispatch file(s) (%d lot-touches, %d taka(s) restored, %d flagged, %d failed), "
+         "%d challan file(s) (+%d new, %d failed)"
+         % (len(empty_ids), len(still_missing), lot_files, lot_added, lot_skipped, lot_failed,
+            dispatch_files, len(dispatch_done), dispatch_restored, dispatch_flagged, dispatch_failed,
+            challan_files, challan_added, challan_failed))
+    return {
+        "deletedLots": len(empty_ids), "stillMissing": still_missing,
+        "lots": {"files": lot_files, "added": lot_added, "skipped": lot_skipped, "failed": lot_failed},
+        "dispatch": {"files": dispatch_files, "report": dispatch_report, "failed": dispatch_failed,
+                     "restored": dispatch_restored, "flagged": dispatch_flagged, "touched": len(dispatch_done)},
+        "challan": {"files": challan_files, "added": challan_added, "failed": challan_failed},
+    }
 
 def _challan_watcher():
     for d in (CHALLAN_DIR, CHALLAN_DONE, CHALLAN_ERR):
