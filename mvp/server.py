@@ -1253,10 +1253,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, **res})
 
             if op == "dispatchReturn":
-                # undo one lotDispatches record (Admin -> Dispatch page): re-adds its itemized takas to
-                # the lot's active stock. Uses the ledger's own per-taka sr/mts/wt, so this is an exact
-                # restore, not a guess - covers a dispatch report matching the wrong lot, or matching a
-                # lot before it should have (see the Dispatch page's "Return dispatch" button).
+                # undo one lotDispatches record (Admin -> Dispatch page): reverses its itemized per-taka
+                # meters back onto the lot's active stock, mirroring _apply_dispatch's subtract-not-delete
+                # model - a taka that's still present (partially dispatched, or a 0m no-op row) gets its
+                # reported meters ADDED BACK onto its current length; a taka that dropped out entirely
+                # gets re-inserted at the reported length. Exact restore (uses the ledger's own sr/mts/wt),
+                # not a guess - covers a dispatch report matching the wrong lot, or matching too early.
                 if _need_edit(("dispatch",)):
                     return self._send(403, {"error": "forbidden"})
                 did = req.get("id")
@@ -1272,16 +1274,28 @@ class Handler(BaseHTTPRequestHandler):
                 tracks_wt = "takaWts" in lot
                 if tracks_wt:
                     lot.setdefault("takaWts", [])
-                existing = set(str(n) for n in (lot.get("takaNos") or []))
+                taka_nos, takas = lot["takaNos"], lot["takas"]
+                taka_wts = lot["takaWts"] if tracks_wt else None
+                idx_by_sr = {str(sr): i for i, sr in enumerate(taka_nos)}
                 added = 0
                 for t in (rec.get("takas") or []):
                     sr = t.get("sr")
-                    if sr is None or str(sr) in existing:
-                        continue                                    # already back in stock - don't double-add
-                    lot["takaNos"].append(sr); lot["takas"].append(t.get("mts") or 0)
-                    if tracks_wt:
-                        lot["takaWts"].append(t.get("wt") or 0)
-                    existing.add(str(sr)); added += 1
+                    if sr is None:
+                        continue
+                    key = str(sr)
+                    if key in idx_by_sr:
+                        i = idx_by_sr[key]
+                        takas[i] = round((takas[i] if i < len(takas) else 0) + (t.get("mts") or 0), 2)
+                        if tracks_wt:
+                            while len(taka_wts) <= i:
+                                taka_wts.append(0.0)
+                            taka_wts[i] = round(taka_wts[i] + (t.get("wt") or 0), 2)
+                    else:
+                        taka_nos.append(sr); takas.append(t.get("mts") or 0)
+                        idx_by_sr[key] = len(taka_nos) - 1
+                        if tracks_wt:
+                            taka_wts.append(t.get("wt") or 0)
+                    added += 1
                 lot["pcs"] = len(lot["takas"])
                 lot["meters"] = round(sum(lot["takas"]) if lot["takas"] else 0)
                 if tracks_wt:
@@ -1752,11 +1766,14 @@ DISPATCH_POLL_SECS = 45
 LOT_DISPATCHES_CAP = 20000   # per-taka records; oldest trimmed once exceeded (mirrors LOG_CAP's approach)
 
 DISPATCH_COL_ALIASES = {
-    # Lot_No (the mill's real, plain lot number — matches lot IDs as created by the inbound-lot importer
-    # above, e.g. "5934") must win over Lot_No_Display: in the actual "Dispatch Report" export, Lot_No_Display
-    # is blank for nearly every row (it only carries a one-letter marker like "O" on rare special lots), so
-    # preferring it here was matching almost nothing and silently dropping ~99% of dispatched takas.
-    "lotNo":      ["LOT_NO", "LOT NO", "LOTNO", "DESPNO", "LOT_NO_DISPLAY", "LOT NO DISPLAY"],
+    # Lot_No is the mill's plain lot number (matches lot IDs as created by the inbound-lot importer
+    # above, e.g. "5934") and is blank in Lot_No_Display for nearly every row. But per the mill: when
+    # Lot_No_Display holds "O"/"OO"/"OOOO" etc, that's NOT noise — it's a suffix on the lot's real
+    # identity (denotes how many years old that stock is), e.g. Lot_No "1969" + Lot_No_Display "O" is
+    # actually lot "1969O", a DIFFERENT lot than plain "1969". Kept as two separate fields so
+    # _csv_to_dispatch can combine them instead of just picking one column.
+    "lotNo":       ["LOT_NO", "LOT NO", "LOTNO", "DESPNO"],
+    "lotNoSuffix": ["LOT_NO_DISPLAY", "LOT NO DISPLAY"],
     "cardNo":     ["CHALLAN_CARDNO", "CHALLAN CARDNO", "CARDNO", "CARD NO"],
     "dispDate":   ["DISPATCH_DATE", "DISPATCH DATE", "CUTDATE"],
     "quality":    ["QUALITY", "GREYQUAL"],
@@ -1796,9 +1813,11 @@ def _csv_to_dispatch(rows):
         if not any(str(x).strip() for x in r):
             continue
         get = lambda f: (r[cm[f]] if (f in cm and cm[f] < len(r)) else "")
-        lotno = str(get("lotNo")).strip()
-        if not lotno or set(lotno) <= set("- ") or "(" in lotno or lotno.upper() in ("0", "NULL"):
+        lotno_raw = str(get("lotNo")).strip()
+        if not lotno_raw or set(lotno_raw) <= set("- ") or "(" in lotno_raw or lotno_raw.upper() in ("0", "NULL"):
             continue                                    # SQL-dump noise / footer rows, same guard as the lot inbox
+        suffix = str(get("lotNoSuffix")).strip().upper()
+        lotno = lotno_raw + suffix if suffix and set(suffix) <= set("O") else lotno_raw
         sr_raw = str(get("takaSr")).strip()
         if not sr_raw:
             continue
@@ -1811,9 +1830,15 @@ def _csv_to_dispatch(rows):
     return out
 
 def _apply_dispatch(entries):
-    """Group per-taka rows by lot, remove each dispatched taka from that lot's active stock arrays,
-    and file one itemized lotDispatches record per lot per report (kept even after the lot's own
-    stock empties out, so Lot history always has something to show)."""
+    """Group per-taka rows by lot, SUBTRACT each row's reported meters (and weight, if tracked) from
+    that taka's own current length, and file one itemized lotDispatches record per lot per report
+    (kept even after the lot's own stock empties out, so Lot history always has something to show).
+
+    Per the mill: a dispatch-report row naming a taka does NOT mean that whole taka left stock - it
+    means THAT MANY METERS left it. A taka can appear on a report with 0 meters dispatched (about 40%
+    of rows in a typical report), which must be a true no-op, not a deletion - the earlier version of
+    this function removed a taka outright just for being mentioned, silently erasing full-length takas
+    whose report row said 0m dispatched. A taka only drops out once its remaining length is ~0."""
     with LOCK:
         db = load_db()
         by_lot = {}
@@ -1821,6 +1846,7 @@ def _apply_dispatch(entries):
             by_lot.setdefault(e["lotNo"], []).append(e)
         taka_count = 0; matched_lots = 0; dispatched_lots = 0; unmatched = 0
         recs = db.setdefault("lotDispatches", [])
+        REMAINDER_EPS = 0.5   # meters left after subtraction below this counts as fully dispatched (rounding slack)
         for lotno, rows in by_lot.items():
             lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(lotno)), None)
             recs.append({"id": "DSP-" + uuid.uuid4().hex[:8], "lotId": lotno,
@@ -1834,15 +1860,36 @@ def _apply_dispatch(entries):
                 unmatched += 1
                 continue
             matched_lots += 1
-            want_srs = {str(r["takaSr"]) for r in rows}
-            keep_idx = [i for i, sr in enumerate(lot.get("takaNos") or []) if str(sr) not in want_srs]
-            if len(keep_idx) != len(lot.get("takaNos") or []):
-                for field in ("takas", "takaNos", "takaWts"):
-                    if lot.get(field):
-                        lot[field] = [lot[field][i] for i in keep_idx if i < len(lot[field])]
+            # a taka can appear more than once in one report (separate part-dispatches of the same
+            # piece) - subtract the TOTAL reported for that serial, not just the last row seen.
+            by_sr = {}
+            for r in rows:
+                key = str(r["takaSr"]); e2 = by_sr.setdefault(key, {"mts": 0.0, "wt": 0.0})
+                e2["mts"] += r["takaMts"] or 0; e2["wt"] += r["takaWt"] or 0
+            taka_nos = lot.get("takaNos") or []; takas = lot.get("takas") or []
+            tracks_wt = "takaWts" in lot; taka_wts = (lot.get("takaWts") or []) if tracks_wt else []
+            new_nos, new_mts, new_wts = [], [], []
+            touched = False
+            for i, sr in enumerate(taka_nos):
+                cur_m = takas[i] if i < len(takas) else 0
+                cur_w = taka_wts[i] if (tracks_wt and i < len(taka_wts)) else 0
+                d = by_sr.get(str(sr))
+                if d is None:
+                    new_nos.append(sr); new_mts.append(cur_m)
+                    if tracks_wt: new_wts.append(cur_w)
+                    continue
+                touched = True
+                rem_m = cur_m - d["mts"]                      # a 0m-dispatched row subtracts 0 -> unchanged, as it should
+                if rem_m > REMAINDER_EPS:
+                    new_nos.append(sr); new_mts.append(round(rem_m, 2))
+                    if tracks_wt: new_wts.append(max(0.0, round(cur_w - d["wt"], 2)))
+                # else: fully dispatched (remaining length ~0) - taka drops out of active stock
+            if touched:
+                lot["takaNos"] = new_nos; lot["takas"] = new_mts
+                if tracks_wt: lot["takaWts"] = new_wts
                 lot["pcs"] = len(lot.get("takas") or [])
                 lot["meters"] = round(sum(lot.get("takas") or []))
-                if "takaWts" in lot:                          # only recompute weight if the lot tracks per-taka weight at all
+                if tracks_wt:
                     lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
                 if not lot.get("takas"):
                     lot["status"] = "dispatched"
