@@ -1709,7 +1709,11 @@ DISPATCH_POLL_SECS = 45
 LOT_DISPATCHES_CAP = 20000   # per-taka records; oldest trimmed once exceeded (mirrors LOG_CAP's approach)
 
 DISPATCH_COL_ALIASES = {
-    "lotNo":      ["LOT_NO_DISPLAY", "LOT NO DISPLAY", "LOT_NO", "LOT NO", "LOTNO", "DESPNO"],
+    # Lot_No (the mill's real, plain lot number — matches lot IDs as created by the inbound-lot importer
+    # above, e.g. "5934") must win over Lot_No_Display: in the actual "Dispatch Report" export, Lot_No_Display
+    # is blank for nearly every row (it only carries a one-letter marker like "O" on rare special lots), so
+    # preferring it here was matching almost nothing and silently dropping ~99% of dispatched takas.
+    "lotNo":      ["LOT_NO", "LOT NO", "LOTNO", "DESPNO", "LOT_NO_DISPLAY", "LOT NO DISPLAY"],
     "cardNo":     ["CHALLAN_CARDNO", "CHALLAN CARDNO", "CARDNO", "CARD NO"],
     "dispDate":   ["DISPATCH_DATE", "DISPATCH DATE", "CUTDATE"],
     "quality":    ["QUALITY", "GREYQUAL"],
