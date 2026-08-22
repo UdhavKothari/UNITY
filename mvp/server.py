@@ -1306,6 +1306,16 @@ class Handler(BaseHTTPRequestHandler):
                     "challan": _list_processed_dir(CHALLAN_DONE, CHALLAN_ERR),
                 })
 
+            if op == "processedFileRead":
+                # Open a file from the Processed files panel — same view-only gate as the list itself.
+                if "dispatch" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                try:
+                    text = _read_processed_file(req.get("kind"), req.get("status"), req.get("file"))
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                return self._send(200, {"ok": True, "text": text})
+
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
                 # shades, recipes and batches are left alone. Admin/edit-on-lots only, and logged.
@@ -1717,10 +1727,37 @@ def _list_processed_dir(done_dir, err_dir):
                 pass
             # strip the "<stamp>-" the watcher prefixed on file (stamp is fixed-width: YYYYMMDD-HHMMSS-)
             orig = re.sub(r"^\d{8}-\d{6}-", "", name)
-            out.append({"name": orig, "status": status, "summary": summary,
+            out.append({"name": orig, "file": name, "status": status, "summary": summary,
                         "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)), "size": st.st_size})
     out.sort(key=lambda r: r["at"], reverse=True)
     return out
+
+PROCESSED_DIRS = {   # kind -> (done dir, error dir), shared by op processedFiles / processedFileRead
+    "lots":     (lambda: (INBOX_DONE, INBOX_ERR)),
+    "dispatch": (lambda: (DISPATCH_DONE, DISPATCH_ERR)),
+    "challan":  (lambda: (CHALLAN_DONE, CHALLAN_ERR)),
+}
+
+def _read_processed_file(kind, status, name):
+    """Read one already-processed file's raw text back out of inbox*/done or inbox*/error, for the
+    Dispatch page's 'Processed files' panel (open a file to view it / reconcile straight from it).
+    `name` MUST be the exact on-disk filename (the 'file' field from _list_processed_dir, i.e. still
+    carrying its '<stamp>-' prefix) - rejects anything that isn't a plain filename actually inside the
+    resolved directory, so this can never be used to read an arbitrary path on the server."""
+    if kind not in PROCESSED_DIRS or status not in ("ok", "error"):
+        raise ValueError("unknown file kind/status")
+    done_dir, err_dir = PROCESSED_DIRS[kind]()
+    d = done_dir if status == "ok" else err_dir
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise ValueError("invalid file name")
+    path = os.path.realpath(os.path.join(d, name))
+    if os.path.dirname(path) != os.path.realpath(d) or not os.path.isfile(path):
+        raise ValueError("file not found")
+    size = os.path.getsize(path)
+    if size > 3_000_000:
+        raise ValueError("file is too large to preview here (%.1f MB) — open it directly on the server" % (size / 1e6,))
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        return f.read()
 
 def _apply_lots(lots):
     with LOCK:
