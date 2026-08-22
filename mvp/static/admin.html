@@ -692,12 +692,22 @@ function lotExtraProcs(lot, batches){
 }
 function openLotDetail(lotId){ LOTHIST_SEL=lotId; render(); const m=document.querySelector('main'); if(m) m.scrollTop=0; }
 function closeLotDetail(){ LOTHIST_SEL=null; render(); }
-/* one small pill for the "current state" of a lot — used in both the master list and the detail head */
+/* one small pill for the "current state" of a lot — used in both the master list and the detail head.
+   Four tags: IN STOCK (nothing started yet) / WIP (%) (mid-workflow, % = whole steps fully cleared ÷
+   total steps in the quality's workflow) / READY (every step done, sitting in stock awaiting dispatch)
+   / DISPATCHED. DISPATCHED is checked first and wins outright — a fully-dispatched lot's takaNos empty
+   out to [], which would otherwise make lotProgress()'s own total flip to 0 and read as NOT STARTED /
+   IN PROCESS again; checking l.status up front avoids that instead of trying to patch the maths. */
 function lotStatusPill(l, prog){
-  if(!prog.hasWorkflow) return '<span class="pill '+(l.status==="dispatched"?"free":"run")+'">'+esc((l.status||"in stock").toUpperCase())+'</span>';
-  if(prog.doneAll) return '<span class="pill run"><span class="material-symbols-rounded" style="font-size:14px">local_shipping</span>READY TO DISPATCH</span>';
-  if(prog.lastDone) return '<span class="pill pre"><span class="material-symbols-rounded" style="font-size:14px">sync</span>IN PROCESS</span>';
-  return '<span class="pill free">NOT STARTED</span>';
+  if(l.status==="dispatched") return '<span class="pill free"><span class="material-symbols-rounded" style="font-size:14px">local_shipping</span>DISPATCHED</span>';
+  if(!prog.hasWorkflow) return '<span class="pill free">'+esc((l.status||"in stock").toUpperCase())+'</span>';
+  if(prog.doneAll) return '<span class="pill run"><span class="material-symbols-rounded" style="font-size:14px">check_circle</span>READY</span>';
+  if(prog.lastDone){
+    const done=prog.steps.filter(s=>s.doneAll).length;
+    const pct=Math.round(100*done/prog.steps.length);
+    return '<span class="pill pre"><span class="material-symbols-rounded" style="font-size:14px">sync</span>WIP ('+pct+'%)</span>';
+  }
+  return '<span class="pill free">IN STOCK</span>';
 }
 function renderLotHistory(c){
   const term=(SEARCH.lotHistory||"").toLowerCase();
