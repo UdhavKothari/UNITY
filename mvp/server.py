@@ -12,7 +12,7 @@ Data persists to data.sqlite in this folder (SQLite). On first run it imports a
 legacy data.json if one is present, then serves purely from SQLite. POST /api
 reset restores the seeded sample data. Back up with backup_db.py (see docs/DEPLOYMENT.md).
 """
-import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections, copy
+import json, os, sys, threading, uuid, hashlib, secrets, hmac, time, sqlite3, re, gzip, subprocess, csv as _csv, ipaddress, collections, copy, io
 import base64, urllib.request, urllib.error   # base64: decode uploaded scan photos · urllib: the Gemini API call (the one deliberate outbound-internet call in this app)
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1267,47 +1267,44 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "dispatch record not found"})
                 if rec.get("returnedAt"):
                     return self._send(400, {"error": "already returned"})
-                lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(rec.get("lotId"))), None)
+                lot, added, _touched = _undo_dispatch_record(db, rec, u["username"])
                 if not lot:
                     return self._send(404, {"error": "lot " + str(rec.get("lotId")) + " no longer exists"})
-                lot.setdefault("takas", []); lot.setdefault("takaNos", [])
-                tracks_wt = "takaWts" in lot
-                if tracks_wt:
-                    lot.setdefault("takaWts", [])
-                taka_nos, takas = lot["takaNos"], lot["takas"]
-                taka_wts = lot["takaWts"] if tracks_wt else None
-                idx_by_sr = {str(sr): i for i, sr in enumerate(taka_nos)}
-                added = 0
-                for t in (rec.get("takas") or []):
-                    sr = t.get("sr")
-                    if sr is None:
-                        continue
-                    key = str(sr)
-                    if key in idx_by_sr:
-                        i = idx_by_sr[key]
-                        takas[i] = round((takas[i] if i < len(takas) else 0) + (t.get("mts") or 0), 2)
-                        if tracks_wt:
-                            while len(taka_wts) <= i:
-                                taka_wts.append(0.0)
-                            taka_wts[i] = round(taka_wts[i] + (t.get("wt") or 0), 2)
-                    else:
-                        taka_nos.append(sr); takas.append(t.get("mts") or 0)
-                        idx_by_sr[key] = len(taka_nos) - 1
-                        if tracks_wt:
-                            taka_wts.append(t.get("wt") or 0)
-                    added += 1
-                lot["pcs"] = len(lot["takas"])
-                lot["meters"] = round(sum(lot["takas"]) if lot["takas"] else 0)
-                if tracks_wt:
-                    lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
-                if lot.get("status") == "dispatched" and lot["takas"]:
-                    lot["status"] = "in stock"
-                rec["returnedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                rec["returnedBy"] = u["username"]
                 _log(db, u["username"], "dispatchReturn", "lots", lot.get("id"),
                      "returned dispatch %s to stock (%d taka(s) restored)" % (did, added))
                 save_db(db)
                 return self._send(200, {"ok": True, "added": added, "lot": lot})
+
+            if op == "dispatchReconcile":
+                # Manual "Reconcile from file" upload (Dispatch page): re-process an OLD dispatch report
+                # that was originally applied by the pre-fix, delete-based logic. See
+                # _reconcile_dispatch_entries's docstring for exactly what this does and its limits.
+                if _need_edit(("dispatch",)):
+                    return self._send(403, {"error": "forbidden"})
+                csv_text = req.get("csvText") or ""
+                if not str(csv_text).strip():
+                    return self._send(400, {"error": "no file content received"})
+                try:
+                    rows = list(_csv.reader(io.StringIO(csv_text)))
+                    entries = _csv_to_dispatch(rows)
+                except Exception as e:
+                    return self._send(400, {"error": "could not read that file: %s" % (e,)})
+                if not entries:
+                    return self._send(400, {"error": "no dispatched takas found in that file"})
+                report = _reconcile_dispatch_entries(db, entries, u["username"])
+                save_db(db)
+                return self._send(200, {"ok": True, "report": report})
+
+            if op == "processedFiles":
+                # Dispatch page "Processed files" panel: lists what's accumulated in inbox/done+error,
+                # inbox_dispatch/done+error and inbox_challan/done+error — read-only, view-only permission.
+                if "dispatch" not in perms:
+                    return self._send(403, {"error": "forbidden"})
+                return self._send(200, {
+                    "lots": _list_processed_dir(INBOX_DONE, INBOX_ERR),
+                    "dispatch": _list_processed_dir(DISPATCH_DONE, DISPATCH_ERR),
+                    "challan": _list_processed_dir(CHALLAN_DONE, CHALLAN_ERR),
+                })
 
             if op == "lotsClear":
                 # wipe ALL lots (used when switching the lot-number scheme, e.g. to DESPNO). Qualities,
@@ -1692,6 +1689,39 @@ def _prune_dir(d, keep=30):
             try: os.remove(path)
             except OSError: pass
 
+def _list_processed_dir(done_dir, err_dir):
+    """One entry per processed file in a watcher's done/ + error/ folders, newest first — powers the
+    Dispatch page's 'Processed files' panel (op processedFiles). Each processed file was renamed
+    '<stamp>-<original name>' with a sibling '<name>.log' holding 'OK: <summary>' or 'ERROR: <error>'
+    (see _inbox_watcher / _dispatch_watcher / _challan_watcher)."""
+    out = []
+    for status, d in (("ok", done_dir), ("error", err_dir)):
+        try:
+            names = [f for f in os.listdir(d) if not f.endswith(".log") and not f.startswith(".")]
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(d, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            summary = ""
+            try:
+                with open(path + ".log", "r", encoding="utf-8") as lf:
+                    summary = lf.read().strip()
+                    for prefix in ("OK: ", "ERROR: "):
+                        if summary.startswith(prefix):
+                            summary = summary[len(prefix):]; break
+            except OSError:
+                pass
+            # strip the "<stamp>-" the watcher prefixed on file (stamp is fixed-width: YYYYMMDD-HHMMSS-)
+            orig = re.sub(r"^\d{8}-\d{6}-", "", name)
+            out.append({"name": orig, "status": status, "summary": summary,
+                        "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)), "size": st.st_size})
+    out.sort(key=lambda r: r["at"], reverse=True)
+    return out
+
 def _apply_lots(lots):
     with LOCK:
         db = load_db()
@@ -1829,78 +1859,220 @@ def _csv_to_dispatch(rows):
                     "remark": str(get("remark")).strip()})
     return out
 
-def _apply_dispatch(entries):
-    """Group per-taka rows by lot, SUBTRACT each row's reported meters (and weight, if tracked) from
-    that taka's own current length, and file one itemized lotDispatches record per lot per report
-    (kept even after the lot's own stock empties out, so Lot history always has something to show).
+REMAINDER_EPS = 0.5   # meters left after subtraction below this counts as fully dispatched (rounding slack)
+
+def _apply_dispatch_one_lot(db, lot, lotno, rows, source="watcher"):
+    """Core of the dispatch-apply logic for ONE lot's worth of report rows: SUBTRACT each row's
+    reported meters (and weight, if tracked) from that taka's own current length, and file one
+    itemized lotDispatches record (kept even after the lot's own stock empties out, so Lot history
+    and the Dispatch page always have something to show). Shared by the normal inbox watcher
+    (_apply_dispatch, below) and the manual reconcile-from-file flow (_reconcile_dispatch_entries).
 
     Per the mill: a dispatch-report row naming a taka does NOT mean that whole taka left stock - it
     means THAT MANY METERS left it. A taka can appear on a report with 0 meters dispatched (about 40%
-    of rows in a typical report), which must be a true no-op, not a deletion - the earlier version of
-    this function removed a taka outright just for being mentioned, silently erasing full-length takas
-    whose report row said 0m dispatched. A taka only drops out once its remaining length is ~0."""
+    of rows in a typical report), which must be a true no-op, not a deletion. A taka only drops out
+    once its remaining length is ~0.
+
+    Returns the new ledger record dict (already appended to db["lotDispatches"]) plus whether the
+    lot ended up fully dispatched by this application."""
+    recs = db.setdefault("lotDispatches", [])
+    rec = {"id": "DSP-" + uuid.uuid4().hex[:8], "lotId": lotno, "source": source,
+           "cardNo": rows[0].get("cardNo") or "", "date": rows[0].get("dispDate") or time.strftime("%Y-%m-%d"),
+           "jobChallan": rows[0].get("jobChallan") or "",
+           "quality": rows[0].get("quality") or ((lot or {}).get("quality") or ""),
+           "takas": [{"sr": r["takaSr"], "mts": r["takaMts"], "wt": r["takaWt"], "remark": r.get("remark") or ""} for r in rows],
+           "importedAt": time.strftime("%Y-%m-%d %H:%M:%S")}
+    recs.append(rec)
+    if len(recs) > LOT_DISPATCHES_CAP:
+        del recs[:len(recs) - LOT_DISPATCHES_CAP]
+    if not lot:
+        return rec, False
+    # a taka can appear more than once in one report (separate part-dispatches of the same
+    # piece) - subtract the TOTAL reported for that serial, not just the last row seen.
+    by_sr = {}
+    for r in rows:
+        key = str(r["takaSr"]); e2 = by_sr.setdefault(key, {"mts": 0.0, "wt": 0.0})
+        e2["mts"] += r["takaMts"] or 0; e2["wt"] += r["takaWt"] or 0
+    taka_nos = lot.get("takaNos") or []; takas = lot.get("takas") or []
+    tracks_wt = "takaWts" in lot; taka_wts = (lot.get("takaWts") or []) if tracks_wt else []
+    new_nos, new_mts, new_wts = [], [], []
+    touched = False
+    for i, sr in enumerate(taka_nos):
+        cur_m = takas[i] if i < len(takas) else 0
+        cur_w = taka_wts[i] if (tracks_wt and i < len(taka_wts)) else 0
+        d = by_sr.get(str(sr))
+        if d is None:
+            new_nos.append(sr); new_mts.append(cur_m)
+            if tracks_wt: new_wts.append(cur_w)
+            continue
+        touched = True
+        rem_m = cur_m - d["mts"]                      # a 0m-dispatched row subtracts 0 -> unchanged, as it should
+        if rem_m > REMAINDER_EPS:
+            new_nos.append(sr); new_mts.append(round(rem_m, 2))
+            if tracks_wt: new_wts.append(max(0.0, round(cur_w - d["wt"], 2)))
+        # else: fully dispatched (remaining length ~0) - taka drops out of active stock
+    fully = False
+    if touched:
+        lot["takaNos"] = new_nos; lot["takas"] = new_mts
+        if tracks_wt: lot["takaWts"] = new_wts
+        lot["pcs"] = len(lot.get("takas") or [])
+        lot["meters"] = round(sum(lot.get("takas") or []))
+        if tracks_wt:
+            lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
+        if not lot.get("takas"):
+            lot["status"] = "dispatched"
+            fully = True
+    return rec, fully
+
+def _apply_dispatch(entries):
+    """Normal inbox-watcher path: group per-taka rows by lot and apply each lot via
+    _apply_dispatch_one_lot. See that function's docstring for the subtract-not-delete semantics."""
     with LOCK:
         db = load_db()
         by_lot = {}
         for e in entries:
             by_lot.setdefault(e["lotNo"], []).append(e)
         taka_count = 0; matched_lots = 0; dispatched_lots = 0; unmatched = 0
-        recs = db.setdefault("lotDispatches", [])
-        REMAINDER_EPS = 0.5   # meters left after subtraction below this counts as fully dispatched (rounding slack)
         for lotno, rows in by_lot.items():
             lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(lotno)), None)
-            recs.append({"id": "DSP-" + uuid.uuid4().hex[:8], "lotId": lotno,
-                         "cardNo": rows[0].get("cardNo") or "", "date": rows[0].get("dispDate") or time.strftime("%Y-%m-%d"),
-                         "jobChallan": rows[0].get("jobChallan") or "",
-                         "quality": rows[0].get("quality") or ((lot or {}).get("quality") or ""),
-                         "takas": [{"sr": r["takaSr"], "mts": r["takaMts"], "wt": r["takaWt"], "remark": r.get("remark") or ""} for r in rows],
-                         "importedAt": time.strftime("%Y-%m-%d %H:%M:%S")})
             taka_count += len(rows)
             if not lot:
                 unmatched += 1
+                _apply_dispatch_one_lot(db, None, lotno, rows)
                 continue
             matched_lots += 1
-            # a taka can appear more than once in one report (separate part-dispatches of the same
-            # piece) - subtract the TOTAL reported for that serial, not just the last row seen.
-            by_sr = {}
-            for r in rows:
-                key = str(r["takaSr"]); e2 = by_sr.setdefault(key, {"mts": 0.0, "wt": 0.0})
-                e2["mts"] += r["takaMts"] or 0; e2["wt"] += r["takaWt"] or 0
-            taka_nos = lot.get("takaNos") or []; takas = lot.get("takas") or []
-            tracks_wt = "takaWts" in lot; taka_wts = (lot.get("takaWts") or []) if tracks_wt else []
-            new_nos, new_mts, new_wts = [], [], []
-            touched = False
-            for i, sr in enumerate(taka_nos):
-                cur_m = takas[i] if i < len(takas) else 0
-                cur_w = taka_wts[i] if (tracks_wt and i < len(taka_wts)) else 0
-                d = by_sr.get(str(sr))
-                if d is None:
-                    new_nos.append(sr); new_mts.append(cur_m)
-                    if tracks_wt: new_wts.append(cur_w)
-                    continue
-                touched = True
-                rem_m = cur_m - d["mts"]                      # a 0m-dispatched row subtracts 0 -> unchanged, as it should
-                if rem_m > REMAINDER_EPS:
-                    new_nos.append(sr); new_mts.append(round(rem_m, 2))
-                    if tracks_wt: new_wts.append(max(0.0, round(cur_w - d["wt"], 2)))
-                # else: fully dispatched (remaining length ~0) - taka drops out of active stock
-            if touched:
-                lot["takaNos"] = new_nos; lot["takas"] = new_mts
-                if tracks_wt: lot["takaWts"] = new_wts
-                lot["pcs"] = len(lot.get("takas") or [])
-                lot["meters"] = round(sum(lot.get("takas") or []))
-                if tracks_wt:
-                    lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
-                if not lot.get("takas"):
-                    lot["status"] = "dispatched"
-                    dispatched_lots += 1
-        if len(recs) > LOT_DISPATCHES_CAP:
-            del recs[:len(recs) - LOT_DISPATCHES_CAP]
+            _rec, fully = _apply_dispatch_one_lot(db, lot, lotno, rows)
+            if fully:
+                dispatched_lots += 1
         _log(db, "inbox", "dispatch", "lots", "",
              "dispatch report: %d taka(s) across %d lot(s) (%d fully dispatched, %d lot id not found in system)"
              % (taka_count, matched_lots + unmatched, dispatched_lots, unmatched))
         save_db(db)
     return taka_count, matched_lots, dispatched_lots, unmatched
+
+def _undo_dispatch_record(db, rec, actor):
+    """Reverse one lotDispatches record's itemized per-taka meters back onto the lot's active stock -
+    the shared core of the Dispatch page's 'Return dispatch' button AND the reconcile-from-file flow's
+    auto-undo of a legacy (pre-fix) record. A taka that's still present (partially dispatched, or a 0m
+    no-op row) gets its reported meters ADDED BACK onto its current length; a taka that dropped out
+    entirely gets re-inserted at the reported length - exact for a record made by the corrected
+    subtract logic, best-effort (see _reconcile_dispatch_entries) for one made by the old delete-based
+    logic. Returns (lot_or_None, added_count, restored_taka_info) where restored_taka_info is a list of
+    {"sr","mts","wasMissing"} for every taka this touched, so the caller can flag any that are
+    best-effort restores of otherwise-unrecoverable stock."""
+    lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(rec.get("lotId"))), None)
+    if not lot:
+        return None, 0, []
+    lot.setdefault("takas", []); lot.setdefault("takaNos", [])
+    tracks_wt = "takaWts" in lot
+    if tracks_wt:
+        lot.setdefault("takaWts", [])
+    taka_nos, takas = lot["takaNos"], lot["takas"]
+    taka_wts = lot["takaWts"] if tracks_wt else None
+    idx_by_sr = {str(sr): i for i, sr in enumerate(taka_nos)}
+    added = 0; touched_takas = []
+    for t in (rec.get("takas") or []):
+        sr = t.get("sr")
+        if sr is None:
+            continue
+        key = str(sr)
+        was_missing = key not in idx_by_sr
+        mts = t.get("mts") or 0
+        if not was_missing:
+            i = idx_by_sr[key]
+            takas[i] = round((takas[i] if i < len(takas) else 0) + mts, 2)
+            if tracks_wt:
+                while len(taka_wts) <= i:
+                    taka_wts.append(0.0)
+                taka_wts[i] = round(taka_wts[i] + (t.get("wt") or 0), 2)
+            added += 1
+        elif mts > 0:
+            # missing taka, positive recorded amount -> reinstate it at that amount (exact restore
+            # under the normal subtract model; best-effort under a legacy delete-based record - see
+            # _reconcile_dispatch_entries, which flags this case for the mill to verify)
+            taka_nos.append(sr); takas.append(mts)
+            idx_by_sr[key] = len(taka_nos) - 1
+            if tracks_wt:
+                taka_wts.append(t.get("wt") or 0)
+            added += 1
+        # else: missing taka, 0m recorded -> nothing to restore (no stored length for it at all);
+        # don't insert a phantom zero-length taka, just flag it (see caller)
+        touched_takas.append({"sr": sr, "mts": mts, "wasMissing": was_missing})
+    lot["pcs"] = len(lot["takas"])
+    lot["meters"] = round(sum(lot["takas"]) if lot["takas"] else 0)
+    if tracks_wt:
+        lot["weight"] = round(sum(lot["takaWts"] or []) * 10) / 10
+    if lot.get("status") == "dispatched" and lot["takas"]:
+        lot["status"] = "in stock"
+    rec["returnedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    rec["returnedBy"] = actor
+    return lot, added, touched_takas
+
+def _reconcile_dispatch_entries(db, entries, actor):
+    """Manual 'Reconcile from file' upload (Dispatch page): the mill re-uploads an OLD dispatch report
+    that was originally processed by the pre-fix, delete-based logic (which wiped a taka's entire
+    stock just for being mentioned on a report, even when 0m was actually dispatched - see
+    _apply_dispatch_one_lot's docstring). For each lot in the file:
+
+      1. Find any not-yet-returned LEGACY ledger record (source != "reconcile") for this lot with the
+         same challan/card number - that's the earlier, possibly-bad application of this same report.
+         If a RECONCILE-sourced record for this lot+card already exists and hasn't been returned, this
+         exact file was already reconciled once - skip the lot entirely (no double-processing).
+      2. Undo every matching legacy record (_undo_dispatch_record) - this is a BEST-EFFORT restore:
+         a record's stored "mts" is what that report said was dispatched, not the taka's true length
+         beforehand, so for a taka the old code wiped on a 0m-dispatched row, undoing it adds back 0
+         (i.e. cannot recover it at all - there is no stored number for its real length). Every taka
+         touched by an undo is flagged in the report returned to the caller so the mill can verify
+         against physical stock; a 0m/still-missing one is flagged as unrecoverable, not just approximate.
+      3. Re-apply this file's rows for the lot through the CORRECTED subtract logic
+         (_apply_dispatch_one_lot), tagged source="reconcile", so the lot ends up in the state the
+         corrected logic would have produced if it had run from the start.
+    Caller (do_POST's dispatchReconcile op) already holds LOCK and a loaded db, and is responsible
+    for calling save_db() after — this function does not lock or save itself."""
+    by_lot = {}
+    for e in entries:
+        by_lot.setdefault(e["lotNo"], []).append(e)
+    report = []
+    any_change = False
+    for lotno, rows in by_lot.items():
+        card = str(rows[0].get("cardNo") or "").strip()
+        lot = next((l for l in db.get("lots", []) if str(l.get("id")) == str(lotno)), None)
+        recs = db.setdefault("lotDispatches", [])
+        same_card = lambda r: str(r.get("cardNo") or "").strip() == card
+        already = [r for r in recs if str(r.get("lotId")) == str(lotno) and r.get("source") == "reconcile"
+                   and not r.get("returnedAt") and same_card(r)]
+        if already:
+            report.append({"lotId": lotno, "skipped": True,
+                            "reason": "already reconciled from this report — no changes made", "flagged": []})
+            continue
+        legacy = [r for r in recs if str(r.get("lotId")) == str(lotno) and r.get("source") != "reconcile"
+                  and not r.get("returnedAt") and same_card(r)]
+        flagged = []; undone = 0
+        for r in legacy:
+            _lot2, added, touched = _undo_dispatch_record(db, r, actor + " (reconcile)")
+            undone += added
+            for t in touched:
+                if t["wasMissing"] and (t["mts"] or 0) <= 0:
+                    flagged.append({"sr": t["sr"], "mts": t["mts"],
+                                     "severity": "unrecoverable",
+                                     "note": "this taka's original length was never recorded — its stock could not be restored; verify against physical stock and add it back manually if it still exists"})
+                elif t["wasMissing"]:
+                    flagged.append({"sr": t["sr"], "mts": t["mts"], "severity": "approximate",
+                                     "note": "restored using the meters recorded on the original report, which may be less than its true original length — verify against physical stock"})
+        if not lot:
+            report.append({"lotId": lotno, "skipped": True,
+                            "reason": "lot no longer exists in Lot master", "flagged": flagged})
+            continue
+        new_rec, fully = _apply_dispatch_one_lot(db, lot, lotno, rows, source="reconcile")
+        any_change = True
+        report.append({"lotId": lotno, "skipped": False, "legacyUndone": len(legacy),
+                        "takasRestored": undone, "newRecordId": new_rec["id"],
+                        "fullyDispatched": fully, "flagged": flagged})
+    if any_change:
+        _log(db, actor, "dispatchReconcile", "lots", "",
+             "reconciled dispatch file: %d lot(s), %d skipped (already done / lot missing)"
+             % (sum(1 for r in report if not r["skipped"]), sum(1 for r in report if r["skipped"])))
+    return report
 
 def _process_dispatch_inbox(path):
     if path.lower().endswith((".xlsx", ".xls")):

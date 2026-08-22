@@ -813,7 +813,10 @@ function renderDispatch(c){
       +'. Each row is one lot on one dispatch report. If a lot got matched/removed by mistake, use Return dispatch to put its takas back into active stock.</p></div>'
     +'<div class="toolbar"><div class="search"><span class="material-symbols-rounded">search</span>'
     +'<input placeholder="Search lot / customer / quality / challan..." value="'+esc(SEARCH.dispatch||"")+'" oninput="onSearchInput(this)"></div>'
-    +'<div class="spacer"></div><span class="small muted">'+recs.length+' of '+(DB.lotDispatches||[]).length+'</span></div>'
+    +'<div class="spacer"></div>'
+    +(mayEdit?'<button class="btn ghost sm" onclick="openDispatchReconcile()"><span class="material-symbols-rounded">restore</span>Reconcile from file</button>':'')
+    +'<button class="btn ghost sm" onclick="openProcessedFiles()"><span class="material-symbols-rounded">folder_open</span>Processed files</button>'
+    +'<span class="small muted">'+recs.length+' of '+(DB.lotDispatches||[]).length+'</span></div>'
     +'<div class="card"><div class="tbl-wrap big-scroll"><table><thead><tr><th>Lot no.</th><th>Customer</th><th>Quality</th><th>Challan</th><th>Job challan</th>'
       +'<th>Date</th><th>Takas</th><th>Mtr</th><th>Kg</th><th>Status</th><th>Imported</th><th></th></tr></thead><tbody>'
       +(rows||'<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:26px">No dispatch records'+(term?' match your search':' yet — they\'re filed automatically when a "Dispatch Report" CSV is processed')+'.</td></tr>')
@@ -826,6 +829,92 @@ async function returnDispatch(id){
   if(res&&res.error){ toast(res.error); return; }
   await API.db(); render();
   toast('Returned '+(res.added||0)+' taka(s) to lot '+(res.lot&&res.lot.id||d.lotId));
+}
+
+/* ---- Reconcile from file: re-upload an OLD dispatch report CSV (one that may have been processed
+   before the subtract-not-delete fix) so the server can undo whatever a matching legacy record did
+   and re-apply it correctly. See server.py _reconcile_dispatch_entries for exactly what this does
+   and why some takas can only be best-effort restored (flagged, not silently "fixed"). ---- */
+function openDispatchReconcile(){
+  const ex=document.getElementById("reconOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="reconOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:720px;max-width:94vw">'
+    +'<div class="m-h"><h3>Reconcile dispatch report from file</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b" id="reconBody">'
+    +'<p class="small muted">Pick an old "Dispatch Report" CSV — the same format the mill exports for the inbox_dispatch folder. '
+    +'For each lot in the file: if there\'s already an unreturned dispatch record for it under the same challan/card no. (i.e. this report ran once before), '
+    +'that record is undone first, then this file is re-applied using the corrected subtract-not-delete logic. '
+    +'A taka whose true original length can\'t be recovered (the old report showed 0m dispatched, so nothing was ever recorded for it) is restored '
+    +'as best as the data allows and flagged for you to verify against physical stock — it is never silently guessed.</p>'
+    +'<input type="file" id="reconFile" accept=".csv,.txt">'
+    +'<div id="reconReport" style="margin-top:14px"></div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button>'
+    +'<button class="btn" id="reconCommitBtn" style="display:none" onclick="commitDispatchReconcile()">Reconcile</button></div></div>';
+  document.body.appendChild(o);
+  document.getElementById("reconFile").addEventListener("change", handleReconFile);
+}
+function handleReconFile(e){
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    window._reconCsvText=reader.result; window._reconFileName=file.name;
+    document.getElementById("reconReport").innerHTML='<div class="small muted">Ready: <b>'+esc(file.name)+'</b> — click Reconcile to process it.</div>';
+    document.getElementById("reconCommitBtn").style.display="";
+  };
+  reader.onerror=()=>{ document.getElementById("reconReport").innerHTML='<div class="flag">Could not read that file.</div>'; };
+  reader.readAsText(file);
+}
+async function commitDispatchReconcile(){
+  const csvText=window._reconCsvText; if(!csvText) return;
+  const btn=document.getElementById("reconCommitBtn"); btn.disabled=true; btn.textContent="Reconciling…";
+  const res=await API._post({op:"dispatchReconcile", csvText});
+  btn.disabled=false; btn.textContent="Reconcile";
+  const el=document.getElementById("reconReport");
+  if(res&&res.error){ el.innerHTML='<div class="flag">'+esc(res.error)+'</div>'; return; }
+  const report=res.report||[];
+  const done=report.filter(r=>!r.skipped), skipped=report.filter(r=>r.skipped);
+  const totalFlagged=done.reduce((a,r)=>a+((r.flagged||[]).length),0);
+  const restored=done.reduce((a,r)=>a+(r.takasRestored||0),0);
+  const rows=report.map(r=>{
+    if(r.skipped) return '<div class="small" style="padding:8px 0;border-top:1px solid var(--line)"><b class="tnum">'+esc(r.lotId)+'</b> — <span class="muted">'+esc(r.reason)+'</span></div>';
+    const flags=(r.flagged||[]).map(f=>'<div class="sp-flag'+(f.severity==="unrecoverable"?" sev-danger":"")+'" style="display:flex;margin:4px 0;white-space:normal"><span class="material-symbols-rounded" style="font-size:14px">'+(f.severity==="unrecoverable"?"error":"warning")+'</span>'
+      +'Taka '+esc(f.sr)+' ('+f.mts+'m recorded): '+esc(f.note)+'</div>').join("");
+    return '<div class="small" style="padding:8px 0;border-top:1px solid var(--line)"><b class="tnum">'+esc(r.lotId)+'</b> — '
+      +(r.legacyUndone?r.legacyUndone+' legacy record(s) undone, ':'')+(r.takasRestored||0)+' taka(s) restored, re-applied correctly'
+      +(r.fullyDispatched?' (lot now fully dispatched)':'')+'.'+flags+'</div>';
+  }).join("");
+  el.innerHTML='<div class="lot-totals"><span class="material-symbols-rounded">functions</span>'
+    +'<b class="tnum">'+done.length+'</b> lot(s) reconciled'+(skipped.length?', <b class="tnum">'+skipped.length+'</b> skipped':'')
+    +(totalFlagged?', <b class="tnum">'+totalFlagged+'</b> taka(s) flagged for manual verification':'')+'</div>'+rows;
+  await API.db(); render();
+  toast('Reconciled '+done.length+' lot(s), restored '+restored+' taka(s)'+(totalFlagged?' — '+totalFlagged+' flagged, check the report':''));
+}
+
+/* ---- Processed files: read-only view of what has accumulated in inbox/done, inbox_dispatch/done and
+   inbox_challan/done (+ their error/ siblings) — so the mill can see what the automatic watchers have
+   already filed without needing to open the server's file system. ---- */
+async function openProcessedFiles(){
+  const ex=document.getElementById("filesOverlay"); if(ex) ex.remove();
+  const o=document.createElement("div"); o.id="filesOverlay"; o.className="modal-bg on";
+  o.innerHTML='<div class="modal" style="width:820px;max-width:96vw">'
+    +'<div class="m-h"><h3>Processed files</h3><button class="x" onclick="this.closest(\'.modal-bg\').remove()">&times;</button></div>'
+    +'<div class="m-b" id="filesBody"><div class="small muted">Loading…</div></div>'
+    +'<div class="m-f"><button class="btn ghost" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
+  document.body.appendChild(o);
+  const res=await API._post({op:"processedFiles"});
+  const body=document.getElementById("filesBody"); if(!body) return;
+  if(res&&res.error){ body.innerHTML='<div class="flag">'+esc(res.error)+'</div>'; return; }
+  const section=(title,icon,items)=>{
+    if(!items.length) return '<h4 style="margin:16px 0 6px;font-size:13px">'+icon+' '+esc(title)+'</h4><div class="small muted">Nothing processed yet.</div>';
+    const rows=items.map(f=>'<tr><td class="small">'+esc(f.name)+'</td>'
+      +'<td>'+(f.status==="ok"?'<span class="pill run">OK</span>':'<span class="pill maint">ERROR</span>')+'</td>'
+      +'<td class="small tnum">'+esc(f.at)+'</td><td class="small muted">'+esc(f.summary||"—")+'</td></tr>').join("");
+    return '<h4 style="margin:16px 0 6px;font-size:13px">'+icon+' '+esc(title)+' <span class="muted">('+items.length+')</span></h4>'
+      +'<div class="tbl-wrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>File</th><th>Status</th><th>Processed</th><th>Summary</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  };
+  body.innerHTML=section("Lot imports","<span class=\"material-symbols-rounded\" style=\"font-size:15px;vertical-align:-3px\">inventory_2</span>", res.lots||[])
+    +section("Dispatch reports","<span class=\"material-symbols-rounded\" style=\"font-size:15px;vertical-align:-3px\">local_shipping</span>", res.dispatch||[])
+    +section("Challans","<span class=\"material-symbols-rounded\" style=\"font-size:15px;vertical-align:-3px\">receipt_long</span>", res.challan||[]);
 }
 function actionPill(a){
   if(a==="delete"||a==="reset") return "wash";

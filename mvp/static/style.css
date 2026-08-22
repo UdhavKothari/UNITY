@@ -689,6 +689,7 @@ tr.linked td{background:var(--success-soft)}
 .sp-rm2:hover{background:var(--danger-soft)}
 .sp-flag{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;color:var(--warning);background:var(--warning-soft);padding:3px 8px;border-radius:7px;white-space:nowrap}
 .sp-flag .material-symbols-rounded{font-size:14px}
+.sp-flag.sev-danger{color:var(--danger);background:var(--danger-soft)}
 /* small "auto-matched by fuzzy search" hint next to a pre-corrected field — the original OCR text
    lives in its title tooltip so the correction is visible on hover, never hidden. */
 .sp-fcell{display:flex;align-items:center;gap:3px;min-width:0}
